@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ekdanta Diff Review and States</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --page:#FAFAF9; --canvas:#EDECE9; --chrome:#F4F3F1; --chrome2:#EFEEEB; --line:#E5E3DF; --line2:#D9D6D0;
+  --ink:#1F1E1C; --ink2:#5F5C56; --ink3:#928E86; --ink4:#B9B5AD;
+  --accent:#2F4F8F; --accent-soft:rgba(47,79,143,.12); --accent-line:rgba(47,79,143,.35);
+  --del-bg:rgba(150,110,90,.10); --del-ink:#8A6F62;
+  --pop:#FFFFFF; --shadow:0 10px 30px rgba(40,35,25,.14),0 1px 3px rgba(40,35,25,.10);
+  --win-shadow:0 24px 60px rgba(40,35,25,.18),0 2px 6px rgba(40,35,25,.10);
+  --serif:'Newsreader','Source Serif 4',Georgia,serif; --sans:'Inter',system-ui,sans-serif;
+}
+:root[data-theme="dark"]{
+  --page:#262523; --canvas:#161514; --chrome:#1F1E1D; --chrome2:#232221; --line:#33312F; --line2:#42403C;
+  --ink:#E9E6E0; --ink2:#AEAAA2; --ink3:#837F78; --ink4:#5C5953;
+  --accent:#8EA9E0; --accent-soft:rgba(142,169,224,.16); --accent-line:rgba(142,169,224,.45);
+  --del-bg:rgba(200,150,120,.12); --del-ink:#B9998A;
+  --pop:#2F2D2B; --shadow:0 10px 30px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --win-shadow:0 24px 60px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+  --page:#262523; --canvas:#161514; --chrome:#1F1E1D; --chrome2:#232221; --line:#33312F; --line2:#42403C;
+  --ink:#E9E6E0; --ink2:#AEAAA2; --ink3:#837F78; --ink4:#5C5953;
+  --accent:#8EA9E0; --accent-soft:rgba(142,169,224,.16); --accent-line:rgba(142,169,224,.45);
+  --del-bg:rgba(200,150,120,.12); --del-ink:#B9998A;
+  --pop:#2F2D2B; --shadow:0 10px 30px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --win-shadow:0 24px 60px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.4);
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{color-scheme:light dark}
+body{background:var(--canvas);color:var(--ink);font-family:var(--sans);padding:0 16px 64px;-webkit-font-smoothing:antialiased}
+.top{max-width:1280px;margin:0 auto;padding:28px 0 8px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.top h1{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.top p{font-size:12.5px;color:var(--ink2);margin-top:2px}
+#theme{font:500 12px var(--sans);color:var(--ink);background:var(--chrome);border:1px solid var(--line2);border-radius:7px;padding:7px 12px;cursor:pointer}
+section.opt{max-width:1280px;margin:36px auto 0}
+.opt h2{font-size:20px;font-weight:600;letter-spacing:-.015em;display:flex;align-items:baseline;gap:10px}
+.opt h2 span{font-size:12px;font-weight:500;color:var(--accent);letter-spacing:.04em;border:1px solid var(--accent-line);border-radius:5px;padding:1px 7px}
+.opt .cap{font-size:14px;color:var(--ink2);margin:6px 0 16px;max-width:80ch;line-height:1.5}
+.stage{width:100%;aspect-ratio:1280/800;position:relative;overflow:hidden}
+.artboard{width:1280px;height:800px;transform-origin:0 0;position:absolute;left:0;top:0}
+
+/* window */
+.win{width:1280px;height:800px;border-radius:12px;background:var(--page);box-shadow:var(--win-shadow);border:1px solid var(--line2);overflow:hidden;display:flex;flex-direction:column;position:relative}
+.tb{height:40px;background:var(--chrome);border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 14px;gap:14px;flex:none;font-size:12px;color:var(--ink3)}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;background:var(--line2);display:block}
+.tb .crumb{flex:1;text-align:center;color:var(--ink2)}
+.tb .crumb b{font-weight:500;color:var(--ink)}
+.body{flex:1;display:flex;min-height:0;position:relative}
+
+/* tree */
+.tree{width:244px;background:var(--chrome);border-right:1px solid var(--line);padding:16px 10px;font-size:13px;color:var(--ink2);flex:none;display:flex;flex-direction:column}
+.tree .vault{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);padding:0 8px 10px;display:flex;justify-content:space-between}
+.tree .g{padding:7px 8px 3px;color:var(--ink);font-weight:500;display:flex;gap:7px;align-items:center}
+.tree .g svg{width:11px;height:11px;stroke:var(--ink3);fill:none;stroke-width:1.6}
+.tree .f{padding:4px 8px 4px 30px;border-radius:6px;display:flex;justify-content:space-between;gap:6px;white-space:nowrap;overflow:hidden}
+.tree .f em{font-style:normal;color:var(--accent)}
+.tree .f.cur{background:var(--accent-soft);color:var(--ink);font-weight:500;box-shadow:inset 2px 0 0 var(--accent)}
+.tree .sp{flex:1}
+.tree .foot{font-size:11.5px;color:var(--ink3);padding:8px;border-top:1px solid var(--line)}
+.rail{width:52px;background:var(--chrome);border-right:1px solid var(--line);flex:none;display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:6px}
+.rail .ic{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;color:var(--ink3)}
+.rail .ic svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.rail .ic.on{background:var(--accent-soft);color:var(--accent)}
+.rail .sp{flex:1}
+
+/* prose */
+.pane{flex:1;position:relative;min-width:0;background:var(--page)}
+.prose{font-family:var(--serif);font-size:19.5px;line-height:1.62;color:var(--ink);font-optical-sizing:auto}
+.prose p{margin-bottom:1.05em}
+.title{font-family:var(--serif);font-weight:500;letter-spacing:-.015em;color:var(--ink)}
+.meta{font-size:12px;color:var(--ink3);display:flex;gap:14px;align-items:center}
+.meta .pill{border:1px solid var(--line2);border-radius:20px;padding:1px 9px;color:var(--ink2)}
+.meta .dot{width:6px;height:6px;border-radius:50%;background:var(--ink4);display:inline-block;margin-right:5px}
+.caret{display:inline-block;width:1.5px;height:1.05em;background:var(--accent);vertical-align:-.15em;margin-left:1px}
+.sel{background:var(--accent-soft);box-shadow:inset 0 -1.5px 0 var(--accent);border-radius:2px;color:var(--ink)}
+.kbd{font:500 10.5px var(--sans);color:var(--ink2);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--chrome);line-height:16px;display:inline-block}
+
+/* nudge + chip */
+.nudge{font-family:var(--serif);font-style:italic;font-size:14.5px;line-height:1.45;color:var(--ink3);position:absolute}
+.nudge small{display:block;font:500 10px var(--sans);font-style:normal;letter-spacing:.06em;text-transform:uppercase;color:var(--ink4);margin-bottom:4px}
+.chip{font:500 11.5px var(--sans);color:var(--accent);background:var(--accent-soft);border-radius:5px;padding:2px 8px;white-space:nowrap;display:inline-block}
+
+/* popups */
+.pop{position:absolute;background:var(--pop);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);font-family:var(--sans)}
+.alts{width:236px;padding:5px}
+.alts .lv{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink3);padding:4px 8px 6px;letter-spacing:.02em}
+.alts .lv b{font-weight:600;color:var(--accent)}
+.alts .o{padding:6px 10px;border-radius:6px;font-family:var(--serif);font-size:17px;color:var(--ink);display:flex;justify-content:space-between;align-items:baseline}
+.alts .o i{font:500 10.5px var(--sans);font-style:normal;color:var(--ink4)}
+.alts .o.on{background:var(--accent);color:#fff}
+:root[data-theme="dark"] .alts .o.on{color:#14161C}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .alts .o.on{color:#14161C}}
+.alts .o.on i{color:inherit;opacity:.7}
+.alts .hint{border-top:1px solid var(--line);margin-top:4px;padding:7px 8px 3px;font-size:10.5px;color:var(--ink3);display:flex;gap:10px}
+.bar{display:flex;align-items:center;gap:10px;padding:8px 10px 8px 12px;font-size:13px;width:100%}
+.bar .lvl{font-size:10.5px;font-weight:600;color:var(--accent);letter-spacing:.02em;white-space:nowrap}
+.bar .q{flex:1;color:var(--ink)}
+.bar .q .caret{height:14px;vertical-align:-2px}
+.ctrl{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink2)}
+.ctrl span{display:flex;gap:6px;align-items:center}
+.ctrl .acc{color:var(--accent);font-weight:600}
+
+/* diff */
+.diff{border-left:2px solid var(--accent-line);padding-left:18px;margin-left:-20px}
+del{color:var(--del-ink);background:var(--del-bg);text-decoration:line-through;text-decoration-thickness:1px;border-radius:2px}
+ins{text-decoration:none;color:var(--ink);background:var(--accent-soft);box-shadow:inset 0 -1.5px 0 var(--accent);border-radius:2px}
+
+/* status */
+.status{height:28px;flex:none;border-top:1px solid var(--line);background:var(--chrome);display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:11.5px;color:var(--ink3);opacity:.6}
+.status .s{display:flex;gap:6px;align-items:center}
+.status .sep{color:var(--ink4)}
+.status b{font-weight:500;color:var(--ink2)}
+.hov{font-size:10.5px;color:var(--ink4);letter-spacing:.02em}
+
+:root{--p1:130px;--p2:236px;--p3:372px;--p4:508px}
+.page{position:absolute;left:84px;top:30px;width:640px}
+.prose{font-size:18.5px;line-height:1.6}
+.prose p{position:relative;margin-bottom:.95em;transition:background .15s}
+.prose p.hl{box-shadow:-12px 0 0 var(--accent-soft),12px 0 0 var(--accent-soft);background:color-mix(in srgb,var(--accent) 7%,transparent);border-radius:2px}
+.prose p.dim{opacity:.45}
+i.recall{position:absolute;left:-30px;top:.62em;width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.32}
+.panel{width:300px;flex:none;background:var(--chrome);border-left:1px solid var(--line);position:relative;display:flex;flex-direction:column;font-size:13px;color:var(--ink2)}
+.ptabs{display:flex;align-items:flex-start;padding:10px 12px 8px;border-bottom:1px solid var(--line);height:56px;flex:none;gap:4px}
+.ptab,.pcol{width:44px;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink3)}
+.pi{width:34px;height:28px;border-radius:7px;display:grid;place-items:center}
+.pi svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.ptab.on .pi{background:var(--accent-soft);color:var(--accent)}
+.ptab.on .pk{color:var(--accent)}
+.pk{font:500 9.5px var(--sans);color:var(--ink4);letter-spacing:.03em}
+.psp{flex:1}
+.pcol{width:40px}
+.tip{display:none}
+.pbody{flex:1;position:relative;padding:18px 18px 0;min-height:0}
+.ph{display:flex;align-items:baseline;gap:6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);font-weight:600;margin-bottom:10px}
+.ph em{font-style:normal;letter-spacing:0;text-transform:none;font-weight:400;color:var(--ink3);font-size:12px}
+.ph .cnt{margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;font-size:11.5px;color:var(--ink3)}
+.frs{list-style:none}
+.fr{display:flex;gap:10px;align-items:flex-start;padding:7px 0;font-family:var(--serif);font-size:16px;line-height:1.35;color:var(--ink);border-bottom:1px solid var(--line)}
+.fr:last-child{border-bottom:0}
+.fr .mk{width:15px;height:15px;border-radius:50%;border:1.3px solid var(--ink3);flex:none;margin-top:3px;display:grid;place-items:center}
+.fr.used{color:var(--ink3)}
+.fr.used .mk{border-color:var(--ink4);background:var(--line)}
+.fr .mk svg{width:9px;height:9px;stroke:var(--ink2);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.src{background:var(--page);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:8px}
+.src p{font-family:var(--serif);font-size:14.5px;line-height:1.4;color:var(--ink2);margin-top:7px}
+.pfoot{position:absolute;left:18px;right:18px;bottom:16px;border-top:1px solid var(--line);padding-top:12px;display:flex;justify-content:space-between;align-items:center;color:var(--accent);font-weight:500;font-size:12.5px}
+.pfoot .kbd{color:var(--ink2);font-weight:500}
+/* help */
+.anch{position:absolute;left:0;right:0;top:0}
+.hi{position:absolute;left:18px;right:16px;background:var(--page);border:1px solid var(--line);border-radius:9px;padding:9px 12px 9px}
+.hi .cn{position:absolute;left:-19px;top:calc(15px - var(--off,0px));width:18px;height:var(--off,0px);border-top:1px solid var(--line2);border-right:1px solid var(--line2)}
+.hi .cn:before{content:"";position:absolute;left:-2px;top:-3px;width:5px;height:5px;border-radius:50%;background:var(--ink4)}
+.hi.hover{border-color:var(--accent-line);box-shadow:0 2px 10px rgba(40,35,25,.08)}
+.hi.hover .cn{border-color:var(--accent)}
+.hi.hover .cn:before{background:var(--accent)}
+.hh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px}
+.pn{font:600 11px var(--sans);color:var(--ink);background:var(--chrome2);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.hi.hover .pn{color:var(--accent);border-color:var(--accent-line)}
+.kd{font:500 10.5px var(--sans);color:var(--ink3);letter-spacing:.03em}
+.nq{font-family:var(--serif);font-style:italic;font-size:15.5px;line-height:1.4;color:var(--ink2)}
+.rx{font-size:12.5px;line-height:1.4;color:var(--ink2);margin-bottom:6px}
+.chips{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.act{display:flex;gap:12px;align-items:center;margin-top:8px;font-size:11.5px}
+.lnk{color:var(--accent);font-weight:500}
+.mt{margin-left:auto;color:var(--ink4)}
+.hi.tiny{padding:7px 12px}
+.sw{font-family:var(--serif);font-size:15.5px;color:var(--ink)}
+.sw b{color:var(--ink3);font-family:var(--sans);font-weight:400}
+.sw .o:first-child{color:var(--ink3);text-decoration:line-through;text-decoration-thickness:1px}
+.st{font-weight:600;font-size:11.5px}
+.st.rej{color:var(--del-ink)}
+.st.acc{color:var(--accent)}
+.st2{font-size:12.5px;color:var(--ink2)}
+.ba{margin-top:7px;display:flex;flex-direction:column;gap:3px;font-family:var(--serif);font-size:13.5px;line-height:1.4}
+.ba .b del{color:var(--del-ink)}
+/* piece */
+.facts .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+.facts .row.col{flex-wrap:wrap}
+.facts dt{color:var(--ink3);flex:none;width:92px}
+.facts dd{color:var(--ink);flex:1;text-align:left;line-height:1.45}
+.facts .mu{color:var(--ink3)}
+.facts .sw2{float:right;color:var(--accent);font-size:11.5px;font-weight:500}
+.facts dd .lnk{margin-left:2px}
+.bar2{flex-basis:100%;height:3px;background:var(--line);border-radius:2px;margin-top:6px}
+.bar2 i{display:block;height:100%;background:var(--accent);border-radius:2px;opacity:.8}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden;background:var(--page)}
+.seg span{width:30px;text-align:center;padding:4px 0;font-weight:500;color:var(--ink3);border-right:1px solid var(--line)}
+.seg span:last-child{border-right:0}
+.seg span.on{background:var(--accent);color:#fff}
+:root[data-theme="dark"] .seg span.on{color:#14161C}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .seg span.on{color:#14161C}}
+.dot2{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink4);margin-right:6px}
+.path{font:12px ui-monospace,Menlo,monospace;color:var(--ink2)}
+.out{list-style:none}
+.out li{display:flex;gap:10px;padding:6px 8px 6px 10px;font-size:13px;color:var(--ink2);border-radius:6px;align-items:baseline;margin-left:-8px}
+.out .on_{font:600 11px var(--sans);color:var(--ink3);width:20px}
+.out li.cur{background:var(--accent-soft);color:var(--ink);box-shadow:inset 2px 0 0 var(--accent)}
+.out li.cur .on_{color:var(--accent)}
+.out .here{margin-left:auto;font-size:10.5px;color:var(--accent)}
+/* focus */
+.win.focus{background:var(--page)}
+.fpage{position:absolute;left:50%;transform:translateX(-50%);top:92px;width:640px}
+.fhint{position:absolute;bottom:26px;left:0;right:0;text-align:center;font-size:11.5px;color:var(--ink4);opacity:.7}
+.fhint .kbd{background:transparent;color:var(--ink4);border-color:var(--line)}
+
+/* ---- help-review additions ---- */
+.hr-page{position:absolute;left:84px;top:30px;width:640px}
+.hr-page .title{font-size:28px;line-height:1.2;padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:22px}
+.prose p.ctx{color:var(--ink);opacity:.45}
+.ibar{display:flex;align-items:center;gap:12px;padding:9px 14px;margin:0 -14px 14px;background:var(--chrome);border-radius:8px;font-family:var(--sans);font-size:13px}
+.ibar .lvl{font-size:10.5px;font-weight:600;color:var(--accent);letter-spacing:.02em;white-space:nowrap}
+.ibar .q{flex:1;color:var(--ink)}
+.ibar .q .caret{height:14px;vertical-align:-2px}
+.ibar .hint{font-size:11px;color:var(--ink3)}
+.ch{position:relative;border-radius:3px}
+.ch.acc{background:none;text-decoration:underline dotted var(--accent-line);text-decoration-thickness:1.5px;text-underline-offset:4px}
+.ch.focus{box-shadow:0 0 0 3px var(--page),0 0 0 4.5px var(--accent-line);padding:0 1px}
+.mk2{display:inline-flex;gap:3px;vertical-align:.12em;margin-left:6px;font-family:var(--sans);user-select:none}
+.mk2 b{width:19px;height:19px;border-radius:50%;display:inline-grid;place-items:center;font-weight:600;font-size:11px;line-height:1}
+.mk2 .y{color:var(--accent);background:var(--accent-soft)}
+.mk2 .n{color:var(--del-ink);background:var(--del-bg)}
+.mk2 svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.crow{display:flex;flex-wrap:wrap;gap:6px 0;font-family:var(--sans);font-size:12px;color:var(--ink3);margin-top:-2px}
+.crow span.s{margin:0 9px;color:var(--ink4)}
+.crow .k{color:var(--ink2);font-weight:500}
+.crow .a{color:var(--accent);font-weight:600}
+.crow .a .k{color:var(--accent)}
+.note{font-family:var(--sans);font-size:12px;color:var(--ink3);margin-top:10px}
+/* side by side */
+.sbs{display:grid;grid-template-columns:1fr 1fr;column-gap:0;margin-bottom:20px}
+.sbs .col{padding:0 44px 0 0}
+.sbs .col+.col{padding:0 0 0 44px;border-left:1px solid var(--line)}
+.sbs h4{font:600 10.5px var(--sans);letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);margin-bottom:10px}
+.sbs .col.o{color:var(--ink2)}
+.sbs .col.o .t{font-family:var(--serif);font-size:18px;line-height:1.62;color:var(--ink2)}
+.sbs .col.s .t{font-family:var(--serif);font-size:18px;line-height:1.62;color:var(--ink)}
+.sbs .col.o del{color:var(--ink3)}
+/* states gallery */
+.gal{display:grid;grid-template-columns:1fr 1fr;gap:34px 28px}
+.tile figure{margin:0}
+.tcard{background:var(--page);border-radius:12px;padding:26px 30px 24px;position:relative;box-shadow:0 1px 2px rgba(40,35,25,.05)}
+.tcard .prose{font-size:17.5px;line-height:1.6}
+.tcard .prose p{margin:0}
+.tcard .prose .cl{opacity:1}
+.tile figcaption{font-size:12.5px;color:var(--ink2);margin:10px 4px 0;line-height:1.45}
+.tile figcaption b{font-weight:600;color:var(--ink)}
+.stl{display:flex;align-items:center;gap:10px;margin-top:12px;font-family:var(--sans);font-size:12.5px;color:var(--ink2);flex-wrap:wrap}
+.stl .lv{font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3);white-space:nowrap}
+.stl .a{color:var(--accent);font-weight:500}
+.stl .s{color:var(--ink4)}
+.stl .g{width:13px;height:13px;stroke:var(--del-ink);fill:none;stroke-width:1.5;stroke-linecap:round;flex:none}
+.prog{height:2px;background:var(--line);border-radius:2px;overflow:hidden;position:relative}
+.prog i{position:absolute;left:0;top:0;bottom:0;width:38%;background:var(--accent);opacity:.7;border-radius:2px}
+.lcard{margin-top:10px;width:236px;height:180px;background:var(--pop);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);position:relative;overflow:hidden;font-family:var(--sans)}
+.lcard .lv{font-size:10.5px;color:var(--ink3);padding:9px 14px 0;letter-spacing:.02em;display:flex;justify-content:space-between}
+.lcard .lv b{font-weight:600;color:var(--accent)}
+.lcard .prog{position:absolute;left:0;right:0;bottom:0;border-radius:0}
+.tcard.load{padding-bottom:20px}
+.sel2{background:var(--accent-soft);border-radius:2px}
+.kb{font:500 10.5px var(--sans);color:var(--ink2);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--chrome);line-height:15px;display:inline-block}
+@media (max-width:760px){
+  .gal{grid-template-columns:1fr;gap:26px}
+  .tcard{padding:22px 22px 20px}
+  .tcard .prose{font-size:16.5px}
+  .top{flex-wrap:wrap}
+}
+</style>
+</head>
+<body>
+<div class="top"><div><h1>Ekdanta · Help review: the diff and its states</h1><p>Two 1280 x 800 artboards and a gallery of in-context states. Static mockup; nothing here was typed for the writer.</p></div><button id="theme" type="button">Toggle dark / light</button></div>
+<section class="opt"><h2><span>R1</span>Inline diff, stepping through changes</h2><p class="cap">⌘5 over one paragraph with three changes. The first is accepted and now plain text, the second is focused, the third is still pending. The instruction bar stays open above.</p><div class="stage"><div class="artboard"><div class="win"><div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="crumb" style="text-align:left;padding-left:14px">Essays / <b>Why Slow Writing Matters</b></div><div class="hov" style="color:var(--ink3);display:flex;gap:7px;opacity:.75"><span>Essay</span><span>·</span><span>Essay v3</span><span>·</span><span>Ceiling 3</span></div></div><div class="body"><aside class="rail">
+<div class="ic on"><svg viewBox="0 0 20 20"><path d="M3.5 5.5a1.5 1.5 0 011.5-1.5h3l1.5 2H15a1.5 1.5 0 011.5 1.5v7A1.5 1.5 0 0115 16H5a1.5 1.5 0 01-1.5-1.5z"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5"/><path d="M13 13l4 4"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><path d="M10 2.5l2.2 4.8 5.3.6-3.9 3.6 1.1 5.2L10 14l-4.7 2.7 1.1-5.2L2.5 7.9l5.3-.6z"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><path d="M4 4h12v9H8l-4 3z"/></svg></div>
+<div class="sp"></div>
+<div class="ic"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2M5 5l1.4 1.4M13.6 13.6L15 15M5 15l1.4-1.4M13.6 6.4L15 5"/></svg></div>
+</aside><main class="pane"><div class="hr-page"><div class="meta" style="margin-bottom:8px;letter-spacing:.02em"><span style="color:var(--ink2)">Essay</span><span><i class="dot"></i>draft</span><span>Essays/why-slow-writing-matters.md</span></div><div class="title">Why Slow Writing Matters</div><div class="prose"><p class="ctx">I used to think slow writing was a kind of vanity, a way of dressing up hesitation as craft. Then I spent a winter drafting one essay a week, and the weeks that produced the worst pages were always the ones I rushed.</p><div class="ibar"><span class="lvl">⌘5 · Passage</span><span class="q">make this less abstract<span class="caret"></span></span><span class="hint">↵ refine · Esc</span></div><p><span class="ch acc">Rushing hands you</span> the first idea that arrives, and the first idea is rarely yours. It is the common one, <span class="ch focus"><del>worn smooth by everyone</del> <ins>a stair worn hollow by everyone</ins><span class="mk2"><b class="y" title="Accept"><svg viewBox="0 0 12 12"><path d="M2.5 6.3l2.3 2.3 4.7-5"/></svg></b><b class="n" title="Reject"><svg viewBox="0 0 12 12"><path d="M3 3l6 6M9 3l-6 6"/></svg></b></span></span> who reached for it before you. Slowness is how you get past it, to the second and third, where <span class="ch"><del>the strange and particular things</del> <ins>the odd, specific details a reader remembers</ins></span> live.</p><div class="crow"><span class="a"><span class="k">⌘↵</span> Accept all</span><span class="s">·</span><span><span class="k">⌘⌫</span> Reject all</span><span class="s">·</span><span>1 of 3 decided</span><span class="s">·</span><span><span class="k">Tab</span> next</span><span class="s">·</span><span><span class="k">↵</span> accept</span><span class="s">·</span><span><span class="k">⌫</span> reject</span></div><p class="ctx" style="margin-top:26px">There is a physical part to it as well. When I write by hand the sentence has to survive the whole length of my arm before it reaches the page, and most of the lazy ones do not make the journey. On a keyboard they arrive intact and I leave them there out of politeness.</p></div></div></main></div><div class="status" style="opacity:.35;justify-content:flex-end"><span class="hov" style="color:var(--ink3)">Hover for Platform: Essay · Voice: Essay v3 · Ceiling: 3 · 412 words</span></div></div></div></div></section><section class="opt"><h2><span>R2</span>Side-by-side diff</h2><p class="cap">When more than about 60% of the words change, the diff splits into original and suggestion. Accept and reject work the same way.</p><div class="stage"><div class="artboard"><div class="win"><div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="crumb" style="text-align:left;padding-left:14px">Essays / <b>Why Slow Writing Matters</b></div><div class="hov" style="color:var(--ink3);display:flex;gap:7px;opacity:.75"><span>Essay</span><span>·</span><span>Essay v3</span><span>·</span><span>Ceiling 3</span></div></div><div class="body"><aside class="rail">
+<div class="ic on"><svg viewBox="0 0 20 20"><path d="M3.5 5.5a1.5 1.5 0 011.5-1.5h3l1.5 2H15a1.5 1.5 0 011.5 1.5v7A1.5 1.5 0 0115 16H5a1.5 1.5 0 01-1.5-1.5z"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5"/><path d="M13 13l4 4"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><path d="M10 2.5l2.2 4.8 5.3.6-3.9 3.6 1.1 5.2L10 14l-4.7 2.7 1.1-5.2L2.5 7.9l5.3-.6z"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><path d="M4 4h12v9H8l-4 3z"/></svg></div>
+<div class="sp"></div>
+<div class="ic"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2M5 5l1.4 1.4M13.6 13.6L15 15M5 15l1.4-1.4M13.6 6.4L15 5"/></svg></div>
+</aside><main class="pane"><div class="hr-page" style="width:1000px"><div class="meta" style="margin-bottom:8px;letter-spacing:.02em"><span style="color:var(--ink2)">Essay</span><span><i class="dot"></i>draft</span><span>Essays/why-slow-writing-matters.md</span></div><div class="title">Why Slow Writing Matters</div><div class="prose"><div style="width:640px"><p class="ctx">I used to think slow writing was a kind of vanity, a way of dressing up hesitation as craft. Then I spent a winter drafting one essay a week, and the weeks that produced the worst pages were always the ones I rushed.</p></div><div class="ibar"><span class="lvl">⌘5 · Passage</span><span class="q">make this more vivid<span class="caret"></span></span><span class="hint">↵ refine · Esc</span></div><div class="sbs"><div class="col o"><h4>Original</h4><div class="t"><del>There is a physical part to it as well. When I write by hand the</del> sentence <del>has to survive the whole length of my</del> arm <del>before it reaches the page, and most of the lazy ones do not make the journey.</del> On a keyboard <del>they arrive intact and</del> I leave them <del>there out of politeness.</del></div></div><div class="col s"><h4>Suggestion</h4><div class="t"><ins>Handwriting adds a bodily test. Each</ins> sentence <ins>must travel down my</ins> arm <ins>to reach the paper, and the careless ones give up on the way.</ins> On a keyboard <ins>they slip through untouched, and</ins> I leave them <ins>standing, to be polite.</ins></div></div></div><div class="crow"><span class="a"><span class="k">⌘↵</span> Accept all</span><span class="s">·</span><span><span class="k">⌘⌫</span> Reject all</span><span class="s">·</span><span>5 changes</span><span class="s">·</span><span><span class="k">↵</span> accept</span><span class="s">·</span><span><span class="k">⌫</span> reject</span></div><div class="note">Most of this passage changed, so it’s shown side by side.</div></div></div></main></div><div class="status" style="opacity:.35;justify-content:flex-end"><span class="hov" style="color:var(--ink3)">Hover for Platform: Essay · Voice: Essay v3 · Ceiling: 3 · 412 words</span></div></div></div></div></section><section class="opt"><h2><span>R3</span>States gallery</h2><p class="cap">Each state is a single quiet line in the place its suggestion would appear. Never a modal, never red alarm styling.</p><div class="gal"><div class="tile"><figure><div class="tcard"><div class="prose"><p>…to the second and third, where the strange<span class="caret"></span> and particular things live.</p></div><div class="lcard"><div class="lv"><b>⌘3 · WORD</b><span>replace “strange”</span></div><div class="prog"><i></i></div></div></div><figcaption><b>Loading.</b> The Word card appears at its final size, empty, with a thin progress line, so nothing jumps when results arrive.</figcaption></figure></div><div class="tile"><figure><div class="tcard"><div class="prose"><p>Slowness is how you get past it, to the second and third, where the <span class="sel2">strange and particular things</span> live.</p></div><div class="stl"><span class="lv" style="color:var(--accent)">⌘5 · Passage</span><span>Still working · <span class="a">Esc</span> to cancel</span></div></div><figcaption><b>Still working.</b> After 8 seconds; the scope tint stays and the original remains editable.</figcaption></figure></div><div class="tile"><figure><div class="tcard"><div class="prose"><p>It is the common one, worn smooth by everyone who reached for it before you.<span class="caret"></span></p></div><div class="stl"><span class="lv">⌘1 · Recall</span><span>Nothing in your vault on this yet</span></div></div><figcaption><b>Nothing useful.</b> Recall would rather say so than show weak results.</figcaption></figure></div><div class="tile"><figure><div class="tcard"><div class="prose"><p>A slow paragraph is not a failed fast one; it is a different kind of object.<span class="caret"></span></p></div><div class="stl"><span>Connect a model in Settings (<span class="kb">⌘,</span>) to use ⌘2–⌘5.</span></div></div><figcaption><b>No model.</b> Recall still works offline on local embeddings.</figcaption></figure></div><div class="tile"><figure><div class="tcard"><div class="prose"><p>I would rather hand a reader four sentences I trust than forty I merely finished.<span class="caret"></span></p></div><div class="stl"><svg class="g" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5"/><path d="M7 4.3v3.2M7 9.6v.1"/></svg><span>Couldn’t reach Anthropic</span><span class="s">·</span><span class="a">Retry (⌘R)</span><span class="s">·</span><span class="a">Use Ollama</span></div></div><figcaption><b>Provider error.</b> One line, two actions, no stack trace. The small glyph is the only warm tone.</figcaption></figure></div><div class="tile"><figure><div class="tcard"><div class="prose"><p>On a keyboard they arrive intact and I leave them there out of politeness.<span class="caret"></span></p></div><div class="stl"><span class="lv">⌘4</span><span>Ceiling is 3 · press <span class="a">⌘4</span> again to allow once</span></div></div><figcaption><b>Above ceiling.</b> Never silently does something else; the second press within three seconds runs it once.</figcaption></figure></div><div class="tile"><figure><div class="tcard"><div class="prose"><p><span class="sel2">When I write by hand the sentence has to survive the whole length of my arm.</span></p></div><div class="stl"><span>⌘3 works on a word or short phrase</span></div></div><figcaption><b>Not available here.</b> A scope mismatch gets a one-line notice, nothing more.</figcaption></figure></div><div class="tile"><figure><div class="tcard"><div class="prose"><p>…where the <span class="sel2">strange</span> and particular things live.</p></div><div class="stl"><span class="lv">⌘3 · Word</span><span>No more · <span class="a">⌘3</span> to start again</span></div></div><figcaption><b>No more.</b> Shown after the last alternative; pressing the key again cycles back.</figcaption></figure></div></div></section><script>
+(function(){
+  var b=document.getElementById('theme'),r=document.documentElement;
+  b.addEventListener('click',function(){
+    var dark=r.getAttribute('data-theme')==='dark'||(!r.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches);
+    r.setAttribute('data-theme',dark?'light':'dark');
+  });
+  function fit(){
+    document.querySelectorAll('.stage').forEach(function(s){
+      var k=s.clientWidth/1280;s.firstElementChild.style.transform='scale('+k+')';
+    });
+  }
+  addEventListener('resize',fit);fit();
+})();
+</script>
+</body>
+</html>

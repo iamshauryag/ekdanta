@@ -71,7 +71,7 @@ How the two lighter levels fit this pattern:
 - **Cmd+1 Recall**: a slim card anchored under the current line with the top 1–2 sources (quote and citation chip). "More" opens the right panel. It writes nothing; you can insert a quote explicitly.
 - **Cmd+2 Nudge**: a single line of italic grey text in the margin beside the paragraph, phrased as a question. It is never inserted into the text.
 
-The full detail (states, dismissal, cycling, empty and error states) belongs in `HELP-LADDER.md`.
+The full detail (states, dismissal, cycling, empty and error states) is in [`HELP-LADDER.md`](HELP-LADDER.md).
 
 ## The feel
 
@@ -115,6 +115,8 @@ Static HTML mockups of the main editor, each with a light/dark toggle. Open them
 - [`mockups/direction-b.html`](mockups/direction-b.html): Direction B, two layouts (pure focus page; vault overlay with Recall).
 - [`mockups/direction-a3.html`](mockups/direction-a3.html): **the chosen direction.** Studio with the modular right panel (Material, Help, Piece) and Focus mode.
 - [`mockups/thinking-space.html`](mockups/thinking-space.html): the Thinking Space (loose map, clusters, and the hand-off into drafting).
+- [`mockups/help-levels.html`](mockups/help-levels.html): each help level, ⌘1 to ⌘5, in the editor.
+- [`mockups/help-review.html`](mockups/help-review.html): reviewing a diff (inline and side by side) and every help state.
 
 ## Out of scope for design v1
 Collaboration, accounts or billing, grammar-checker UX, AI-detection evasion, full-page generation, mobile.
