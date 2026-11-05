@@ -1,0 +1,143 @@
+# Ekdanta — Product Specification
+
+_Draft v0.3 · November 2026_
+
+> **Ekdanta** (Sanskrit, "the one-tusked") is a name of Ganesha, who, in one telling, broke off his own tusk to keep writing the Mahabharata without pause. The name is a working title.
+
+## Vision
+
+Ekdanta is an open-source, local-first writing app — a "Cursor for writers". It aims to become the writer's **central home for all their writing**, arranged sensibly; to **learn their knowledge** (books read, quotes kept, ideas noted) and **how they write** on each platform; and to **help only when asked, and only as much as asked**, drawing on their own material first and the wider world second.
+
+Most AI writing tools do too much: they finish the page and take the thinking away. Ekdanta does the opposite.
+
+## Core principle: restraint
+
+The AI is a collaborator, not a ghostwriter. The default is silence. Help scales with the writer's request:
+
+| Level | What the AI does | Example |
+|---|---|---|
+| 0 Silent | Nothing (at most a faint margin dot when it has something relevant) | — |
+| 1 Recall | Surfaces *your own* material: a note, a quote, a past paragraph | "You wrote about this in March" |
+| 2 Nudge | A question or a direction, never prose | "What's the counter-argument?" |
+| 3 Word | A word or a few candidates | Three alternatives for "ripple" |
+| 4 Sentence | Continues or rewrites one sentence, shown as a diff | — |
+| 5 Passage | Rewrites a paragraph or section on explicit instruction, shown as a diff | — |
+
+The writer sets a default ceiling (for example "never above level 3 unless I ask"). Generating whole pages is not a feature.
+
+**Shortcuts.** Each level is one keystroke, because a writer needs different help at different moments in the same document: **Cmd+1** Recall, **Cmd+2** Nudge, **Cmd+3** Word, **Cmd+4** Sentence, **Cmd+5** Passage; **Esc** or **Cmd+0** dismisses. Pressing the same key again cycles to the next suggestion at that level. In browsers, Cmd/Ctrl+1–9 switch tabs and cannot be reliably overridden, so the browser build uses an alternate (for example Option/Alt+1–5). All bindings are remappable.
+
+## Cursor → writing
+
+| Cursor | Ekdanta |
+|---|---|
+| Codebase | The writer's vault: all their writing as plain files on disk |
+| Codebase index and retrieval | An index of their writing and knowledge (books, highlights, quotes, notes, ideas) |
+| Coding style | A voice profile, learned per platform (essay, LinkedIn, email, text) |
+| Tab completion | Short continuation — **only on request** (level 4) |
+| Cmd+K inline edit | Select → instruct → word-level diff → accept or reject |
+| Agent | Bounded tasks across files: "turn this essay into a LinkedIn post", "find every place I've used this idea" |
+| @-mentions | @book, @note, @quote, @web to pull in sources deliberately |
+| Linter | Optional checks: unsupported claims, repeated ideas, misquotes, tone drift for the platform |
+| Tests | No ground truth; the writer's own accept/reject history stands in as the signal of their taste, and claims are checked against sources |
+
+## Thinking Space (before drafting)
+
+Before drafting, the writer dumps what's in their head — what they want to say, related ideas, half-thoughts — in plain or broken words, **not** as a bullet outline. The app connects the fragments.
+
+- **Input:** type fragments anywhere on a loose canvas, or speak them (local speech-to-text). No formatting or hierarchy required. Links and quotes can be pasted in.
+- **Connecting (AI, restrained):** embeddings and a model find relations between fragments ("the same idea", "contradicts", "an example of") and draw soft links. Fragments are also linked to the knowledge vault (a highlight, a past post) as Recall. The AI **never rewrites fragments**; it only groups, links and labels clusters with a word or two.
+- **Views:** loose map (default), clusters, and "possible order" — a suggested arc, only on request.
+- **Into drafting:** the map stays available beside the document. Fragments used in the draft are marked as covered; unused ones stay visible. Recall draws on this document's thinking first.
+- **Storage:** a plain file next to the draft in [JSON Canvas](https://jsoncanvas.org) format, so it opens in Obsidian too.
+- **Prior art:** Obsidian Canvas, Heptabase, Kinopio, Tana.
+
+## Obsidian compatibility
+
+[Obsidian](https://obsidian.md) stores notes as a folder of plain Markdown files (a "vault"). It is strong for collecting and linking notes and weaker for drafting: long-form writing usually relies on plugins, and many writers outline in Obsidian and then draft elsewhere. Existing AI plugins (related-notes search, chat over the vault, text generation) read notes at query time but build no lasting model of the writer, and none offers a restraint model, per-platform voice or diff-first editing.
+
+Ekdanta treats an Obsidian vault as a first-class home:
+
+1. **Read the vault directly.** It is just a folder: index notes, `[[wikilinks]]`, tags and front-matter, and optionally write drafts back into it. Works whether or not Obsidian is open. This is the primary path.
+2. **Live link (optional).** Through community local-API plugins, for "open in Obsidian" and active-file context.
+3. **Companion plugin (later).** Cmd+1–5 help inside Obsidian itself.
+
+## AI approach
+
+No model training in v1.
+
+- **Recall (1):** local embeddings and semantic search over the vault and highlights. No generation; always cited.
+- **Nudge (2):** the model returns one question, never prose.
+- **Word (3):** a small, fast model returns 3–5 candidates.
+- **Sentence and Passage (4–5):** a stronger model, given the instruction, the surrounding text, the voice profile and 3–5 retrieved samples of the writer's own similar writing. The output always passes through a deterministic diff.
+- **Voice profile:** generated per platform from the writer's corpus into a readable, editable file.
+- **Taste:** accept/reject decisions are stored locally and used as examples in prompts. Later, optionally, a small local model or adapter could be fine-tuned per writer.
+- **Providers:** bring your own key (Anthropic, OpenAI, Google) or run locally with Ollama. A fast tier for levels 1–3 and a strong tier for 4–5.
+
+## Weighting the writer's past work
+
+Not every document — or sentence — represents a writer equally well. Weighting decides which past writing best represents their voice on each platform, and which knowledge to surface.
+
+- **Document signals:** recency (voices evolve); the writer's own ★ exemplar marking (the strongest signal); finished or published versus draft; sole authorship versus co-written, quoted or templated; effort (revisions, time spent); platform.
+- **Sentence signals:** discard boilerplate, quotations, greetings and sign-offs, and lists of facts; up-weight distinctive sentences (those least like generic model prose), sentences kept through revisions, and openings and closings.
+- **Feedback:** accepted suggestions, and edits made after accepting, re-weight the sources that produced them; rejections down-weight.
+- **Per platform:** separate weights per platform; one document can count for several.
+- **Output:** a ranked exemplar set per platform for voice prompts, and a separate relevance ranking for Recall. Weights are stored in front-matter or a sidecar file, so they can be inspected and edited.
+- **v1:** manual ★ exemplars, platform tag, recency and an "own writing only" filter. Distinctiveness scoring and feedback learning come in v2.
+
+## Importing existing writing
+
+- The official [Obsidian Importer](https://github.com/obsidianmd/obsidian-importer) (MIT) covers Apple Notes, Notion, Evernote, Google Keep, OneNote, Bear, Roam, Logseq, HTML, Markdown and more, but not Word or Google Docs.
+- Word (.docx) and Google Docs (exported as .docx) convert with [Pandoc](https://pandoc.org): `pandoc in.docx -t gfm -o out.md --extract-media=media`. PDFs fall back to text extraction.
+- First sources to support: **Google Docs, Word and Google Keep**.
+- Ekdanta's importer adds front-matter to each file: original creation date (export tools often reset file dates), source app, platform (guessed, then confirmed by the writer) and title.
+
+## Knowledge layer
+
+- **Imports:** Kindle highlights, Readwise, Apple Books, PDFs and EPUBs, web clippings, notes exported from other apps, past posts, and (opt-in) sent email.
+- Every suggestion that draws on knowledge shows its source as a citation chip. No unsourced "facts".
+- World knowledge via web search is always labelled as external.
+
+## Learning the writer
+
+- A voice profile per platform, built from the writer's own corpus.
+- Learning from accept, reject and edit-after-accept, stored locally.
+- The writer can read and edit everything the app "believes" about their style. It is a file, not a black box.
+
+## Surfaces
+
+- **Home:** a desktop editor over the local vault.
+- **Later:** a browser build, and a browser extension that brings the same voice and knowledge to Gmail, LinkedIn and X, with drafts saved back to the vault.
+
+## Architecture
+
+- **Storage:** local-first. Plain Markdown with YAML front-matter, `[[wikilinks]]`, and JSON Canvas for thinking maps, in a folder the writer owns. A search index (SQLite and embeddings) lives alongside it and can always be rebuilt.
+- **App:** a [Tauri](https://tauri.app) desktop app with a React and TypeScript UI, and an editor built on TipTap/ProseMirror with track-changes-style diffs. A browser build shares the same codebase (using the File System Access API for local folders).
+- **Core package:** retrieval, voice profile, restraint policy, the diff engine (deterministic, never the model) and provider adapters.
+- **Privacy:** no hosted backend and no telemetry in v1.
+
+## MVP
+
+1. **Vault:** open a folder of Markdown files, with a file tree and the editor.
+2. **Knowledge import:** highlights and notes, indexed locally.
+3. **Recall:** suggestions from the writer's own material, with sources.
+4. **Inline edit:** select → instruct → word-level diff → accept or reject.
+5. **Voice:** a first voice profile from the writer's corpus, plus the help ceiling setting.
+
+Later: on-request continuation, agent tasks, web search, the browser extension, linter checks.
+
+## Non-goals (v1)
+
+Full-page or essay generation · team collaboration · hosted accounts and billing · AI-detection evasion.
+
+## Decisions
+
+- **Storage format:** Obsidian-compatible vault (Markdown, YAML front-matter, wikilinks, JSON Canvas).
+- **License:** MIT.
+- **Platform:** desktop first (Tauri); browser build later.
+- **First user:** the project starts as a tool its author uses daily for essays, posts, emails and messages. Success means reaching a draft you're proud of faster, in your own voice.
+
+## Open questions
+
+- Which knowledge sources to support after Google Docs, Word and Keep (Kindle, Readwise, Notion, Apple Notes)?
+- Final name.
