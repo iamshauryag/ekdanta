@@ -199,7 +199,7 @@ All five levels work in Focus mode and look the same, except:
 - All actions are reachable from the keyboard, and every keyboard action has a visible, clickable equivalent.
 - Diff colours are never the only signal: deletions are also struck through and insertions are also underlined.
 - With reduced motion turned on, fades become instant.
-- Ghost text and secondary ink target a 4.5:1 contrast ratio against the page in both themes. Some of the current mockups are lighter than this; `SYSTEM.md` will set the final values.
+- Ghost text and all secondary text meet a 4.5:1 contrast ratio against the page in both themes. The final values are in [`DESIGN.md`](DESIGN.md).
 
 ## Open questions
 
