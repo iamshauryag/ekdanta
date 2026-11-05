@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ekdanta Direction B</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --page:#E8E4DA;
+  --paper:#F6F3EC;
+  --chrome:#EFEBE2;
+  --ink:#2B2926;
+  --muted:#7C776D;
+  --faint:#A39D90;
+  --ghost:#9C9689;
+  --line:#DDD8CB;
+  --accent:#A96300;
+  --accent-soft:rgba(169,99,0,.14);
+  --card:#FBF9F4;
+  --shadow:0 1px 2px rgba(40,30,10,.08),0 12px 32px rgba(40,30,10,.10);
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  --sans:'IBM Plex Sans',system-ui,sans-serif;
+}
+:root:not([data-theme="light"]){color-scheme:light}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --page:#121110;--paper:#1F1E1C;--chrome:#262522;--ink:#E8E3D8;--muted:#9A9488;--faint:#6A655B;--ghost:#7B766B;
+    --line:#35332F;--accent:#E8A33D;--accent-soft:rgba(232,163,61,.18);--card:#282724;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.35);color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --page:#121110;--paper:#1F1E1C;--chrome:#262522;--ink:#E8E3D8;--muted:#9A9488;--faint:#6A655B;--ghost:#7B766B;
+  --line:#35332F;--accent:#E8A33D;--accent-soft:rgba(232,163,61,.18);--card:#282724;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 12px 32px rgba(0,0,0,.35);color-scheme:dark;
+}
+/* B2 hero theme is graphite regardless of page theme */
+.art-b2{
+  --paper:#1F1E1C;--chrome:#262522;--ink:#E8E3D8;--muted:#9A9488;--faint:#6A655B;--ghost:#7B766B;
+  --line:#35332F;--accent:#E8A33D;--accent-soft:rgba(232,163,61,.18);--card:#2A2926;
+}
+:root[data-theme="dark"] .art-b2{--paper:#1F1E1C}
+
+*{box-sizing:border-box}
+html{background:var(--page)}
+body{margin:0;background:var(--page);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+.top{max-width:1280px;margin:0 auto;padding:36px 16px 8px;display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.top h1{font:500 15px/1.4 var(--mono);margin:0;letter-spacing:.01em}
+.top p{margin:6px 0 0;font:400 13px/1.55 var(--sans);color:var(--muted);max-width:60ch}
+#theme{font:500 12px var(--mono);color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:7px 12px;cursor:pointer;white-space:nowrap}
+#theme:hover{border-color:var(--accent)}
+section.opt{max-width:1280px;margin:0 auto;padding:40px 16px 0}
+section.opt:last-of-type{padding-bottom:64px}
+.opt header{display:flex;gap:14px;align-items:baseline;margin-bottom:16px;flex-wrap:wrap}
+.opt .tag{font:500 13px var(--mono);color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:2px 8px}
+.opt h2{margin:0;font:500 18px/1.3 var(--mono)}
+.opt .cap{flex-basis:100%;margin:2px 0 0;font:400 14px/1.55 var(--sans);color:var(--muted);max-width:90ch}
+
+.frame{width:100%;max-width:1280px;height:800px;position:relative}
+.win{position:absolute;left:0;top:0;width:1280px;height:800px;transform-origin:0 0;transform:scale(var(--s,1));
+  background:var(--paper);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:var(--shadow);color:var(--ink)}
+.titlebar{height:38px;background:var(--chrome);border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 16px;position:relative}
+.lights{display:flex;gap:8px}.lights i{width:12px;height:12px;border-radius:50%;background:var(--faint);opacity:.55;display:block}
+.titlebar .name{position:absolute;left:0;right:0;text-align:center;font:400 12px var(--mono);color:var(--muted);pointer-events:none}
+.titlebar .name b{font-weight:500;color:var(--ink)}
+.canvas{position:absolute;top:38px;left:0;right:0;bottom:0}
+.col{position:absolute;left:50%;top:54px;width:640px;margin-left:-320px;font:400 16px/1.65 var(--mono);letter-spacing:0}
+.col h3{font:500 22px/1.35 var(--mono);margin:0 0 6px;letter-spacing:-.01em}
+.meta{font:400 12px/1.4 var(--sans);color:var(--faint);margin:0 0 34px;display:flex;gap:10px}
+.meta span+span::before{content:"·";margin-right:10px}
+.col p{margin:0 0 22px;position:relative}
+.col p.dim{opacity:.45}
+.col p .s-old{opacity:.62}
+.caret{display:inline-block;width:2px;height:1.2em;background:var(--accent);vertical-align:text-bottom;margin:0 1px -.12em 1px}
+.ghost{color:var(--ghost)}
+kbd{font:500 11px var(--sans);color:var(--muted);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--card)}
+.hint{display:inline-flex;gap:10px;align-items:center;font:400 11px/1 var(--sans);color:var(--faint);margin-top:-8px}
+.hint span::before{content:"";}
+.status{position:absolute;left:0;right:0;bottom:14px;text-align:center;font:400 11px var(--sans);color:var(--faint);letter-spacing:.02em;opacity:.8}
+.status i{font-style:normal;margin:0 8px;opacity:.6}
+::selection{background:var(--accent-soft)}
+
+/* B2 specifics */
+.tree{position:absolute;left:18px;top:18px;bottom:44px;width:262px;background:var(--card);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 8px 28px rgba(0,0,0,.28);padding:14px 0 10px;font:400 12.5px/1 var(--mono);display:flex;flex-direction:column;z-index:3}
+.tree .lab{font:500 10.5px var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:0 16px 10px}
+.tree .find{margin:0 12px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:6px;color:var(--faint);font:400 12px var(--mono);display:flex;justify-content:space-between}
+.tree ul{list-style:none;margin:0;padding:0}
+.tree li{padding:6px 16px;color:var(--muted);white-space:nowrap;display:flex;gap:6px;align-items:center}
+.tree li.d{color:var(--ink);padding-top:9px}
+.tree li.f{padding-left:36px}
+.tree li.star::after{content:"★";color:var(--accent);font-size:10px;margin-left:auto}
+.tree li.cur{background:var(--accent-soft);color:var(--ink);box-shadow:inset 2px 0 0 var(--accent)}
+.tree li .c{width:10px;color:var(--faint);font-size:10px}
+.tree .foot{margin-top:auto;padding:10px 16px 0;border-top:1px solid var(--line);font:400 11px var(--sans);color:var(--faint);display:flex;gap:12px}
+.nudge{position:absolute;left:668px;width:210px;top:0;font:italic 400 13px/1.5 var(--mono);color:var(--faint)}
+.nudge small{display:block;font:400 10.5px var(--sans);font-style:normal;color:var(--faint);opacity:.8;margin-top:4px}
+.recall{position:absolute;left:0;width:640px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px 10px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.recall::before{content:"";position:absolute;left:150px;top:-6px;width:10px;height:10px;background:var(--card);border-left:1px solid var(--line);border-top:1px solid var(--line);transform:rotate(45deg)}
+.recall .hd{display:flex;justify-content:space-between;align-items:center;font:500 10.5px var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+.recall .hd b{color:var(--accent);font-weight:500}
+.recall .q{font:400 13px/1.55 var(--mono);color:var(--ink);padding:8px 0;border-top:1px solid var(--line)}
+.recall .q:first-of-type{border-top:0;padding-top:2px}
+.chip{display:inline-block;margin-top:6px;font:400 11px/1 var(--sans);color:var(--accent);border:1px solid var(--accent-soft);background:var(--accent-soft);border-radius:999px;padding:4px 9px}
+.recall .ft{display:flex;justify-content:space-between;align-items:center;margin-top:6px;padding-top:8px;border-top:1px solid var(--line);font:400 11px var(--sans);color:var(--faint)}
+.recall .ft .more{color:var(--ink)}
+.cursorline{position:relative}
+</style>
+</head>
+<body>
+<div class="top">
+  <div>
+    <h1>Ekdanta · Direction B — Typewriter Calm</h1>
+    <p>Focus-mode first: one column of duospace prose, a single amber accent, everything else an overlay. Two takes on the editor, mid-draft.</p>
+  </div>
+  <button id="theme" type="button" aria-label="Toggle light and dark theme">Light / Dark</button>
+</div>
+
+<section class="opt" id="b1">
+  <header>
+    <span class="tag">B1</span><h2>Pure page, paragraph focus</h2>
+    <p class="cap">Nothing but the essay: no tree, no panels. Other paragraphs fall back so only the current one speaks, and a Cmd+4 Sentence suggestion waits as grey ghost text after the amber caret. Hero theme: warm off-white.</p>
+  </header>
+  <div class="frame"><div class="win art-b1">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="name"><b>on-writing-slowly.md</b> &nbsp;·&nbsp; Essays</div></div>
+    <div class="canvas">
+      <div class="col">
+        <h3>On Writing Slowly</h3>
+        <div class="meta"><span>Essay</span><span>draft</span><span>287 words</span></div>
+        <p class="dim">I used to judge a writing day by the number at the bottom of the page. Two thousand words meant I had earned dinner; four hundred meant I had failed in some way I couldn't name. Years later, the days I was proudest of were rarely the ones I still liked.</p>
+        <p class="dim">Slow is not the same as stuck. Stuck is staring at the cursor and resenting it. Slow is staying with one sentence long enough to hear what it is trying to say, and then letting it say less. The sentence usually gets shorter. The thought, oddly, gets larger.</p>
+        <p class="dim">My grandmother wrote letters this way, though she would never have called it a method. She wrote on Sunday afternoons at the same table, and she crossed things out rather than starting over. Reading them now, I can watch her change her mind, which is what I trust most about them.</p>
+        <p><span class="s-old">That is what I want from my own pages now: not polish, but evidence that someone was paying attention.</span> A reader can feel the difference between a sentence that was <span class="caret"></span><span class="ghost">chosen and a sentence that merely arrived.</span></p>
+        <div class="hint"><kbd>Tab</kbd> accept <span>·</span> <kbd>⌘4</kbd> next <span>·</span> <kbd>Esc</kbd> dismiss</div>
+      </div>
+      <div class="status">Essay<i>·</i>Voice: Essay v3<i>·</i>Ceiling: 3</div>
+    </div>
+  </div></div>
+</section>
+
+<section class="opt" id="b2">
+  <header>
+    <span class="tag">B2</span><h2>Open page, vault overlay, Recall</h2>
+    <p class="cap">Graphite hero. Every paragraph stays at full strength; the vault floats over the margin (as an overlay, never docked) and a Cmd+1 Recall card hangs under the current line with two of the writer's own sources, while a faint Cmd+2 Nudge sits in the right margin. (B2 stays graphite in either theme.)</p>
+  </header>
+  <div class="frame"><div class="win art-b2">
+    <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="name"><b>on-writing-slowly.md</b> &nbsp;·&nbsp; Essays</div></div>
+    <div class="canvas">
+      <aside class="tree">
+        <div class="lab">Vault</div>
+        <div class="find"><span>Find a file…</span><span>⌘P</span></div>
+        <ul>
+          <li class="d"><span class="c">▾</span>Essays/</li>
+          <li class="f cur star">on-writing-slowly.md</li>
+          <li class="f star">the-quiet-middle.md</li>
+          <li class="f">why-i-stopped-posting.md</li>
+          <li class="d"><span class="c">▾</span>LinkedIn/</li>
+          <li class="f star">hiring-is-listening.md</li>
+          <li class="f">launch-notes-q3.md</li>
+          <li class="d"><span class="c">▸</span>Emails/</li>
+          <li class="d"><span class="c">▸</span>Notes/</li>
+          <li class="d"><span class="c">▾</span>Highlights/</li>
+          <li class="f">Bird by Bird</li>
+          <li class="f">On Writing Well</li>
+        </ul>
+        <div class="foot"><span><kbd>⌘\</kbd> close</span><span>★ exemplar</span></div>
+      </aside>
+
+      <div class="col" style="top:40px">
+        <h3>On Writing Slowly</h3>
+        <div class="meta"><span>Essay</span><span>draft</span><span>331 words</span></div>
+        <p>I used to judge a writing day by the number at the bottom of the page. Two thousand words meant I had earned dinner; four hundred meant I had failed in some way I couldn't name. Years later, the days I was proudest of were rarely the ones I still liked.</p>
+        <p style="position:relative">My grandmother wrote letters this way, though she would never have called it a method. She wrote on Sunday afternoons at the same table, and she crossed things out rather than starting over.
+          <span class="nudge" style="top:0">What did she gain by not starting over?<small>⌘2 nudge · never inserted</small></span></p>
+        <p style="margin-bottom:0">So I have started leaving a first draft alone for a day. Not to rest, but to let the hesitations show<span class="caret"></span></p>
+        <div class="recall" style="top:auto;margin-top:16px;position:relative">
+          <div class="hd"><b>Recall · ⌘1</b><span>2 of your sources</span></div>
+          <div class="q">“A rough draft is allowed to be clumsy for a day, as long as you come back to it with clean eyes.”<br><span class="chip">↳ Notes / Drafting rules, 2024</span></div>
+          <div class="q">“Gran never recopied a letter. A crossed-out word, she said, is a small kind of honesty.”<br><span class="chip">↳ Notes / Sunday letters</span></div>
+          <div class="ft"><span><kbd>⌘↵</kbd> insert quote &nbsp; <kbd>Esc</kbd> close</span><span class="more">More <kbd>⌘⇧1</kbd></span></div>
+        </div>
+      </div>
+      <div class="status">Essay<i>·</i>Voice: Essay v3<i>·</i>Ceiling: 3</div>
+    </div>
+  </div></div>
+</section>
+
+<script>
+(function(){
+  var root=document.documentElement,btn=document.getElementById('theme');
+  btn.addEventListener('click',function(){
+    var dark=root.getAttribute('data-theme')==='dark'||(!root.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches);
+    root.setAttribute('data-theme',dark?'light':'dark');
+  });
+  function fit(){
+    document.querySelectorAll('.frame').forEach(function(f){
+      var s=Math.min(1,f.clientWidth/1280);
+      f.style.setProperty('--s',s);f.querySelector('.win').style.setProperty('--s',s);
+      f.style.height=(800*s)+'px';
+    });
+  }
+  addEventListener('resize',fit);fit();
+  if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);
+})();
+</script>
+</body>
+</html>

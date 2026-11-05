@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ekdanta Direction A</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --page:#FAFAF9; --canvas:#EDECE9; --chrome:#F4F3F1; --chrome2:#EFEEEB; --line:#E5E3DF; --line2:#D9D6D0;
+  --ink:#1F1E1C; --ink2:#5F5C56; --ink3:#928E86; --ink4:#B9B5AD;
+  --accent:#2F4F8F; --accent-soft:rgba(47,79,143,.12); --accent-line:rgba(47,79,143,.35);
+  --del-bg:rgba(150,110,90,.10); --del-ink:#8A6F62;
+  --pop:#FFFFFF; --shadow:0 10px 30px rgba(40,35,25,.14),0 1px 3px rgba(40,35,25,.10);
+  --win-shadow:0 24px 60px rgba(40,35,25,.18),0 2px 6px rgba(40,35,25,.10);
+  --serif:'Newsreader','Source Serif 4',Georgia,serif; --sans:'Inter',system-ui,sans-serif;
+}
+:root[data-theme="dark"]{
+  --page:#262523; --canvas:#161514; --chrome:#1F1E1D; --chrome2:#232221; --line:#33312F; --line2:#42403C;
+  --ink:#E9E6E0; --ink2:#AEAAA2; --ink3:#837F78; --ink4:#5C5953;
+  --accent:#8EA9E0; --accent-soft:rgba(142,169,224,.16); --accent-line:rgba(142,169,224,.45);
+  --del-bg:rgba(200,150,120,.12); --del-ink:#B9998A;
+  --pop:#2F2D2B; --shadow:0 10px 30px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --win-shadow:0 24px 60px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+  --page:#262523; --canvas:#161514; --chrome:#1F1E1D; --chrome2:#232221; --line:#33312F; --line2:#42403C;
+  --ink:#E9E6E0; --ink2:#AEAAA2; --ink3:#837F78; --ink4:#5C5953;
+  --accent:#8EA9E0; --accent-soft:rgba(142,169,224,.16); --accent-line:rgba(142,169,224,.45);
+  --del-bg:rgba(200,150,120,.12); --del-ink:#B9998A;
+  --pop:#2F2D2B; --shadow:0 10px 30px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --win-shadow:0 24px 60px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.4);
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{color-scheme:light dark}
+body{background:var(--canvas);color:var(--ink);font-family:var(--sans);padding:0 16px 64px;-webkit-font-smoothing:antialiased}
+.top{max-width:1280px;margin:0 auto;padding:28px 0 8px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.top h1{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.top p{font-size:12.5px;color:var(--ink2);margin-top:2px}
+#theme{font:500 12px var(--sans);color:var(--ink);background:var(--chrome);border:1px solid var(--line2);border-radius:7px;padding:7px 12px;cursor:pointer}
+section.opt{max-width:1280px;margin:36px auto 0}
+.opt h2{font-size:20px;font-weight:600;letter-spacing:-.015em;display:flex;align-items:baseline;gap:10px}
+.opt h2 span{font-size:12px;font-weight:500;color:var(--accent);letter-spacing:.04em;border:1px solid var(--accent-line);border-radius:5px;padding:1px 7px}
+.opt .cap{font-size:14px;color:var(--ink2);margin:6px 0 16px;max-width:80ch;line-height:1.5}
+.stage{width:100%;aspect-ratio:1280/800;position:relative;overflow:hidden}
+.artboard{width:1280px;height:800px;transform-origin:0 0;position:absolute;left:0;top:0}
+
+/* window */
+.win{width:1280px;height:800px;border-radius:12px;background:var(--page);box-shadow:var(--win-shadow);border:1px solid var(--line2);overflow:hidden;display:flex;flex-direction:column;position:relative}
+.tb{height:40px;background:var(--chrome);border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 14px;gap:14px;flex:none;font-size:12px;color:var(--ink3)}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;background:var(--line2);display:block}
+.tb .crumb{flex:1;text-align:center;color:var(--ink2)}
+.tb .crumb b{font-weight:500;color:var(--ink)}
+.body{flex:1;display:flex;min-height:0;position:relative}
+
+/* tree */
+.tree{width:244px;background:var(--chrome);border-right:1px solid var(--line);padding:16px 10px;font-size:13px;color:var(--ink2);flex:none;display:flex;flex-direction:column}
+.tree .vault{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);padding:0 8px 10px;display:flex;justify-content:space-between}
+.tree .g{padding:7px 8px 3px;color:var(--ink);font-weight:500;display:flex;gap:7px;align-items:center}
+.tree .g svg{width:11px;height:11px;stroke:var(--ink3);fill:none;stroke-width:1.6}
+.tree .f{padding:4px 8px 4px 30px;border-radius:6px;display:flex;justify-content:space-between;gap:6px;white-space:nowrap;overflow:hidden}
+.tree .f em{font-style:normal;color:var(--accent)}
+.tree .f.cur{background:var(--accent-soft);color:var(--ink);font-weight:500;box-shadow:inset 2px 0 0 var(--accent)}
+.tree .sp{flex:1}
+.tree .foot{font-size:11.5px;color:var(--ink3);padding:8px;border-top:1px solid var(--line)}
+.rail{width:52px;background:var(--chrome);border-right:1px solid var(--line);flex:none;display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:6px}
+.rail .ic{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;color:var(--ink3)}
+.rail .ic svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.rail .ic.on{background:var(--accent-soft);color:var(--accent)}
+.rail .sp{flex:1}
+
+/* prose */
+.pane{flex:1;position:relative;min-width:0;background:var(--page)}
+.prose{font-family:var(--serif);font-size:19.5px;line-height:1.62;color:var(--ink);font-optical-sizing:auto}
+.prose p{margin-bottom:1.05em}
+.title{font-family:var(--serif);font-weight:500;letter-spacing:-.015em;color:var(--ink)}
+.meta{font-size:12px;color:var(--ink3);display:flex;gap:14px;align-items:center}
+.meta .pill{border:1px solid var(--line2);border-radius:20px;padding:1px 9px;color:var(--ink2)}
+.meta .dot{width:6px;height:6px;border-radius:50%;background:var(--ink4);display:inline-block;margin-right:5px}
+.caret{display:inline-block;width:1.5px;height:1.05em;background:var(--accent);vertical-align:-.15em;margin-left:1px}
+.sel{background:var(--accent-soft);box-shadow:inset 0 -1.5px 0 var(--accent);border-radius:2px;color:var(--ink)}
+.kbd{font:500 10.5px var(--sans);color:var(--ink2);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--chrome);line-height:16px;display:inline-block}
+
+/* nudge + chip */
+.nudge{font-family:var(--serif);font-style:italic;font-size:14.5px;line-height:1.45;color:var(--ink3);position:absolute}
+.nudge small{display:block;font:500 10px var(--sans);font-style:normal;letter-spacing:.06em;text-transform:uppercase;color:var(--ink4);margin-bottom:4px}
+.chip{font:500 11.5px var(--sans);color:var(--accent);background:var(--accent-soft);border-radius:5px;padding:2px 8px;white-space:nowrap;display:inline-block}
+
+/* popups */
+.pop{position:absolute;background:var(--pop);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);font-family:var(--sans)}
+.alts{width:236px;padding:5px}
+.alts .lv{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink3);padding:4px 8px 6px;letter-spacing:.02em}
+.alts .lv b{font-weight:600;color:var(--accent)}
+.alts .o{padding:6px 10px;border-radius:6px;font-family:var(--serif);font-size:17px;color:var(--ink);display:flex;justify-content:space-between;align-items:baseline}
+.alts .o i{font:500 10.5px var(--sans);font-style:normal;color:var(--ink4)}
+.alts .o.on{background:var(--accent);color:#fff}
+:root[data-theme="dark"] .alts .o.on{color:#14161C}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .alts .o.on{color:#14161C}}
+.alts .o.on i{color:inherit;opacity:.7}
+.alts .hint{border-top:1px solid var(--line);margin-top:4px;padding:7px 8px 3px;font-size:10.5px;color:var(--ink3);display:flex;gap:10px}
+.bar{display:flex;align-items:center;gap:10px;padding:8px 10px 8px 12px;font-size:13px;width:100%}
+.bar .lvl{font-size:10.5px;font-weight:600;color:var(--accent);letter-spacing:.02em;white-space:nowrap}
+.bar .q{flex:1;color:var(--ink)}
+.bar .q .caret{height:14px;vertical-align:-2px}
+.ctrl{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink2)}
+.ctrl span{display:flex;gap:6px;align-items:center}
+.ctrl .acc{color:var(--accent);font-weight:600}
+
+/* diff */
+.diff{border-left:2px solid var(--accent-line);padding-left:18px;margin-left:-20px}
+del{color:var(--del-ink);background:var(--del-bg);text-decoration:line-through;text-decoration-thickness:1px;border-radius:2px}
+ins{text-decoration:none;color:var(--ink);background:var(--accent-soft);box-shadow:inset 0 -1.5px 0 var(--accent);border-radius:2px}
+
+/* status */
+.status{height:28px;flex:none;border-top:1px solid var(--line);background:var(--chrome);display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:11.5px;color:var(--ink3);opacity:.6}
+.status .s{display:flex;gap:6px;align-items:center}
+.status .sep{color:var(--ink4)}
+.status b{font-weight:500;color:var(--ink2)}
+.hov{font-size:10.5px;color:var(--ink4);letter-spacing:.02em}
+</style>
+</head>
+<body>
+<div class="top">
+  <div><h1>Ekdanta · Direction A, Studio</h1><p>Main editor screen, two takes. Static mockup, 1280 x 800 artboards.</p></div>
+  <button id="theme" type="button">Toggle dark / light</button>
+</div>
+
+<!-- ============ A1 ============ -->
+<section class="opt">
+  <h2><span>A1</span>The centred page</h2>
+  <p class="cap">File tree stays open on the left, the page sits dead centre at a 68ch measure, and the Nudge question hangs in the right margin. Status bar is a quiet strip along the bottom that is only half-visible until hovered. Shows Cmd+3 Word alternatives.</p>
+  <div class="stage"><div class="artboard">
+  <div class="win">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="crumb">Essays / <b>Why Slow Writing Matters</b></div><div style="width:52px"></div></div>
+    <div class="body">
+      <aside class="tree">
+        <div class="vault"><span>Vault · Writing</span><span>⌘P</span></div>
+        <div class="g"><svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg>Essays</div>
+        <div class="f cur"><span>Why Slow Writing Matters</span></div>
+        <div class="f"><span>The Unfinished Room</span><em>★</em></div>
+        <div class="f"><span>On Being Edited</span></div>
+        <div class="f"><span>A Year of Mornings</span><em>★</em></div>
+        <div class="g"><svg viewBox="0 0 12 12"><path d="M4.5 3l3 3-3 3"/></svg>LinkedIn</div>
+        <div class="g"><svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg>Emails</div>
+        <div class="f"><span>Note to Priya, book idea</span></div>
+        <div class="f"><span>Cold intro, Anand</span><em>★</em></div>
+        <div class="g"><svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg>Notes</div>
+        <div class="f"><span>On Craft</span></div>
+        <div class="f"><span>Reading list, 2025</span></div>
+        <div class="g"><svg viewBox="0 0 12 12"><path d="M4.5 3l3 3-3 3"/></svg>Highlights</div>
+        <div class="sp"></div>
+        <div class="foot">★ exemplars teach your voice</div>
+      </aside>
+      <main class="pane">
+        <!-- page column -->
+        <div style="position:absolute;left:50%;transform:translateX(-50%);margin-left:-70px;top:58px;width:668px">
+          <div class="title" style="font-size:38px;line-height:1.15">Why Slow Writing Matters</div>
+          <div class="meta" style="margin:14px 0 40px"><span class="pill">Essay</span><span><i class="dot"></i>draft</span><span>412 words</span><span>edited 9:41</span></div>
+          <div class="prose">
+            <p>I used to think slow writing was a kind of vanity, a way of dressing up hesitation as craft. Then I spent a winter drafting one essay a week, and the weeks that produced the worst pages were always the ones I rushed.</p>
+            <p>Speed gives you the first idea that arrives, and the first idea is rarely yours. It is the common one, worn smooth by everyone who reached for it before you. Slowness is how you get past it, to the second and third, where the <span class="sel">strange</span><span class="caret"></span> and particular things live.</p>
+            <p>There is a physical part to it as well. When I write by hand the sentence has to survive the whole length of my arm before it reaches the page, and most of the lazy ones do not make the journey. On a keyboard they arrive intact and I leave them there out of politeness.</p>
+          </div>
+        </div>
+        <!-- word alternatives -->
+        <div class="pop alts" style="left:calc(50% - 100px);top:392px">
+          <div class="lv"><b>⌘3 · Word</b><span>replace “strange”</span></div>
+          <div class="o on">peculiar<i>↵</i></div>
+          <div class="o">uncommon<i>2</i></div>
+          <div class="o">singular<i>3</i></div>
+          <div class="o">unfamiliar<i>4</i></div>
+          <div class="hint"><span>↑↓ choose</span><span>↵ pick</span><span>esc close</span></div>
+        </div>
+        <!-- margin nudge -->
+        <div class="nudge" style="left:calc(50% + 292px);top:298px;width:170px"><small>⌘2 · Nudge</small>What is the one first idea you rushed to, that winter?</div>
+      </main>
+    </div>
+    <div class="status"><div class="s"><b>Platform: Essay</b><span class="sep">·</span><b>Voice: Essay v3</b><span class="sep">·</span><b>Ceiling: 3</b></div><div class="hov">Saved locally · Essays/why-slow-writing-matters.md</div></div>
+  </div>
+  </div></div>
+</section>
+
+<!-- ============ A2 ============ -->
+<section class="opt">
+  <h2><span>A2</span>The focused left page with a margin column</h2>
+  <p class="cap">The tree collapses to a thin icon rail so the page can sit left of centre, leaving a wide right margin that carries Nudge notes and citation chips. Title becomes a quiet running header, and the status line lives in the title bar. Shows Cmd+5 Passage with an inline instruction and word-level diff.</p>
+  <div class="stage"><div class="artboard">
+  <div class="win">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="crumb" style="text-align:left;padding-left:14px">Essays / <b>Why Slow Writing Matters</b></div>
+      <div class="hov" style="color:var(--ink3);display:flex;gap:7px;align-items:center;opacity:.75"><span>Essay</span><span>·</span><span>Essay v3</span><span>·</span><span>Ceiling 3</span></div></div>
+    <div class="body">
+      <aside class="rail">
+        <div class="ic on"><svg viewBox="0 0 20 20"><path d="M3.5 5.5a1.5 1.5 0 011.5-1.5h3l1.5 2H15a1.5 1.5 0 011.5 1.5v7A1.5 1.5 0 0115 16H5a1.5 1.5 0 01-1.5-1.5z"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5"/><path d="M13 13l4 4"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 20 20"><path d="M10 2.5l2.2 4.8 5.3.6-3.9 3.6 1.1 5.2L10 14l-4.7 2.7 1.1-5.2L2.5 7.9l5.3-.6z"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 20 20"><path d="M4 4h12v9H8l-4 3z"/></svg></div>
+        <div class="sp"></div>
+        <div class="ic"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2M5 5l1.4 1.4M13.6 13.6L15 15M5 15l1.4-1.4M13.6 6.4L15 5"/></svg></div>
+      </aside>
+      <main class="pane">
+        <div style="position:absolute;left:92px;top:44px;width:668px">
+          <div class="meta" style="margin-bottom:10px;letter-spacing:.02em"><span style="color:var(--ink2)">Essay</span><span><i class="dot"></i>draft</span><span>Essays/why-slow-writing-matters.md</span></div>
+          <div class="title" style="font-size:30px;line-height:1.2;padding-bottom:22px;border-bottom:1px solid var(--line);margin-bottom:34px">Why Slow Writing Matters</div>
+          <div class="prose">
+            <p>I used to think slow writing was a kind of vanity, a way of dressing up hesitation as craft. Then I spent a winter drafting one essay a week, and the weeks that produced the worst pages were always the ones I rushed.</p>
+            <div style="position:relative;margin-bottom:1.05em;margin-top:72px">
+              <div class="pop" style="left:-4px;top:-58px;width:612px;z-index:3"><div class="bar"><span class="lvl">⌘5 · Passage</span><span class="q">make this less abstract<span class="caret"></span></span><span class="kbd">↵ run</span></div></div>
+              <div class="diff" style="margin-top:0;padding-top:0">
+                <p style="margin:0">Slow writing is really about attention<del>, about the value of patience in the creative process.</del><ins>: staying with one sentence until it sounds like me, not like everyone who wrote it first.</ins></p>
+              </div>
+              <div class="ctrl" style="margin-top:12px;font-family:var(--sans)"><span class="acc"><span class="kbd">⌘↵</span>Accept</span><span><span class="kbd">⌘⌫</span>Reject</span><span style="color:var(--ink3)">2 changes · per-change with <span class="kbd">Tab</span></span></div>
+            </div>
+            <p style="margin-top:1.6em">Speed gives you the first idea that arrives, and the first idea is rarely yours. It is the common one, worn smooth by everyone who reached for it before you.</p>
+          </div>
+        </div>
+        <!-- margin column -->
+        <div style="position:absolute;left:810px;top:44px;bottom:0;width:1px;background:var(--line);opacity:.0"></div>
+        <div class="nudge" style="left:812px;top:250px;width:210px"><small>⌘2 · Nudge</small>Which sentence did you cut last week that you still think about?</div>
+        <div style="position:absolute;left:812px;top:372px;width:210px;font:12px/1.5 var(--sans);color:var(--ink3)">Echoes your note on patience<br><span class="chip" style="margin-top:6px">↳ Notes / On Craft, Mar 2025</span></div>
+      </main>
+    </div>
+    <div class="status" style="opacity:.35;justify-content:flex-end"><span class="hov" style="color:var(--ink3)">Hover for Platform: Essay · Voice: Essay v3 · Ceiling: 3 · 412 words</span></div>
+  </div>
+  </div></div>
+</section>
+
+<script>
+(function(){
+  var b=document.getElementById('theme'),r=document.documentElement;
+  b.addEventListener('click',function(){
+    var dark=r.getAttribute('data-theme')==='dark'||(!r.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches);
+    r.setAttribute('data-theme',dark?'light':'dark');
+  });
+  function fit(){
+    document.querySelectorAll('.stage').forEach(function(s){
+      var k=s.clientWidth/1280;s.firstElementChild.style.transform='scale('+k+')';
+    });
+  }
+  addEventListener('resize',fit);fit();
+})();
+</script>
+</body>
+</html>
