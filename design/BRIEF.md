@@ -1,6 +1,6 @@
 # Ekdanta — Design Brief
 
-_Draft v0.2 · November 2026 · See also the [product spec](../docs/SPEC.md)._
+_Draft v0.3 · November 2026 · See also the [product spec](../docs/SPEC.md)._
 
 Ekdanta is a "Cursor for writers": a local-first app that holds all of your writing and knowledge, learns your voice per platform, and helps **only when asked, only as much as asked**. This brief sets the principles, the feel, and the visual direction that the flows, help-ladder spec, design system and prototype will follow.
 
@@ -11,7 +11,7 @@ Ekdanta is a "Cursor for writers": a local-first app that holds all of your writ
 | Thinking Space vs editor | **Own full-screen mode.** You brain-dump on a full canvas; when you start drafting it collapses into a side panel beside the editor. |
 | Overall feel | **Quiet modern.** Neutral, calm, typographic; closer to iA Writer and Linear than to a notebook or a manuscript. |
 | Where help appears | **Take Cursor's lessons:** help comes to where your attention already is, one keystroke away, with clear accept/reject. See "Lessons from Cursor" below. |
-| Prototype audience | **Feel-first.** Optimised for you actually using the interactions, not for public launch polish. |
+| Prototype goal | **Feel-first.** The prototype exists to try the interactions with real typing, not to demo finished visuals. |
 | Visual direction (after mockups) | **A · Studio as the everyday mode**, plus a separate **Focus mode** (from B): one keystroke hides everything except your text, with nothing left but the page and the caret. |
 | Autocomplete | **Never unsolicited.** No ghost text, completions or suggestions appear while you type. Every suggestion, including Cmd+4 continuation, appears only after an explicit keystroke and disappears as soon as you type. |
 | Right section | **A modular panel.** It holds a small set of modules you switch between; see "The right panel" below. |
@@ -35,7 +35,15 @@ Ekdanta is a "Cursor for writers": a local-first app that holds all of your writ
 | **Help** | A history of help you summoned in this document: Nudges, Recall results and diffs (accepted, rejected, edited after accepting), each anchored to its paragraph. You can resolve or clear items. | Hidden from the icon row until you've asked for help once. |
 | **Piece** | Facts about the document: platform, word count against the platform's typical length, active voice profile, help ceiling, and an outline built from headings and paragraph first lines. No AI content. | Always has content. |
 
+**Material shows one group at a time.** Fragments are listed under their cluster labels. Only the group that matches the paragraph being written is open (marked "this paragraph"); every other group folds to one line with a count, such as "The body 0/3". Opening a group is one click. Following the caret only changes which of your own groups is open; it never adds content.
+
 Later candidates, not in v1: Sources from the web (labelled external), Agent tasks, Linter checks.
+
+## Thinking Space
+
+- **Borderless fragments.** Fragments are plain text on a faint dot grid, with no boxes or borders. The fragment being typed shows only the caret.
+- **Your words versus the AI's.** Fragments are always in the prose serif at full strength. Everything the AI adds (dashed links, tiny link labels, cluster labels in small grey capitals, Recall chips) is visibly secondary. A cluster label you rename switches to your serif italic.
+- **Clusters are soft regions:** a faint tinted area with a label, no outline. Fragments that fit no cluster sit under a plain "unclustered" label.
 
 ## Design principles
 
@@ -106,6 +114,7 @@ Static HTML mockups of the main editor, each with a light/dark toggle. Open them
 - [`mockups/direction-a.html`](mockups/direction-a.html): Direction A, two layouts (centred page; left page with a margin column).
 - [`mockups/direction-b.html`](mockups/direction-b.html): Direction B, two layouts (pure focus page; vault overlay with Recall).
 - [`mockups/direction-a3.html`](mockups/direction-a3.html): **the chosen direction.** Studio with the modular right panel (Material, Help, Piece) and Focus mode.
+- [`mockups/thinking-space.html`](mockups/thinking-space.html): the Thinking Space (loose map, clusters, and the hand-off into drafting).
 
 ## Out of scope for design v1
 Collaboration, accounts or billing, grammar-checker UX, AI-detection evasion, full-page generation, mobile.

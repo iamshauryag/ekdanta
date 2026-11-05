@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ekdanta Thinking Space</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --page:#FAFAF9; --canvas:#EDECE9; --chrome:#F4F3F1; --chrome2:#EFEEEB; --line:#E5E3DF; --line2:#D9D6D0;
+  --ink:#1F1E1C; --ink2:#5F5C56; --ink3:#928E86; --ink4:#B9B5AD;
+  --accent:#2F4F8F; --accent-soft:rgba(47,79,143,.12); --accent-line:rgba(47,79,143,.35);
+  --del-bg:rgba(150,110,90,.10); --del-ink:#8A6F62;
+  --pop:#FFFFFF; --shadow:0 10px 30px rgba(40,35,25,.14),0 1px 3px rgba(40,35,25,.10);
+  --win-shadow:0 24px 60px rgba(40,35,25,.18),0 2px 6px rgba(40,35,25,.10);
+  --serif:'Newsreader','Source Serif 4',Georgia,serif; --sans:'Inter',system-ui,sans-serif;
+}
+:root[data-theme="dark"]{
+  --page:#262523; --canvas:#161514; --chrome:#1F1E1D; --chrome2:#232221; --line:#33312F; --line2:#42403C;
+  --ink:#E9E6E0; --ink2:#AEAAA2; --ink3:#837F78; --ink4:#5C5953;
+  --accent:#8EA9E0; --accent-soft:rgba(142,169,224,.16); --accent-line:rgba(142,169,224,.45);
+  --del-bg:rgba(200,150,120,.12); --del-ink:#B9998A;
+  --pop:#2F2D2B; --shadow:0 10px 30px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --win-shadow:0 24px 60px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.4);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+  --page:#262523; --canvas:#161514; --chrome:#1F1E1D; --chrome2:#232221; --line:#33312F; --line2:#42403C;
+  --ink:#E9E6E0; --ink2:#AEAAA2; --ink3:#837F78; --ink4:#5C5953;
+  --accent:#8EA9E0; --accent-soft:rgba(142,169,224,.16); --accent-line:rgba(142,169,224,.45);
+  --del-bg:rgba(200,150,120,.12); --del-ink:#B9998A;
+  --pop:#2F2D2B; --shadow:0 10px 30px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --win-shadow:0 24px 60px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.4);
+  }
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{color-scheme:light dark}
+body{background:var(--canvas);color:var(--ink);font-family:var(--sans);padding:0 16px 64px;-webkit-font-smoothing:antialiased}
+.top{max-width:1280px;margin:0 auto;padding:28px 0 8px;display:flex;justify-content:space-between;align-items:center;gap:16px}
+.top h1{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.top p{font-size:12.5px;color:var(--ink2);margin-top:2px}
+#theme{font:500 12px var(--sans);color:var(--ink);background:var(--chrome);border:1px solid var(--line2);border-radius:7px;padding:7px 12px;cursor:pointer}
+section.opt{max-width:1280px;margin:36px auto 0}
+.opt h2{font-size:20px;font-weight:600;letter-spacing:-.015em;display:flex;align-items:baseline;gap:10px}
+.opt h2 span{font-size:12px;font-weight:500;color:var(--accent);letter-spacing:.04em;border:1px solid var(--accent-line);border-radius:5px;padding:1px 7px}
+.opt .cap{font-size:14px;color:var(--ink2);margin:6px 0 16px;max-width:80ch;line-height:1.5}
+.stage{width:100%;aspect-ratio:1280/800;position:relative;overflow:hidden}
+.artboard{width:1280px;height:800px;transform-origin:0 0;position:absolute;left:0;top:0}
+
+/* window */
+.win{width:1280px;height:800px;border-radius:12px;background:var(--page);box-shadow:var(--win-shadow);border:1px solid var(--line2);overflow:hidden;display:flex;flex-direction:column;position:relative}
+.tb{height:40px;background:var(--chrome);border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 14px;gap:14px;flex:none;font-size:12px;color:var(--ink3)}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;background:var(--line2);display:block}
+.tb .crumb{flex:1;text-align:center;color:var(--ink2)}
+.tb .crumb b{font-weight:500;color:var(--ink)}
+.body{flex:1;display:flex;min-height:0;position:relative}
+
+/* tree */
+.tree{width:244px;background:var(--chrome);border-right:1px solid var(--line);padding:16px 10px;font-size:13px;color:var(--ink2);flex:none;display:flex;flex-direction:column}
+.tree .vault{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);padding:0 8px 10px;display:flex;justify-content:space-between}
+.tree .g{padding:7px 8px 3px;color:var(--ink);font-weight:500;display:flex;gap:7px;align-items:center}
+.tree .g svg{width:11px;height:11px;stroke:var(--ink3);fill:none;stroke-width:1.6}
+.tree .f{padding:4px 8px 4px 30px;border-radius:6px;display:flex;justify-content:space-between;gap:6px;white-space:nowrap;overflow:hidden}
+.tree .f em{font-style:normal;color:var(--accent)}
+.tree .f.cur{background:var(--accent-soft);color:var(--ink);font-weight:500;box-shadow:inset 2px 0 0 var(--accent)}
+.tree .sp{flex:1}
+.tree .foot{font-size:11.5px;color:var(--ink3);padding:8px;border-top:1px solid var(--line)}
+.rail{width:52px;background:var(--chrome);border-right:1px solid var(--line);flex:none;display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:6px}
+.rail .ic{width:34px;height:34px;border-radius:8px;display:grid;place-items:center;color:var(--ink3)}
+.rail .ic svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.rail .ic.on{background:var(--accent-soft);color:var(--accent)}
+.rail .sp{flex:1}
+
+/* prose */
+.pane{flex:1;position:relative;min-width:0;background:var(--page)}
+.prose{font-family:var(--serif);font-size:19.5px;line-height:1.62;color:var(--ink);font-optical-sizing:auto}
+.prose p{margin-bottom:1.05em}
+.title{font-family:var(--serif);font-weight:500;letter-spacing:-.015em;color:var(--ink)}
+.meta{font-size:12px;color:var(--ink3);display:flex;gap:14px;align-items:center}
+.meta .pill{border:1px solid var(--line2);border-radius:20px;padding:1px 9px;color:var(--ink2)}
+.meta .dot{width:6px;height:6px;border-radius:50%;background:var(--ink4);display:inline-block;margin-right:5px}
+.caret{display:inline-block;width:1.5px;height:1.05em;background:var(--accent);vertical-align:-.15em;margin-left:1px}
+.sel{background:var(--accent-soft);box-shadow:inset 0 -1.5px 0 var(--accent);border-radius:2px;color:var(--ink)}
+.kbd{font:500 10.5px var(--sans);color:var(--ink2);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 5px;background:var(--chrome);line-height:16px;display:inline-block}
+
+/* nudge + chip */
+.nudge{font-family:var(--serif);font-style:italic;font-size:14.5px;line-height:1.45;color:var(--ink3);position:absolute}
+.nudge small{display:block;font:500 10px var(--sans);font-style:normal;letter-spacing:.06em;text-transform:uppercase;color:var(--ink4);margin-bottom:4px}
+.chip{font:500 11.5px var(--sans);color:var(--accent);background:var(--accent-soft);border-radius:5px;padding:2px 8px;white-space:nowrap;display:inline-block}
+
+/* popups */
+.pop{position:absolute;background:var(--pop);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);font-family:var(--sans)}
+.alts{width:236px;padding:5px}
+.alts .lv{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink3);padding:4px 8px 6px;letter-spacing:.02em}
+.alts .lv b{font-weight:600;color:var(--accent)}
+.alts .o{padding:6px 10px;border-radius:6px;font-family:var(--serif);font-size:17px;color:var(--ink);display:flex;justify-content:space-between;align-items:baseline}
+.alts .o i{font:500 10.5px var(--sans);font-style:normal;color:var(--ink4)}
+.alts .o.on{background:var(--accent);color:#fff}
+:root[data-theme="dark"] .alts .o.on{color:#14161C}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .alts .o.on{color:#14161C}}
+.alts .o.on i{color:inherit;opacity:.7}
+.alts .hint{border-top:1px solid var(--line);margin-top:4px;padding:7px 8px 3px;font-size:10.5px;color:var(--ink3);display:flex;gap:10px}
+.bar{display:flex;align-items:center;gap:10px;padding:8px 10px 8px 12px;font-size:13px;width:100%}
+.bar .lvl{font-size:10.5px;font-weight:600;color:var(--accent);letter-spacing:.02em;white-space:nowrap}
+.bar .q{flex:1;color:var(--ink)}
+.bar .q .caret{height:14px;vertical-align:-2px}
+.ctrl{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink2)}
+.ctrl span{display:flex;gap:6px;align-items:center}
+.ctrl .acc{color:var(--accent);font-weight:600}
+
+/* diff */
+.diff{border-left:2px solid var(--accent-line);padding-left:18px;margin-left:-20px}
+del{color:var(--del-ink);background:var(--del-bg);text-decoration:line-through;text-decoration-thickness:1px;border-radius:2px}
+ins{text-decoration:none;color:var(--ink);background:var(--accent-soft);box-shadow:inset 0 -1.5px 0 var(--accent);border-radius:2px}
+
+/* status */
+.status{height:28px;flex:none;border-top:1px solid var(--line);background:var(--chrome);display:flex;align-items:center;justify-content:space-between;padding:0 16px;font-size:11.5px;color:var(--ink3);opacity:.6}
+.status .s{display:flex;gap:6px;align-items:center}
+.status .sep{color:var(--ink4)}
+.status b{font-weight:500;color:var(--ink2)}
+.hov{font-size:10.5px;color:var(--ink4);letter-spacing:.02em}
+
+:root{--p1:130px;--p2:236px;--p3:372px;--p4:508px}
+.page{position:absolute;left:84px;top:30px;width:640px}
+.prose{font-size:18.5px;line-height:1.6}
+.prose p{position:relative;margin-bottom:.95em;transition:background .15s}
+.prose p.hl{box-shadow:-12px 0 0 var(--accent-soft),12px 0 0 var(--accent-soft);background:color-mix(in srgb,var(--accent) 7%,transparent);border-radius:2px}
+.prose p.dim{opacity:.45}
+i.recall{position:absolute;left:-30px;top:.62em;width:7px;height:7px;border-radius:50%;background:var(--accent);opacity:.32}
+.panel{width:300px;flex:none;background:var(--chrome);border-left:1px solid var(--line);position:relative;display:flex;flex-direction:column;font-size:13px;color:var(--ink2)}
+.ptabs{display:flex;align-items:flex-start;padding:10px 12px 8px;border-bottom:1px solid var(--line);height:56px;flex:none;gap:4px}
+.ptab,.pcol{width:44px;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink3)}
+.pi{width:34px;height:28px;border-radius:7px;display:grid;place-items:center}
+.pi svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.ptab.on .pi{background:var(--accent-soft);color:var(--accent)}
+.ptab.on .pk{color:var(--accent)}
+.pk{font:500 9.5px var(--sans);color:var(--ink4);letter-spacing:.03em}
+.psp{flex:1}
+.pcol{width:40px}
+.tip{display:none}
+.pbody{flex:1;position:relative;padding:18px 18px 0;min-height:0}
+.ph{display:flex;align-items:baseline;gap:6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink2);font-weight:600;margin-bottom:10px}
+.ph em{font-style:normal;letter-spacing:0;text-transform:none;font-weight:400;color:var(--ink3);font-size:12px}
+.ph .cnt{margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none;font-size:11.5px;color:var(--ink3)}
+.frs{list-style:none}
+.fr{display:flex;gap:10px;align-items:flex-start;padding:7px 0;font-family:var(--serif);font-size:16px;line-height:1.35;color:var(--ink);border-bottom:1px solid var(--line)}
+.fr:last-child{border-bottom:0}
+.fr .mk{width:15px;height:15px;border-radius:50%;border:1.3px solid var(--ink3);flex:none;margin-top:3px;display:grid;place-items:center}
+.fr.used{color:var(--ink3)}
+.fr.used .mk{border-color:var(--ink4);background:var(--line)}
+.fr .mk svg{width:9px;height:9px;stroke:var(--ink2);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.src{background:var(--page);border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-bottom:8px}
+.src p{font-family:var(--serif);font-size:14.5px;line-height:1.4;color:var(--ink2);margin-top:7px}
+.pfoot{position:absolute;left:18px;right:18px;bottom:16px;border-top:1px solid var(--line);padding-top:12px;display:flex;justify-content:space-between;align-items:center;color:var(--accent);font-weight:500;font-size:12.5px}
+.pfoot .kbd{color:var(--ink2);font-weight:500}
+/* help */
+.anch{position:absolute;left:0;right:0;top:0}
+.hi{position:absolute;left:18px;right:16px;background:var(--page);border:1px solid var(--line);border-radius:9px;padding:9px 12px 9px}
+.hi .cn{position:absolute;left:-19px;top:calc(15px - var(--off,0px));width:18px;height:var(--off,0px);border-top:1px solid var(--line2);border-right:1px solid var(--line2)}
+.hi .cn:before{content:"";position:absolute;left:-2px;top:-3px;width:5px;height:5px;border-radius:50%;background:var(--ink4)}
+.hi.hover{border-color:var(--accent-line);box-shadow:0 2px 10px rgba(40,35,25,.08)}
+.hi.hover .cn{border-color:var(--accent)}
+.hi.hover .cn:before{background:var(--accent)}
+.hh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px}
+.pn{font:600 11px var(--sans);color:var(--ink);background:var(--chrome2);border:1px solid var(--line);border-radius:4px;padding:0 5px}
+.hi.hover .pn{color:var(--accent);border-color:var(--accent-line)}
+.kd{font:500 10.5px var(--sans);color:var(--ink3);letter-spacing:.03em}
+.nq{font-family:var(--serif);font-style:italic;font-size:15.5px;line-height:1.4;color:var(--ink2)}
+.rx{font-size:12.5px;line-height:1.4;color:var(--ink2);margin-bottom:6px}
+.chips{display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+.act{display:flex;gap:12px;align-items:center;margin-top:8px;font-size:11.5px}
+.lnk{color:var(--accent);font-weight:500}
+.mt{margin-left:auto;color:var(--ink4)}
+.hi.tiny{padding:7px 12px}
+.sw{font-family:var(--serif);font-size:15.5px;color:var(--ink)}
+.sw b{color:var(--ink3);font-family:var(--sans);font-weight:400}
+.sw .o:first-child{color:var(--ink3);text-decoration:line-through;text-decoration-thickness:1px}
+.st{font-weight:600;font-size:11.5px}
+.st.rej{color:var(--del-ink)}
+.st.acc{color:var(--accent)}
+.st2{font-size:12.5px;color:var(--ink2)}
+.ba{margin-top:7px;display:flex;flex-direction:column;gap:3px;font-family:var(--serif);font-size:13.5px;line-height:1.4}
+.ba .b del{color:var(--del-ink)}
+/* piece */
+.facts .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12.5px}
+.facts .row.col{flex-wrap:wrap}
+.facts dt{color:var(--ink3);flex:none;width:92px}
+.facts dd{color:var(--ink);flex:1;text-align:left;line-height:1.45}
+.facts .mu{color:var(--ink3)}
+.facts .sw2{float:right;color:var(--accent);font-size:11.5px;font-weight:500}
+.facts dd .lnk{margin-left:2px}
+.bar2{flex-basis:100%;height:3px;background:var(--line);border-radius:2px;margin-top:6px}
+.bar2 i{display:block;height:100%;background:var(--accent);border-radius:2px;opacity:.8}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:7px;overflow:hidden;background:var(--page)}
+.seg span{width:30px;text-align:center;padding:4px 0;font-weight:500;color:var(--ink3);border-right:1px solid var(--line)}
+.seg span:last-child{border-right:0}
+.seg span.on{background:var(--accent);color:#fff}
+:root[data-theme="dark"] .seg span.on{color:#14161C}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .seg span.on{color:#14161C}}
+.dot2{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ink4);margin-right:6px}
+.path{font:12px ui-monospace,Menlo,monospace;color:var(--ink2)}
+.out{list-style:none}
+.out li{display:flex;gap:10px;padding:6px 8px 6px 10px;font-size:13px;color:var(--ink2);border-radius:6px;align-items:baseline;margin-left:-8px}
+.out .on_{font:600 11px var(--sans);color:var(--ink3);width:20px}
+.out li.cur{background:var(--accent-soft);color:var(--ink);box-shadow:inset 2px 0 0 var(--accent)}
+.out li.cur .on_{color:var(--accent)}
+.out .here{margin-left:auto;font-size:10.5px;color:var(--accent)}
+/* focus */
+.win.focus{background:var(--page)}
+.fpage{position:absolute;left:50%;transform:translateX(-50%);top:92px;width:640px}
+.fhint{position:absolute;bottom:26px;left:0;right:0;text-align:center;font-size:11.5px;color:var(--ink4);opacity:.7}
+.fhint .kbd{background:transparent;color:var(--ink4);border-color:var(--line)}
+
+/* ---- Thinking Space ---- */
+:root{--ai:#7A766E;--ai-line:rgba(95,92,86,.5);--region:rgba(31,30,28,.03);--region-line:rgba(31,30,28,.10);--dot:rgba(31,30,28,.16)}
+:root[data-theme="dark"]{--ai:#9C988F;--ai-line:rgba(174,170,162,.5);--region:rgba(255,255,255,.03);--region-line:rgba(255,255,255,.10);--dot:rgba(255,255,255,.14)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--ai:#9C988F;--ai-line:rgba(174,170,162,.5);--region:rgba(255,255,255,.03);--region-line:rgba(255,255,255,.10);--dot:rgba(255,255,255,.14)}}
+.top{flex-wrap:wrap}
+.tb .crumb{text-align:center}
+.tb>.dots{width:54px}
+.cv{flex:1;position:relative;background:var(--page);overflow:hidden}
+.cv .grid,.cv .links{position:absolute;left:0;top:0}
+.dp{fill:var(--dot)}
+.links{pointer-events:none}
+.lk{fill:none;stroke:var(--ai-line);stroke-width:1.2;stroke-dasharray:4 4;stroke-linecap:round}
+.ld{fill:var(--ai-line)}
+.ll{font:500 10.5px var(--sans);letter-spacing:.02em;fill:var(--ai);paint-order:stroke;stroke:var(--page);stroke-width:6px;stroke-linejoin:round}
+.nt{position:absolute;font-family:var(--serif);font-size:17.5px;line-height:1.3;color:var(--ink);padding:6px 10px 7px;border-radius:8px;background:var(--page);width:max-content;font-optical-sizing:auto}
+.nt.typing{box-shadow:none}
+.nt .caret{height:1.05em}
+.nt .rc{margin-top:7px}
+.nt .rc .chip{font-size:11px}
+.vsw{position:absolute;top:16px;left:50%;transform:translateX(-50%);display:flex;padding:3px;gap:2px;background:var(--chrome);border:1px solid var(--line2);border-radius:9px;box-shadow:0 2px 8px rgba(40,35,25,.06);font:500 12px var(--sans);color:var(--ink3)}
+.vsw span{padding:5px 14px;border-radius:6px}
+.vsw span.on{background:var(--page);color:var(--ink);box-shadow:0 0 0 1px var(--line2),0 1px 2px rgba(40,35,25,.08)}
+.bb{position:absolute;left:22px;bottom:18px;display:flex;align-items:center;gap:12px;font-size:12px;color:var(--ai)}
+.mic{width:34px;height:34px;border-radius:50%;border:1px solid var(--line2);background:var(--chrome);color:var(--ink2);display:grid;place-items:center;cursor:pointer}
+.mic svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.bb .kbd{margin:0 2px}
+.go{position:absolute;right:22px;bottom:18px;font:500 13px var(--sans);color:var(--accent);background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:8px;padding:8px 16px;cursor:pointer}
+.go span{margin-left:3px}
+/* clusters */
+.reg{position:absolute;border-radius:18px;background:var(--region)}
+.reg.un{background:transparent}
+.clus .nt{background:transparent}
+.cl{position:absolute;left:22px;top:16px;display:flex;align-items:center;gap:7px;line-height:1}
+.cl.ai span{font:600 10.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--ai);border-bottom:1px dotted var(--ai-line);padding-bottom:3px}
+.cl.you span{font:italic 500 16px var(--serif);color:var(--ink);letter-spacing:-.005em;text-transform:none;border:0;padding:0}
+.pen{width:13px;height:13px;stroke:var(--ink2);fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;display:none}
+.rh .pen{display:block}
+.rh .cl span{color:var(--ink2);border-bottom-style:solid;border-bottom-color:var(--accent-line)}
+.tipx{position:absolute;left:100%;margin-left:4px;font:500 10px var(--sans);font-style:normal;color:var(--ink2);background:var(--pop);border:1px solid var(--line2);border-radius:5px;padding:3px 7px;box-shadow:var(--shadow);display:none;white-space:nowrap;margin-left:26px}
+.rh .tipx{display:block;left:100%}
+.cl{position:absolute}
+.cl .pen{margin-left:0}
+.lg{position:absolute;left:380px;bottom:27px;display:none}
+.lg{display:flex;gap:18px;font:500 11px var(--sans);color:var(--ai);left:auto;right:196px;align-items:center;bottom:26px}
+.lg .ai span{font:600 9.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;border-bottom:1px dotted var(--ai-line);margin-right:4px}
+.lg .you i{font:italic 500 14px var(--serif);color:var(--ink);margin-right:4px}
+/* ts3 */
+#pane3 .page{top:30px}
+#pane3 .prose p:last-child{margin-bottom:0}
+.drop{position:relative;margin-top:16px;height:2px;background:var(--accent);border-radius:2px;width:100%}
+.drop i{position:absolute;left:-3px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.drop span{position:absolute;right:0;top:7px;font:500 10.5px var(--sans);color:var(--accent)}
+.ghost{position:absolute;left:430px;top:455px;width:max-content;font-family:var(--serif);font-size:16px;line-height:1.32;color:var(--ink);background:var(--pop);border:1px solid var(--accent-line);border-radius:8px;padding:8px 12px;box-shadow:var(--shadow);transform:rotate(-1.2deg)}
+.cur{position:absolute;left:552px;top:468px;fill:var(--ink);stroke:var(--page);stroke-width:1.2;stroke-linejoin:round}
+.m3{padding:14px 18px 0;overflow:hidden}
+.m3 .ph{margin-bottom:2px}
+.gh{display:flex;align-items:baseline;gap:6px;margin-top:8px;padding-bottom:2px}
+.gh span{font:600 10px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--ai);border-bottom:1px dotted var(--ai-line);padding-bottom:2px}
+.gh em{font:500 10.5px var(--sans);font-style:normal;color:var(--ink4)}
+.m3 .fr{font-size:16px;line-height:1.35;padding:7px 0;gap:10px;border-bottom:0}
+.gr{display:flex;align-items:center;gap:8px;padding:11px 0;border-top:1px solid var(--line);color:var(--ink2);font-size:12.5px}
+.gr.open{border-top:0;padding-top:14px;padding-bottom:4px}
+.gr .gn{font:600 10.5px var(--sans);letter-spacing:.1em;text-transform:uppercase;color:var(--ai)}
+.gr em{font:500 11px var(--sans);font-style:normal;color:var(--ink4)}
+.gr .here{margin-left:auto;font-size:10.5px;color:var(--accent)}
+.cv2{width:11px;height:11px;stroke:var(--ink3);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.m3 .frs{margin-bottom:10px}
+.m3 .fr .mk{width:14px;height:14px;margin-top:3px}
+.m3 .fr .mk svg{width:8px;height:8px}
+.m3 .fr.drag{opacity:.6}
+.m3 .fr.drag .mk{border-style:dashed}
+.toast{position:absolute;left:14px;right:14px;bottom:14px;background:var(--pop);border:1px solid var(--line2);border-radius:9px;box-shadow:var(--shadow);padding:8px 12px;display:flex;gap:9px;align-items:center;font-size:11px;line-height:1.4;color:var(--ink2)}
+.toast svg{width:15px;height:15px;stroke:var(--ink3);fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.toast b{font:500 11px ui-monospace,Menlo,monospace;color:var(--ink);display:block}
+</style></head><body>
+<div class="top"><div><h1>Ekdanta · Thinking Space</h1><p>Three 1280 x 800 artboards. Static mockup; every fragment on the canvas is the writer’s own.</p></div><button id="theme" type="button">Toggle dark / light</button></div>
+<section class="opt"><h2><span>TS·1</span>Loose map, mid-dump</h2><p class="cap">Fragments sit wherever the writer put them. The dashed links and their tiny labels are suggestions that can be dismissed; the one Recall chip points back to the vault. Nothing is reordered or rewritten.</p><div class="stage"><div class="artboard"><div class="win"><div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="crumb"><b>Thinking</b> · Why Slow Writing Matters</div><div class="hov" style="width:54px"></div></div><div class="cv" id="cv1"><svg class="grid" width="1280" height="760"><defs><pattern id="dg" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" class="dp"/></pattern></defs><rect width="1280" height="760" fill="url(#dg)"/></svg><svg class="links" width="1280" height="760" viewBox="0 0 1280 760"><path class="lk" d="M797.0 167.9 Q850.4 129.9 873.0 191.3"/><circle class="ld" cx="797.0" cy="167.9" r="2"/><circle class="ld" cx="873.0" cy="191.3" r="2"/><text class="ll" x="842.7" y="158.3" text-anchor="middle">same idea</text><path class="lk" d="M317.0 176.3 Q342.0 238.3 403.0 211.2"/><circle class="ld" cx="317.0" cy="176.3" r="2"/><circle class="ld" cx="403.0" cy="211.2" r="2"/><text class="ll" x="351.0" y="219.5" text-anchor="middle">example of</text><path class="lk" d="M454.6 446.0 Q415.2 497.6 463.5 541.0"/><circle class="ld" cx="454.6" cy="446.0" r="2"/><circle class="ld" cx="463.5" cy="541.0" r="2"/><text class="ll" x="437.1" y="499.1" text-anchor="middle">same idea</text><path class="lk" d="M260.1 491.0 Q286.4 429.0 351.5 446.0"/><circle class="ld" cx="260.1" cy="491.0" r="2"/><circle class="ld" cx="351.5" cy="446.0" r="2"/><text class="ll" x="296.1" y="452.3" text-anchor="middle">example of</text><path class="lk" d="M965.0 384.7 Q911.3 418.6 867.0 373.0"/><circle class="ld" cx="965.0" cy="384.7" r="2"/><circle class="ld" cx="867.0" cy="373.0" r="2"/><text class="ll" x="913.6" y="402.2" text-anchor="middle">contradicts</text><path class="lk" d="M768.5 398.0 Q736.1 445.3 782.5 479.0"/><circle class="ld" cx="768.5" cy="398.0" r="2"/><circle class="ld" cx="782.5" cy="479.0" r="2"/><text class="ll" x="755.8" y="445.4" text-anchor="middle">same idea</text></svg><div class="nt" data-i="1" style="left:130px;top:92px;max-width:180px">first idea is rarely yours<div class="rc"><span class="chip">↳ Notes / On Craft, Mar 2025</span></div></div><div class="nt hair" data-i="2" style="left:64px;top:326px;max-width:170px">the winter of one essay a week</div><div class="nt" data-i="3" style="left:330px;top:356px;max-width:240px">handwriting as a filter — lazy sentences don’t survive the arm</div><div class="nt" data-i="4" style="left:84px;top:498px;max-width:200px">grandmother’s letters, crossed out not recopied</div><div class="nt" data-i="5" style="left:640px;top:112px;max-width:150px">speed vs attention</div><div class="nt hair" data-i="6" style="left:372px;top:548px;max-width:190px">politeness toward lazy sentences</div><div class="nt hair typing" data-i="7" style="left:930px;top:540px;max-width:190px">what does slow cost? deadlines, money<span class="caret"></span></div><div class="nt" data-i="8" style="left:972px;top:356px;max-width:200px">is slow just perfectionism with better PR?</div><div class="nt hair" data-i="9" style="left:664px;top:330px;max-width:196px">a slow paragraph isn’t a failed fast one</div><div class="nt" data-i="10" style="left:694px;top:486px;max-width:190px">readers can feel a chosen sentence</div><div class="nt" data-i="11" style="left:104px;top:622px;max-width:170px">kept drafts vs deleted drafts</div><div class="nt" data-i="12" style="left:1040px;top:92px;max-width:176px">slow food / slow cities — too twee?</div><div class="nt hair" data-i="13" style="left:410px;top:214px;max-width:150px">the second and third idea</div><div class="nt hair" data-i="14" style="left:880px;top:196px;max-width:140px">time ≠ attention</div><div class="vsw"><span class="on">Loose</span><span>Clusters</span><span>Possible order</span></div><div class="bb"><button class="mic" type="button" aria-label="Voice input"><svg viewBox="0 0 20 20"><rect x="7.5" y="2.8" width="5" height="9" rx="2.5"/><path d="M4.8 9.5a5.2 5.2 0 0010.4 0M10 14.7v2.6"/></svg></button><span class="bt">14 fragments · 6 links suggested · hold <span class="kbd">⌥</span> to hide links</span></div><button class="go" type="button">Start drafting <span>→</span></button></div></div></div></div></section>
+<section class="opt"><h2><span>TS·2</span>Clusters</h2><p class="cap">The same fourteen fragments, gathered into soft regions. Region labels are small caps sans (suggested) until the writer renames one, then they turn serif (“doubts”). Hover a label to rename.</p><div class="stage"><div class="artboard"><div class="win"><div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="crumb"><b>Thinking</b> · Why Slow Writing Matters</div><div class="hov" style="width:54px"></div></div><div class="cv clus"><svg class="grid" width="1280" height="760"><defs><pattern id="dg" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" class="dp"/></pattern></defs><rect width="1280" height="760" fill="url(#dg)"/></svg><div class="reg" style="left:60px;top:84px;width:560px;height:226px"><div class="cl ai"><span>speed vs attention</span></div></div><div class="reg rh" style="left:680px;top:84px;width:540px;height:226px"><div class="cl ai"><span>the body</span><svg class="pen" viewBox="0 0 16 16"><path d="M3 13l.6-2.6 7-7a1.2 1.2 0 011.7 0l.3.3a1.2 1.2 0 010 1.7l-7 7z"/><path d="M9.6 4.4l2 2"/></svg><em class="tipx">Rename</em></div></div><div class="reg" style="left:60px;top:350px;width:560px;height:226px"><div class="cl ai"><span>inheritance</span></div></div><div class="reg" style="left:680px;top:350px;width:540px;height:226px"><div class="cl you"><span>doubts</span></div></div><div class="reg un" style="left:680px;top:598px;width:300px;height:96px"><div class="cl ai"><span>unclustered</span></div></div><div class="nt" data-i="1" style="left:88px;top:150px;max-width:176px">first idea is rarely yours</div><div class="nt hair" data-i="2" style="left:88px;top:500px;max-width:170px">the winter of one essay a week</div><div class="nt" data-i="3" style="left:708px;top:142px;max-width:230px">handwriting as a filter — lazy sentences don’t survive the arm</div><div class="nt hair" data-i="4" style="left:88px;top:408px;max-width:200px">grandmother’s letters, crossed out not recopied</div><div class="nt" data-i="5" style="left:88px;top:222px;max-width:150px">speed vs attention</div><div class="nt hair" data-i="6" style="left:980px;top:142px;max-width:190px">politeness toward lazy sentences</div><div class="nt" data-i="7" style="left:708px;top:408px;max-width:190px">what does slow cost? deadlines, money</div><div class="nt hair" data-i="8" style="left:960px;top:408px;max-width:206px">is slow just perfectionism with better PR?</div><div class="nt" data-i="9" style="left:708px;top:500px;max-width:196px">a slow paragraph isn’t a failed fast one</div><div class="nt hair" data-i="10" style="left:708px;top:236px;max-width:190px">readers can feel a chosen sentence</div><div class="nt" data-i="11" style="left:330px;top:408px;max-width:170px">kept drafts vs deleted drafts</div><div class="nt hair" data-i="12" style="left:708px;top:628px;max-width:176px">slow food / slow cities — too twee?</div><div class="nt" data-i="13" style="left:290px;top:150px;max-width:150px">the second and third idea</div><div class="nt hair" data-i="14" style="left:290px;top:222px;max-width:140px">time ≠ attention</div><div class="vsw"><span>Loose</span><span class="on">Clusters</span><span>Possible order</span></div><div class="bb"><button class="mic" type="button" aria-label="Voice input"><svg viewBox="0 0 20 20"><rect x="7.5" y="2.8" width="5" height="9" rx="2.5"/><path d="M4.8 9.5a5.2 5.2 0 0010.4 0M10 14.7v2.6"/></svg></button><span class="bt">14 fragments · 4 clusters · 1 unclustered · nothing moved or rewritten</span></div><button class="go" type="button">Start drafting <span>→</span></button><div class="lg"><span class="ai"><span>label</span> suggested</span><span class="you"><i>label</i> yours</span></div></div></div></div></div></section>
+<section class="opt"><h2><span>TS·3</span>Hand-off into drafting</h2><p class="cap">Just after “Start drafting”: the canvas collapses into the Material panel, grouped by the cluster labels. Only the group for the paragraph being written is open; the rest fold to one line. Used fragments are ticked; one is mid-drag to be quoted.</p><div class="stage"><div class="artboard"><div class="win">
+<div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="crumb" style="text-align:left;padding-left:14px">Essays / <b>Why Slow Writing Matters</b></div><div class="hov" style="color:var(--ink3);display:flex;gap:7px;opacity:.75"><span>Essay</span><span>·</span><span>Essay v3</span><span>·</span><span>Ceiling 3</span></div></div>
+<div class="body"><aside class="rail">
+<div class="ic on"><svg viewBox="0 0 20 20"><path d="M3.5 5.5a1.5 1.5 0 011.5-1.5h3l1.5 2H15a1.5 1.5 0 011.5 1.5v7A1.5 1.5 0 0115 16H5a1.5 1.5 0 01-1.5-1.5z"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5"/><path d="M13 13l4 4"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><path d="M10 2.5l2.2 4.8 5.3.6-3.9 3.6 1.1 5.2L10 14l-4.7 2.7 1.1-5.2L2.5 7.9l5.3-.6z"/></svg></div>
+<div class="ic"><svg viewBox="0 0 20 20"><path d="M4 4h12v9H8l-4 3z"/></svg></div>
+<div class="sp"></div>
+<div class="ic"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2M5 5l1.4 1.4M13.6 13.6L15 15M5 15l1.4-1.4M13.6 6.4L15 5"/></svg></div>
+</aside>
+<main class="pane" id="pane3"><div class="page">
+<div class="meta" style="margin-bottom:8px;letter-spacing:.02em"><span style="color:var(--ink2)">Essay</span><span><i class="dot"></i>draft</span><span>Essays/why-slow-writing-matters.md</span></div>
+<div class="title" style="font-size:28px;line-height:1.2;padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:26px">Why Slow Writing Matters</div>
+<div class="prose"><p>I used to think slow writing was a kind of vanity, a way of dressing up hesitation as craft. Then I spent a winter drafting one essay a week, and the weeks that produced the worst pages were always the ones I rushed.</p>
+<p>Speed gives you the first idea that arrives, and the first idea is rarely yours. It is the common one, worn smooth by everyone who reached for it before you. Slowness is how you get past it, to the second and third<span class="caret"></span></p></div>
+<div class="drop"><i></i><span>Drop to quote</span></div></div>
+<div class="ghost">time ≠ attention</div>
+<svg class="cur" viewBox="0 0 20 20" width="18" height="18"><path d="M4 2.5l11 6.2-4.9 1.3-2.4 4.6z"/></svg>
+</main>
+<aside class="panel"><div class="ptabs"><div class="ptab on"><div class="pi"><svg viewBox="0 0 20 20"><path d="M4 6.5l6-3 6 3-6 3z"/><path d="M4 10l6 3 6-3"/><path d="M4 13.5l6 3 6-3"/></svg></div><span class="pk">⌘⌥1</span></div><div class="ptab"><div class="pi"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5"/><path d="M8.2 8.3a1.9 1.9 0 113.2 1.3c-.6.5-1.4.8-1.4 1.7"/><path d="M10 13.6v.1"/></svg></div><span class="pk">⌘⌥2</span></div><div class="ptab"><div class="pi"><svg viewBox="0 0 20 20"><path d="M5.5 3.5h6l3 3v10h-9z"/><path d="M11.5 3.5v3h3"/><path d="M8 10h4M8 12.5h4"/></svg></div><span class="pk">⌘⌥3</span></div><div class="psp"></div><div class="pcol"><div class="pi"><svg viewBox="0 0 20 20"><rect x="3.5" y="4.5" width="13" height="11" rx="1.5"/><path d="M12 4.5v11"/></svg></div><span class="pk">⌘\</span></div></div><div class="pbody m3">
+<div class="ph"><span>Thinking</span><em>· 14 fragments</em><span class="cnt">2 used</span></div>
+<div class="gr open"><svg class="cv2" viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg><span class="gn">speed vs attention</span><em>1/4</em><span class="here">this paragraph</span></div><ul class="frs"><li class="fr used"><span class="mk"><svg viewBox="0 0 12 12"><path d="M2.5 6.3l2.3 2.3 4.7-5"/></svg></span><span class="ft">first idea is rarely yours</span></li><li class="fr"><span class="mk"></span><span class="ft">the second and third idea</span></li><li class="fr"><span class="mk"></span><span class="ft">speed vs attention</span></li><li class="fr drag"><span class="mk"></span><span class="ft">time ≠ attention</span></li></ul><div class="gr"><svg class="cv2" viewBox="0 0 12 12"><path d="M4.5 3l3 3-3 3"/></svg><span class="gn">the body</span><em>0/3</em></div><div class="gr"><svg class="cv2" viewBox="0 0 12 12"><path d="M4.5 3l3 3-3 3"/></svg><span class="gn">inheritance</span><em>1/3</em></div><div class="gr"><svg class="cv2" viewBox="0 0 12 12"><path d="M4.5 3l3 3-3 3"/></svg><span class="gn">doubts</span><em>0/3</em></div><div class="gr"><svg class="cv2" viewBox="0 0 12 12"><path d="M4.5 3l3 3-3 3"/></svg><span class="gn">unclustered</span><em>0/1</em></div>
+<div class="toast"><svg viewBox="0 0 20 20"><path d="M5.5 3.5h6l3 3v10h-9z"/><path d="M11.5 3.5v3h3"/></svg><span>Thinking saved as <b>why-slow-writing-matters.canvas</b></span></div>
+</div></aside></div>
+<div class="status" style="opacity:.35;justify-content:flex-end"><span class="hov" style="color:var(--ink3)">Hover for Platform: Essay · Voice: Essay v3 · Ceiling: 3 · 96 words</span></div></div></div></div></section>
+<script>
+(function(){
+  var b=document.getElementById('theme'),r=document.documentElement;
+  b.addEventListener('click',function(){
+    var dark=r.getAttribute('data-theme')==='dark'||(!r.getAttribute('data-theme')&&matchMedia('(prefers-color-scheme: dark)').matches);
+    r.setAttribute('data-theme',dark?'light':'dark');
+  });
+  function fit(){
+    document.querySelectorAll('.stage').forEach(function(s){
+      var k=s.clientWidth/1280;s.firstElementChild.style.transform='scale('+k+')';
+    });
+  }
+  addEventListener('resize',fit);fit();
+})();
+</script>
+</body></html>
