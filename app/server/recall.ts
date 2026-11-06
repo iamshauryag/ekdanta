@@ -33,14 +33,14 @@ export function paragraphs(body: string): string[] {
 }
 
 async function load(): Promise<IndexFile> {
-  if (index) return index
+  if (index && index.embedder === embedder().id) return index
   try {
     index = JSON.parse(await fs.readFile(INDEX_PATH, 'utf8')) as IndexFile
   } catch {
     index = null
   }
   // Vectors from a different embedding model can't be compared: start again.
-  if (!index || index.embedder !== embedder.id) index = { embedder: embedder.id, files: {}, chunks: [] }
+  if (!index || index.embedder !== embedder().id) index = { embedder: embedder().id, files: {}, chunks: [] }
   return index
 }
 
@@ -55,7 +55,7 @@ async function indexFile(ix: IndexFile, f: FileEntry) {
   ix.chunks = ix.chunks.filter((c) => c.doc !== f.path)
   for (let i = 0; i < paras.length; i += 32) {
     const batch = paras.slice(i, i + 32)
-    const vecs = await embedder.embed(batch, 'document')
+    const vecs = await embedder().embed(batch, 'document')
     batch.forEach((text, j) =>
       ix.chunks.push({ doc: f.path, title: f.title, folder: f.folder, platform: f.platform, text, vec: vecs[j] }),
     )
@@ -112,13 +112,13 @@ export interface RecallResult {
 
 export async function search(query: string, opts: { exclude?: string; limit?: number; platform?: string } = {}) {
   const ix = await refresh()
-  const [q] = await embedder.embed([query], 'query')
+  const [q] = await embedder().embed([query], 'query')
   const scored = ix.chunks
     .filter((c) => c.doc !== opts.exclude && (!opts.platform || c.platform === opts.platform))
     .map((c) => ({ doc: c.doc, title: c.title, folder: c.folder, text: c.text, score: cosine(q, c.vec) }))
     .sort((a, b) => b.score - a.score)
   const best = scored[0]?.score ?? 0
   // A strong result shouldn't be padded out with weak ones.
-  const cut = Math.max(embedder.floor, best - 0.12)
+  const cut = Math.max(embedder().floor, best - 0.12)
   return scored.filter((r) => r.score >= cut).slice(0, opts.limit ?? 9)
 }

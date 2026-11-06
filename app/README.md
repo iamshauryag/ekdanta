@@ -16,19 +16,19 @@ To write in your own folder (an Obsidian vault works) instead of the bundled sam
 EKDANTA_VAULT=~/path/to/vault npm run dev
 ```
 
-Ekdanta stores its index and help history in `.ekdanta/` inside the vault. It is safe to delete.
+Ekdanta stores its settings, index and help history in `.ekdanta/` inside the vault. It is safe to delete.
 
 ## Models
 
-Ekdanta uses whatever you already have, in this order:
+Ekdanta uses whatever you already have. By default it picks, in this order:
 
-1. **The Claude Code CLI**, if it's installed and signed in (`claude`). Ekdanta keeps a few sessions warm in the background and reads each answer as soon as it arrives, so a request takes about 1–2 s (⌥3 Word, on Haiku) or 2–5 s (⌥2, ⌥4, ⌥5, on Sonnet). Requests count against that login's usage.
+1. **The Claude Code CLI**, if it's installed and signed in (`claude`). Ekdanta keeps a few sessions warm in the background and reads each answer as soon as it arrives, so a request takes about 1–2 s (⌘3 Word, on Haiku) or 2–5 s (⌘2, ⌘4, ⌘5, on Sonnet). Requests count against that login's usage.
 2. **An Anthropic API key** in `ANTHROPIC_API_KEY`, billed per request.
-3. **A local model through [Ollama](https://ollama.com)** (default `gemma4:12b`), for fully offline use. Set `EKDANTA_PREFER_LOCAL=1` to use it for ⌥3 even when the CLI is available.
+3. **A local model through [Ollama](https://ollama.com)** (default `gemma4:12b`), for fully offline use.
 
-⌥1 Recall needs embeddings, which currently come from Ollama's `nomic-embed-text` (`ollama pull nomic-embed-text`, about 300 MB). A built-in embedder that needs no Ollama is planned.
+⌘1 Recall runs inside the app on a small embedding model (bge-small, about 33 MB, downloaded once into `app/.cache/`). Nothing to install.
 
-Other settings: `EKDANTA_CLAUDE_MODEL` (default `sonnet`), `EKDANTA_CLAUDE_FAST_MODEL` (default `haiku`), `EKDANTA_DISABLE_CLAUDE_CLI=1`, `EKDANTA_RECALL_FLOOR` (default `0.62`).
+Settings (⌥,) can pin a provider, choose the Claude models, use the local model for ⌘3 only, or switch Recall to Ollama's `nomic-embed-text`. They're saved in `.ekdanta/settings.json` in the vault, so every device that opens the vault shares them. Environment variables set the defaults: `EKDANTA_CLAUDE_MODEL`, `EKDANTA_CLAUDE_FAST_MODEL`, `EKDANTA_OLLAMA_MODEL`, `EKDANTA_PREFER_LOCAL=1`, `EKDANTA_EMBEDDER=ollama`, `EKDANTA_DISABLE_CLAUDE_CLI=1` and `EKDANTA_RECALL_FLOOR`. API keys are only ever read from the environment.
 
 ## Keys
 
@@ -43,6 +43,7 @@ The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tab
 | Tab | Accept ghost text; in a diff, step through changes (↵ accept, ⌫ reject) |
 | ⌘↵ / ⌘⌫ | Accept all / reject all |
 | ⌥N | New draft, in the current folder (browsers keep ⌘N for a new window) |
+| ⌥, | Settings: help ceiling, models, appearance, the Recall index |
 | ⌘. | Focus mode |
 | ⌘\ · ⌘⌥1–3 | Right panel · Material, History, Piece |
 

@@ -4,6 +4,7 @@ import type { Plugin } from 'vite'
 import { status } from './ai.ts'
 import { claudePool, closeClaudePools } from './claude-pool.ts'
 import { embedder, warmEmbedder } from './embed.ts'
+import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import { VAULT, appendHistory, createDoc, discardIfEmpty, listFiles, nameDoc, readDoc, readHistory, splitFrontMatter, writeDoc } from './vault.ts'
@@ -17,7 +18,16 @@ async function body<T>(req: IncomingMessage): Promise<T> {
 }
 
 const routes: Record<string, Handler> = {
-  'GET /api/status': async () => ({ ...(await status()), vault: VAULT, embedder: embedder.id }),
+  'GET /api/status': async () => ({ ...(await status()), vault: VAULT, embedder: embedder().id }),
+  'GET /api/settings': async () => loadSettings(),
+  'PUT /api/settings': async (req) => {
+    const prev = { ...(await loadSettings()) }
+    const next = await saveSettings(await body<Partial<Settings>>(req))
+    if (next.embedder !== prev.embedder) warmEmbedder().then(() => refresh()).catch(() => {})
+    if (next.claudeModel !== prev.claudeModel) warmClaude()
+    if (next.claudeFastModel !== prev.claudeFastModel) warmClaude()
+    return next
+  },
   'GET /api/files': async () => listFiles(),
   'GET /api/file': async (_req, url) => ({ content: await readDoc(url.searchParams.get('path') ?? '') }),
   'PUT /api/file': async (req) => {
@@ -46,7 +56,7 @@ const routes: Record<string, Handler> = {
     const { text, doc } = await body<{ text: string; doc: string }>(req)
     if (paragraphs(text).length === 0) return { strong: false }
     const hits = await search(text, { exclude: doc, limit: 1 })
-    return { strong: hits.length > 0 && hits[0].score >= embedder.strong }
+    return { strong: hits.length > 0 && hits[0].score >= embedder().strong }
   },
   'POST /api/index': async () => {
     const ix = await refresh()
@@ -61,21 +71,25 @@ const routes: Record<string, Handler> = {
   'GET /api/meta': async (_req, url) => splitFrontMatter(await readDoc(url.searchParams.get('path') ?? '')).meta,
 }
 
+/** Start the Claude sessions the current settings will use, if Claude is the one answering. */
+function warmClaude() {
+  status().then((s) => {
+    if (s.fast === 'claude-cli') claudePool(s.models.claudeFast, 'low').warm()
+    if (s.strong === 'claude-cli') claudePool(s.models.claude, 'medium').warm()
+  })
+}
+
 export function ekdantaApi(): Plugin {
   return {
     name: 'ekdanta-api',
     configureServer(server) {
-      // Load the embedding model and build the Recall index up front, so the first ⌥1 is quick.
-      warmEmbedder()
+      // Load the embedding model and build the Recall index up front, so the first ⌘1 is quick.
+      loadSettings()
+        .then(() => warmEmbedder())
         .then(() => refresh())
         .catch((e) => server.config.logger.warn(`Recall index not built: ${(e as Error).message}`))
       // Warm the Claude sessions too, and close them when the server stops or restarts.
-      status().then((s) => {
-        if (s.claudeCli) {
-          claudePool(s.models.claudeFast, 'low').warm()
-          claudePool(s.models.claude, 'medium').warm()
-        }
-      })
+      warmClaude()
       server.httpServer?.once('close', closeClaudePools)
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         if (!req.url?.startsWith('/api/')) return next()

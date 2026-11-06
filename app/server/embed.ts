@@ -2,6 +2,7 @@
 // install): bge-small-en-v1.5, ~33 MB, downloaded once on first use. Ollama is an option.
 import path from 'node:path'
 import { embed as ollamaEmbed } from './ai.ts'
+import { settingsNow } from './settings.ts'
 
 type Kind = 'document' | 'query'
 
@@ -56,10 +57,13 @@ const ollama: Embedder = {
   embed: (texts, kind) => ollamaEmbed(texts, kind),
 }
 
-export const embedder: Embedder = process.env.EKDANTA_EMBEDDER === 'ollama' ? ollama : builtin
+/** The embedder chosen in Settings. Switching it rebuilds the Recall index. */
+export function embedder(): Embedder {
+  return settingsNow().embedder === 'ollama' ? ollama : builtin
+}
 
-/** Start loading the built-in model early, so the first ⌥1 doesn't wait for it. */
+/** Start loading the built-in model early, so the first ⌘1 doesn't wait for it. */
 export function warmEmbedder() {
-  if (embedder === builtin) return loadBuiltin().then(() => undefined)
+  if (embedder() === builtin) return loadBuiltin().then(() => undefined)
   return Promise.resolve()
 }

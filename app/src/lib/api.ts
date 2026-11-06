@@ -19,6 +19,19 @@ export interface Status {
   embedder: string
 }
 
+export interface Settings {
+  provider: 'auto' | 'claude-cli' | 'anthropic-api' | 'ollama'
+  wordLocal: boolean
+  claudeModel: string
+  claudeFastModel: string
+  ollamaModel: string
+  embedder: 'builtin' | 'ollama'
+  ceiling: number
+  recallDot: boolean
+  paragraphFocus: boolean
+  theme: 'system' | 'light' | 'dark'
+}
+
 async function json<T>(r: Response): Promise<T> {
   const data = await r.json()
   if (!r.ok) throw new Error((data as { error?: string }).error ?? r.statusText)
@@ -33,6 +46,8 @@ const send = (method: string, body: unknown) => ({
 
 export const api = {
   status: () => fetch('/api/status').then(json<Status>),
+  settings: () => fetch('/api/settings').then(json<Settings>),
+  saveSettings: (patch: Partial<Settings>) => fetch('/api/settings', send('PUT', patch)).then(json<Settings>),
   files: () => fetch('/api/files').then(json<FileEntry[]>),
   read: (path: string) =>
     fetch('/api/file?path=' + encodeURIComponent(path))

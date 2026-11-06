@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Editor } from './editor/Editor.tsx'
 import type { HistoryItem } from './editor/controller.ts'
-import { api, type FileEntry, type Status } from './lib/api.ts'
+import { api, type FileEntry, type Settings as SettingsT, type Status } from './lib/api.ts'
 import { joinFrontMatter, splitFrontMatter, type Meta } from './lib/frontmatter.ts'
 import { Panel, type PanelTab } from './components/Panel.tsx'
+import { Settings } from './components/Settings.tsx'
 import { Sidebar } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
 import { helpMod } from './editor/help.ts'
@@ -51,8 +52,18 @@ export function App() {
   const [panelOpen, setPanelOpen] = usePref('panel', true)
   const [panelTab, setPanelTab] = usePref<PanelTab>('panelTab', 'piece')
   const [focus, setFocus] = useState(false)
-  const [ceiling, setCeiling] = usePref('ceiling', 5)
-  const [recallDot, setRecallDot] = usePref('recallDot', true)
+  const [settings, setSettings] = useState<SettingsT | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const ceiling = settings?.ceiling ?? 5
+  const recallDot = settings?.recallDot ?? true
+  const changeSettings = useCallback((patch: Partial<SettingsT>) => {
+    setSettings((s) => (s ? { ...s, ...patch } : s))
+    api.saveSettings(patch).then((next) => {
+      setSettings(next)
+      // Provider or model changes show up in the Piece module's Models list.
+      if ('provider' in patch || 'wordLocal' in patch || 'embedder' in patch || /Model$/.test(Object.keys(patch)[0])) api.status().then(setStatus)
+    })
+  }, [])
 
   // Re-render labels once we learn ⌘+number reaches the page.
   const [mod, setMod] = useState(helpMod)
@@ -71,7 +82,15 @@ export function App() {
   useEffect(() => {
     refreshFiles()
     api.status().then(setStatus)
+    api.settings().then(setSettings)
   }, [refreshFiles])
+
+  // Appearance: follow the system unless the writer picked light or dark.
+  useEffect(() => {
+    const theme = settings?.theme ?? 'system'
+    if (theme === 'system') delete document.documentElement.dataset.theme
+    else document.documentElement.dataset.theme = theme
+  }, [settings?.theme])
 
   // Open the remembered document, or the first one in the vault.
   useEffect(() => {
@@ -203,6 +222,9 @@ export function App() {
       } else if (mod && e.key === 's') {
         e.preventDefault()
         save()
+      } else if (e.code === 'Comma' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
+        e.preventDefault()
+        setSettingsOpen((o) => !o)
       } else if (e.code === 'KeyN' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
         // Browsers keep ⌘N for a new window, so ⌥N works too.
         e.preventDefault()
@@ -229,7 +251,11 @@ export function App() {
   )
 
   return (
-    <div className={`app${focus ? ' is-focus' : ''}${panelOpen ? ' has-panel' : ''}${sidebarOpen ? ' has-sidebar' : ''}`}>
+    <div
+      className={`app${focus ? ' is-focus' : ''}${panelOpen ? ' has-panel' : ''}${sidebarOpen ? ' has-sidebar' : ''}${
+        settings?.paragraphFocus === false ? ' no-para-focus' : ''
+      }`}
+    >
       <header className="titlebar">
         <div className="crumb">
           {current?.folder ? <span className="muted">{current.folder} / </span> : null}
@@ -256,6 +282,9 @@ export function App() {
         <div className="rail-spacer" />
         <button className="rail-btn" title="Focus mode (⌘.)" onClick={() => setFocus(true)}>
           <Icon name="focus" />
+        </button>
+        <button className={`rail-btn${settingsOpen ? ' is-on' : ''}`} title="Settings (⌥,)" onClick={() => setSettingsOpen((o) => !o)}>
+          <Icon name="settings" />
         </button>
       </nav>
 
@@ -307,14 +336,16 @@ export function App() {
           words={words}
           platform={platform}
           ceiling={ceiling}
-          onCeiling={setCeiling}
+          onCeiling={(ceiling) => changeSettings({ ceiling })}
           recallDot={recallDot}
-          onRecallDot={setRecallDot}
+          onRecallDot={(recallDot) => changeSettings({ recallDot })}
           status={status}
           path={loaded?.path ?? path}
           onClearHistory={() => setHistory([])}
         />
       )}
+
+      {settingsOpen && settings && <Settings settings={settings} status={status} onChange={changeSettings} onClose={() => setSettingsOpen(false)} />}
 
       <footer className="statusbar">
         <span>
