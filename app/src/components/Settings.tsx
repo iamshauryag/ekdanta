@@ -4,6 +4,8 @@ import { helpMod } from '../editor/help.ts'
 import { SPECIAL_FOLDERS } from '../lib/special.ts'
 import { KeyMap } from './KeyMap.tsx'
 import { Kinds } from './Kinds.tsx'
+import { RATES, listedVoices, readPrefs, sample, saveReadPrefs, useSpeechVoices } from './ReadAloudBar.tsx'
+import { pickVoice, voiceLabel } from '../lib/speak.ts'
 
 interface Props {
   settings: S
@@ -134,6 +136,7 @@ export function Settings({ settings: s, status, onChange, onClose }: Props) {
               <Row label="Appearance">
                 <Seg value={s.theme} options={['system', 'light', 'dark']} label={cap} onPick={(theme) => onChange({ theme })} />
               </Row>
+              <ReadAloudRows />
             </section>
           )}
 
@@ -231,6 +234,60 @@ export function Settings({ settings: s, status, onChange, onClose }: Props) {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Read aloud's voice and speed. Kept on this computer: each computer has its own voices. */
+function ReadAloudRows() {
+  const voices = useSpeechVoices()
+  const [prefs, setPrefs] = useState(readPrefs)
+  const change = (patch: Partial<typeof prefs>) => {
+    saveReadPrefs(patch)
+    setPrefs(readPrefs())
+  }
+  if (!('speechSynthesis' in window) || !voices.length)
+    return (
+      <Row
+        label="Read aloud"
+        hint={
+          'speechSynthesis' in window
+            ? 'This browser has no voices installed, so Read aloud is hidden. Add a voice in your computer’s speech or accessibility settings, then reload.'
+            : 'This browser can’t speak, so Read aloud is hidden. Chrome, Edge and Safari can.'
+        }
+      >
+        <span className="muted">Unavailable</span>
+      </Row>
+    )
+  const listed = listedVoices(voices)
+  const chosen = listed.find((v) => v.voiceURI === prefs.voice)
+  return (
+    <>
+      <Row
+        label="Read aloud voice"
+        hint={
+          chosen && !chosen.localService
+            ? 'This voice sends the text it reads to an online service.'
+            : 'Voices on this computer come first; they work offline. A document with a lang property is read in that language.'
+        }
+      >
+        <select className="select read-voice" aria-label="Read aloud voice" value={chosen ? prefs.voice : ''} onChange={(e) => change({ voice: e.target.value })}>
+          <option value="">Automatic</option>
+          {listed.map((v) => (
+            <option key={v.voiceURI} value={v.voiceURI}>
+              {voiceLabel(v)}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Read aloud speed">
+        <div className="read-speed">
+          <Seg value={prefs.rate as (typeof RATES)[number]} options={[...RATES]} label={(r) => (r === 1 ? 'Normal' : `${r}×`)} onPick={(rate) => change({ rate })} />
+          <button className="btn" title="Hear a sample" onClick={() => sample(chosen ?? pickVoice(voices, { systemLang: navigator.language }), prefs.rate)}>
+            Try
+          </button>
+        </div>
+      </Row>
+    </>
   )
 }
 
