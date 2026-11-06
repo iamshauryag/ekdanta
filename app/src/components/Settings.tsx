@@ -146,6 +146,8 @@ const SHORTCUTS: [string, string][] = [
   ['⌘1 – ⌘5', 'Recall, Nudge, Word, Sentence, Passage'],
   ['Esc', 'Dismiss a suggestion'],
   ['⌥N', 'New draft'],
+  ['⌥T', 'Thinking Space for this piece'],
+  ['⌥⇧8', 'Star or un-star as an exemplar'],
   ['⌘.', 'Focus mode'],
   ['⌘\\', 'Right panel'],
   ['⌘⌥1 – ⌘⌥3', 'Material, History, Piece'],

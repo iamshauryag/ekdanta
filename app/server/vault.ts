@@ -108,7 +108,10 @@ export async function nameDoc(rel: string, title: string) {
   const folder = path.posix.dirname(rel) === '.' ? '' : path.posix.dirname(rel)
   const next = await freePath(folder, slugify(title))
   await fs.rename(resolveInVault(rel), resolveInVault(next))
-  await fs.rename(historyFile(rel), historyFile(next)).catch(() => {}) // no history yet is fine
+  // Its history, Thinking Space and Ekdanta's notes on it move too (if there are any yet).
+  await fs.rename(historyFile(rel), historyFile(next)).catch(() => {})
+  await fs.rename(resolveInVault(canvasOf(rel)), resolveInVault(canvasOf(next))).catch(() => {})
+  await fs.rename(sideFile(rel), sideFile(next)).catch(() => {})
   return next
 }
 
@@ -117,6 +120,8 @@ export async function discardIfEmpty(rel: string) {
   if (!isUntitled(rel)) return false
   const { meta, body } = splitFrontMatter(await readDoc(rel))
   if (meta.title?.trim() || body.trim()) return false
+  // Thinking already done for it counts as content.
+  if (await fs.access(resolveInVault(canvasOf(rel))).then(() => true, () => false)) return false
   await fs.unlink(resolveInVault(rel))
   return true
 }
@@ -136,6 +141,9 @@ export function splitFrontMatter(raw: string): { meta: Record<string, string>; b
 function firstHeading(body: string) {
   return body.match(/^#\s+(.+)$/m)?.[1]?.trim()
 }
+
+const canvasOf = (rel: string) => rel.replace(/\.md$/, '.canvas')
+const sideFile = (rel: string) => path.join(META_DIR, 'thinking', rel.replace(/\.md$/, '').replace(/\//g, '__') + '.json')
 
 // Help history: one JSON object per line, per document.
 function historyFile(doc: string) {

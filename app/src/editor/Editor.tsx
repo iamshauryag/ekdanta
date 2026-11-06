@@ -18,6 +18,8 @@ interface Props {
   openDoc: (path: string) => void
   onWordCount: (n: number) => void
   autoFocus?: boolean
+  /** The paragraph around the caret, whenever it may have changed. */
+  onParagraph?: (text: string) => void
 }
 
 /** Which help level a keydown asks for: ⌥1–⌥5 everywhere, ⌘1–⌘5 where the browser allows it. */
@@ -123,7 +125,11 @@ export function Editor(props: Props) {
           p().record({ level: before.level, at: new Date().toISOString(), from: before.from, outcome: 'dismissed' })
         }
       }
-      if (u.selectionSet || u.docChanged) controller?.onCursor(p().recallDot())
+      if (u.selectionSet || u.docChanged) {
+        controller?.onCursor(p().recallDot())
+        const para = paragraphAt(u.state, u.state.selection.main.head)
+        p().onParagraph?.(u.state.sliceDoc(para.from, para.to))
+      }
     })
 
     const view = new EditorView({

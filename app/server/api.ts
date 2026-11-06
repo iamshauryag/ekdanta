@@ -5,6 +5,7 @@ import { status } from './ai.ts'
 import { claudePool, closeClaudePools } from './claude-pool.ts'
 import { embedder, warmEmbedder } from './embed.ts'
 import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
+import { material, readThinking, recallChips, suggestClusters, suggestLinks, writeThinking, type Fragment } from './thinking.ts'
 import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
@@ -87,6 +88,28 @@ const routes: Record<string, Handler> = {
   'POST /api/voice/build': async (req) => {
     const { platform } = await body<{ platform: string }>(req)
     return { content: await buildProfile(platform) }
+  },
+  'GET /api/thinking': async (_req, url) => readThinking(url.searchParams.get('doc') ?? ''),
+  'PUT /api/thinking': async (req) => {
+    const { doc, canvas, side } = await body<{ doc: string; canvas: Parameters<typeof writeThinking>[1]; side: unknown }>(req)
+    await writeThinking(doc, canvas, side)
+    return { ok: true }
+  },
+  'POST /api/thinking/links': async (req) => {
+    const { fragments, skip } = await body<{ fragments: Fragment[]; skip?: string[] }>(req)
+    return { links: await suggestLinks(fragments, skip) }
+  },
+  'POST /api/thinking/clusters': async (req) => {
+    const { fragments } = await body<{ fragments: Fragment[] }>(req)
+    return { clusters: await suggestClusters(fragments) }
+  },
+  'POST /api/thinking/recall': async (req) => {
+    const { doc, fragments, taken } = await body<{ doc: string; fragments: Fragment[]; taken?: string[] }>(req)
+    return { chips: await recallChips(doc, fragments, taken) }
+  },
+  'POST /api/thinking/material': async (req) => {
+    const { doc, fragments, paragraph } = await body<{ doc: string; fragments: Fragment[]; paragraph: string }>(req)
+    return material(doc, fragments, paragraph ?? '')
   },
   'GET /api/meta': async (_req, url) => splitFrontMatter(await readDoc(url.searchParams.get('path') ?? '')).meta,
 }

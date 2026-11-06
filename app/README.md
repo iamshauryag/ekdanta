@@ -34,6 +34,12 @@ Settings (⌥,) can pin a provider, choose the Claude models, use the local mode
 
 Each platform gets a short, readable profile in `.ekdanta/voice/<platform>.md`, built from your ★ exemplars (topped up with recent pieces while there are fewer than three). Every trait quotes your own writing, and Ekdanta checks each quote against the source before keeping it. Edit the traits freely; anything under **Your rules** is yours and a rebuild never changes it. A rebuild is shown as a diff to accept or reject, and ⌘3–⌘5 follow the profile for the piece's platform.
 
+## Thinking Space
+
+⌥T opens a full-screen canvas for the open piece, for getting what's in your head out before (or while) drafting. Type fragments anywhere: Return starts the next one, a click puts one where you clicked, and dragging moves them. After a pause, Ekdanta suggests a few dashed links between related fragments ("same idea", "contradicts", "example of") and shows a chip where a fragment matches one of your notes. Click a link to remove it; hold ⌥ to hide them all. **Clusters** groups fragments into themes on request; click a label to rename it. Nothing is ever moved or rewritten.
+
+**Start drafting** (⌥T again) returns to the page, with the fragments in the Material panel: the group nearest the paragraph you're writing is open, fragments the draft already covers are ticked, and you can drag one onto the page. The canvas is saved as `<piece>.canvas` in [JSON Canvas](https://jsoncanvas.org) format, so it opens in Obsidian too.
+
 ## Keys
 
 The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tabs; there, use ⌥ (Option) instead. Ekdanta notices which one reaches it and labels everything to match.
@@ -46,6 +52,7 @@ The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tab
 | ↑↓ ↵ | Choose and pick in Recall and Word |
 | Tab | Accept ghost text; in a diff, step through changes (↵ accept, ⌫ reject) |
 | ⌘↵ / ⌘⌫ | Accept all / reject all |
+| ⌥T | Thinking Space for the open piece (browsers keep ⌘T for a new tab) |
 | ⌥N | New draft, in the current folder (browsers keep ⌘N for a new window) |
 | ⌥⇧8 | Star the open piece as an exemplar (it sounds like you), or un-star it |
 | ⌥, | Settings: help ceiling, models, appearance, the Recall index |
@@ -54,4 +61,4 @@ The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tab
 
 ## What's not here yet
 
-The Thinking Space, imports, and the Tauri desktop shell. See the [design documents](../design/) for where these are going.
+Imports, the Thinking Space's possible order and dictation, and the Tauri desktop shell. See the [design documents](../design/) for where these are going.

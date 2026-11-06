@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Editor } from './editor/Editor.tsx'
 import type { HistoryItem } from './editor/controller.ts'
-import { api, type FileEntry, type Settings as SettingsT, type Status, type VoiceSummary } from './lib/api.ts'
+import { api, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type VoiceSummary } from './lib/api.ts'
 import { applyPatch, joinFrontMatter, splitFrontMatter, type Meta, type MetaPatch } from './lib/frontmatter.ts'
 import { Panel, type PanelTab } from './components/Panel.tsx'
 import { Settings } from './components/Settings.tsx'
+import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
@@ -59,6 +60,12 @@ export function App() {
   const [voices, setVoices] = useState<VoiceSummary[]>([])
   const [voiceView, setVoiceView] = useState<string | null>(null) // a platform whose profile fills the page
   const refreshVoices = useCallback(() => api.voice().then(setVoices), [])
+  // The open document's Thinking Space, and which of its fragments the draft already uses.
+  const [thinkingOpen, setThinkingOpen] = useState(false)
+  const [thinking, setThinking] = useState<Thinking | null>(null)
+  const [material, setMaterial] = useState<{ covered: string[]; nearest: string | null }>({ covered: [], nearest: null })
+  const paragraph = useRef('')
+  const materialTimer = useRef<number | undefined>(undefined)
   const ceiling = settings?.ceiling ?? 5
   const recallDot = settings?.recallDot ?? true
   const changeSettings = useCallback((patch: Partial<SettingsT>) => {
@@ -119,6 +126,9 @@ export function App() {
       setSaved('saved')
     })
     api.history(path).then((h) => !cancelled && setHistory(h as HistoryItem[]))
+    setThinking(null)
+    setMaterial({ covered: [], nearest: null })
+    api.thinking(path).then((t) => !cancelled && setThinking(t))
     return () => {
       cancelled = true
     }
@@ -226,6 +236,47 @@ export function App() {
     }
   }
 
+  /** Ask which fragments the draft covers, and which is nearest the paragraph being written. */
+  const checkMaterial = useCallback(
+    (delay = 700) => {
+      window.clearTimeout(materialTimer.current)
+      const d = docRef.current
+      const frags = (thinking?.canvas.nodes ?? []).filter((n) => n.type === 'text' && n.text?.trim()).map((n) => ({ id: n.id, text: n.text! }))
+      if (!d || !frags.length) return
+      materialTimer.current = window.setTimeout(async () => {
+        if (saveTimer.current !== undefined) await save() // coverage reads the saved draft
+        api.thinkingMaterial(d.path, frags, paragraph.current).then(setMaterial).catch(() => {})
+      }, delay)
+    },
+    [thinking, save],
+  )
+  useEffect(() => {
+    if (panelOpen && panelTab === 'material') checkMaterial(0)
+  }, [panelOpen, panelTab, checkMaterial])
+
+  const onParagraph = useCallback(
+    (text: string) => {
+      if (text === paragraph.current) return
+      paragraph.current = text
+      if (panelOpen && panelTab === 'material') checkMaterial(1200)
+    },
+    [panelOpen, panelTab, checkMaterial],
+  )
+
+  const closeThinking = useCallback(() => {
+    setThinkingOpen(false)
+    const d = docRef.current
+    if (!d) return
+    // Back to drafting, with the fragments beside the page.
+    api.thinking(d.path).then((t) => {
+      setThinking(t)
+      if (t.canvas.nodes.length) {
+        setPanelOpen(true)
+        setPanelTab('material')
+      }
+    })
+  }, [setPanelOpen, setPanelTab])
+
   const record = useCallback(
     (item: HistoryItem) => {
       const d = docRef.current
@@ -261,6 +312,13 @@ export function App() {
       } else if (e.code === 'Comma' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
         e.preventDefault()
         setSettingsOpen((o) => !o)
+      } else if (e.code === 'KeyT' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
+        // ⌥T, since browsers keep ⌘T for a new tab. The Thinking Space closes itself.
+        e.preventDefault()
+        if (docRef.current && !thinkingOpen) {
+          if (saveTimer.current !== undefined) save()
+          setThinkingOpen(true)
+        }
       } else if (e.code === 'KeyN' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
         // Browsers keep ⌘N for a new window, so ⌥N works too.
         e.preventDefault()
@@ -270,7 +328,7 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, save, newDraft, setPanelOpen, setPanelTab, files])
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab, files, thinkingOpen])
 
   const current = files.find((f) => f.path === path)
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
@@ -367,6 +425,7 @@ export function App() {
               record={record}
               openDoc={openDoc}
               onWordCount={setWords}
+              onParagraph={onParagraph}
             />
           </div>
         )}
@@ -390,10 +449,16 @@ export function App() {
           exemplar={!!current?.exemplar}
           voice={voices.find((v) => v.platform === platform)}
           onVoice={() => openVoice(platform)}
+          thinking={thinking}
+          covered={material.covered}
+          nearest={material.nearest}
+          onThinking={() => setThinkingOpen(true)}
           onExemplar={() => current && toggleExemplar(current.path)}
           onClearHistory={() => setHistory([])}
         />
       )}
+
+      {thinkingOpen && loaded && <ThinkingSpace doc={loaded.path} title={title} onClose={closeThinking} />}
 
       {settingsOpen && settings && <Settings settings={settings} status={status} onChange={changeSettings} onClose={() => setSettingsOpen(false)} />}
 

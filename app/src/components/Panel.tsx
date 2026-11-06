@@ -1,5 +1,6 @@
 import type { HistoryItem } from '../editor/controller.ts'
-import type { Status, VoiceSummary } from '../lib/api.ts'
+import { useEffect, useState } from 'react'
+import type { Status, Thinking, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
 import { helpMod } from '../editor/help.ts'
 
@@ -25,6 +26,10 @@ interface Props {
   onExemplar: () => void
   voice: VoiceSummary | undefined
   onVoice: () => void
+  thinking: Thinking | null
+  covered: string[]
+  nearest: string | null
+  onThinking: () => void
   onClearHistory: () => void
 }
 
@@ -50,7 +55,7 @@ export function Panel(p: Props) {
         </button>
       </div>
       <div className="panel-body">
-        {p.tab === 'material' && <Material />}
+        {p.tab === 'material' && <Material thinking={p.thinking} covered={p.covered} nearest={p.nearest} onOpen={p.onThinking} />}
         {p.tab === 'history' && <HistoryLog history={p.history} />}
         {p.tab === 'piece' && <Piece {...p} />}
       </div>
@@ -58,11 +63,67 @@ export function Panel(p: Props) {
   )
 }
 
-function Material() {
+/** This piece's Thinking Space fragments, grouped by cluster, with the ones the draft covers ticked. */
+function Material({ thinking, covered, nearest, onOpen }: { thinking: Thinking | null; covered: string[]; nearest: string | null; onOpen: () => void }) {
+  const frags = (thinking?.canvas.nodes ?? []).filter((n) => n.type === 'text' && n.text?.trim())
+  const byId = new Map(frags.map((n) => [n.id, n]))
+  const clusters = (thinking?.side.clusters ?? []).map((c) => ({ ...c, ids: c.ids.filter((id) => byId.has(id)) })).filter((c) => c.ids.length)
+  const inCluster = new Set(clusters.flatMap((c) => c.ids))
+  const rest = frags.filter((n) => !inCluster.has(n.id)).map((n) => n.id)
+  const groups = [...clusters, ...(rest.length ? [{ id: '_rest', label: clusters.length ? 'unclustered' : 'fragments', ids: rest, mine: false }] : [])]
+  // Only the group for the paragraph being written is open; the others fold to one line.
+  const focusGroup = groups.find((g) => nearest && g.ids.includes(nearest))?.id ?? groups.find((g) => g.ids.some((id) => !covered.includes(id)))?.id
+  const [open, setOpen] = useState<string | undefined>(focusGroup)
+  useEffect(() => setOpen(focusGroup), [focusGroup])
+  const used = frags.filter((n) => covered.includes(n.id)).length
+
   return (
     <>
-      <div className="panel-head">Material</div>
-      <p className="empty">No thinking yet. The Thinking Space (⌘T) arrives in the next version of this MVP.</p>
+      <div className="panel-head">
+        Thinking <em>· {frags.length} fragments</em>
+        {frags.length > 0 && <span className="count">{used} used</span>}
+      </div>
+      {!frags.length && <p className="empty">No thinking yet. ⌥T opens the Thinking Space for this piece.</p>}
+      {groups.map((g) => {
+        const isOpen = open === g.id
+        return (
+          <div key={g.id} className={`mat-group${isOpen ? ' is-open' : ''}`}>
+            <button className="mat-head" onClick={() => setOpen(isOpen ? undefined : g.id)} aria-expanded={isOpen}>
+              <svg className="chev" viewBox="0 0 12 12" aria-hidden="true">
+                <path d="M3.5 4.75 6 7.25l2.5-2.5" />
+              </svg>
+              <span className={g.mine ? 'mine' : 'label'}>{g.label}</span>
+              <span className="muted">
+                {g.ids.filter((id) => covered.includes(id)).length}/{g.ids.length}
+              </span>
+              {g.id === focusGroup && nearest && g.ids.includes(nearest) && <span className="here">this paragraph</span>}
+            </button>
+            {isOpen &&
+              g.ids.map((id) => {
+                const n = byId.get(id)!
+                const done = covered.includes(id)
+                return (
+                  <div
+                    key={id}
+                    className={`mat-frag${done ? ' is-done' : ''}${id === nearest ? ' is-near' : ''}`}
+                    draggable
+                    title="Drag into the page to use it"
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', n.text!.trim())
+                      e.dataTransfer.effectAllowed = 'copy'
+                    }}
+                  >
+                    <span className="tick" aria-label={done ? 'In the draft' : 'Not used yet'} />
+                    {n.text}
+                  </div>
+                )
+              })}
+          </div>
+        )
+      })}
+      <button className="btn mat-open" onClick={onOpen}>
+        Open Thinking Space <kbd>⌥T</kbd>
+      </button>
     </>
   )
 }
