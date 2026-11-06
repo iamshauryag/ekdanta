@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Editor } from './editor/Editor.tsx'
 import type { HistoryItem } from './editor/controller.ts'
-import { api, type FileEntry, type Settings as SettingsT, type Status } from './lib/api.ts'
+import { api, type FileEntry, type Settings as SettingsT, type Status, type VoiceSummary } from './lib/api.ts'
 import { applyPatch, joinFrontMatter, splitFrontMatter, type Meta, type MetaPatch } from './lib/frontmatter.ts'
 import { Panel, type PanelTab } from './components/Panel.tsx'
 import { Settings } from './components/Settings.tsx'
+import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
 import { helpMod } from './editor/help.ts'
@@ -55,6 +56,9 @@ export function App() {
   const [focus, setFocus] = useState(false)
   const [settings, setSettings] = useState<SettingsT | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [voices, setVoices] = useState<VoiceSummary[]>([])
+  const [voiceView, setVoiceView] = useState<string | null>(null) // a platform whose profile fills the page
+  const refreshVoices = useCallback(() => api.voice().then(setVoices), [])
   const ceiling = settings?.ceiling ?? 5
   const recallDot = settings?.recallDot ?? true
   const changeSettings = useCallback((patch: Partial<SettingsT>) => {
@@ -84,7 +88,8 @@ export function App() {
     refreshFiles()
     api.status().then(setStatus)
     api.settings().then(setSettings)
-  }, [refreshFiles])
+    refreshVoices()
+  }, [refreshFiles, refreshVoices])
 
   // Appearance: follow the system unless the writer picked light or dark.
   useEffect(() => {
@@ -151,6 +156,7 @@ export function App() {
         }
       }
       setFresh((f) => (f === next ? f : null))
+      setVoiceView(null)
       setPath(next)
     },
     [save, refreshFiles, setPath],
@@ -203,9 +209,16 @@ export function App() {
     // The open document saves through the editor, so its front-matter must change there too.
     if (docRef.current?.path === rel) setMeta(patch)
     else await api.patchMeta(rel, patch).then(refreshFiles)
+    refreshVoices() // the profile for this platform is now out of date
+  }
+
+  const openVoice = (platform: string) => {
+    refreshVoices()
+    setVoiceView(platform)
   }
 
   const showSidebar = (mode: SidebarMode) => {
+    if (mode === 'voice') refreshVoices()
     if (sidebarOpen && sidebarMode === mode) setSidebarOpen(false)
     else {
       setSidebarMode(mode)
@@ -303,6 +316,9 @@ export function App() {
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'exemplars' ? ' is-on' : ''}`} title="Exemplars" onClick={() => showSidebar('exemplars')}>
           <Icon name="star" />
         </button>
+        <button className={`rail-btn${sidebarOpen && sidebarMode === 'voice' ? ' is-on' : ''}`} title="Voice" onClick={() => showSidebar('voice')}>
+          <Icon name="voice" />
+        </button>
         <button className="rail-btn" title="New draft (⌥N)" onClick={() => newDraft()}>
           <Icon name="compose" />
         </button>
@@ -315,10 +331,13 @@ export function App() {
         </button>
       </nav>
 
-      {sidebarOpen && <Sidebar mode={sidebarMode} files={files} current={path} onOpen={openDoc} onCreate={newDraft} onStar={toggleExemplar} />}
+      {sidebarOpen && <Sidebar mode={sidebarMode} files={files} voices={voices} voiceView={voiceView} onVoice={openVoice} current={voiceView ? null : path} onOpen={openDoc} onCreate={newDraft} onStar={toggleExemplar} />}
 
       <main className="page-area">
-        {loaded && (
+        {voiceView && (
+          <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />
+        )}
+        {loaded && !voiceView && (
           <div className="page">
             <div className="doc-meta">
               <label className="platform">
@@ -369,6 +388,8 @@ export function App() {
           status={status}
           path={loaded?.path ?? path}
           exemplar={!!current?.exemplar}
+          voice={voices.find((v) => v.platform === platform)}
+          onVoice={() => openVoice(platform)}
           onExemplar={() => current && toggleExemplar(current.path)}
           onClearHistory={() => setHistory([])}
         />

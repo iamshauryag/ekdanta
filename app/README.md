@@ -30,6 +30,10 @@ Ekdanta uses whatever you already have. By default it picks, in this order:
 
 Settings (⌥,) can pin a provider, choose the Claude models, use the local model for ⌘3 only, or switch Recall to Ollama's `nomic-embed-text`. They're saved in `.ekdanta/settings.json` in the vault, so every device that opens the vault shares them. Environment variables set the defaults: `EKDANTA_CLAUDE_MODEL`, `EKDANTA_CLAUDE_FAST_MODEL`, `EKDANTA_OLLAMA_MODEL`, `EKDANTA_PREFER_LOCAL=1`, `EKDANTA_EMBEDDER=ollama`, `EKDANTA_DISABLE_CLAUDE_CLI=1` and `EKDANTA_RECALL_FLOOR`. API keys are only ever read from the environment.
 
+## Voice profiles
+
+Each platform gets a short, readable profile in `.ekdanta/voice/<platform>.md`, built from your ★ exemplars (topped up with recent pieces while there are fewer than three). Every trait quotes your own writing, and Ekdanta checks each quote against the source before keeping it. Edit the traits freely; anything under **Your rules** is yours and a rebuild never changes it. A rebuild is shown as a diff to accept or reject, and ⌘3–⌘5 follow the profile for the piece's platform.
+
 ## Keys
 
 The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tabs; there, use ⌥ (Option) instead. Ekdanta notices which one reaches it and labels everything to match.
@@ -50,4 +54,4 @@ The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tab
 
 ## What's not here yet
 
-The Thinking Space, voice profiles, imports, and the Tauri desktop shell. See the [design documents](../design/) for where these are going.
+The Thinking Space, imports, and the Tauri desktop shell. See the [design documents](../design/) for where these are going.

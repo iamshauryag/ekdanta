@@ -5,6 +5,7 @@ import { status } from './ai.ts'
 import { claudePool, closeClaudePools } from './claude-pool.ts'
 import { embedder, warmEmbedder } from './embed.ts'
 import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
+import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
 import { refresh, search, paragraphs } from './recall.ts'
@@ -75,6 +76,17 @@ const routes: Record<string, Handler> = {
     const { meta, body: text, raw } = splitFull(await readDoc(path))
     await writeDoc(path, joinFrontMatter(raw, applyPatch(meta, patch), text))
     return { ok: true }
+  },
+  'GET /api/voice': async () => summaries(),
+  'GET /api/voice/profile': async (_req, url) => ({ content: await readProfile(url.searchParams.get('platform') ?? '') }),
+  'PUT /api/voice/profile': async (req) => {
+    const { platform, content } = await body<{ platform: string; content: string }>(req)
+    await writeProfile(platform, content)
+    return { ok: true }
+  },
+  'POST /api/voice/build': async (req) => {
+    const { platform } = await body<{ platform: string }>(req)
+    return { content: await buildProfile(platform) }
   },
   'GET /api/meta': async (_req, url) => splitFrontMatter(await readDoc(url.searchParams.get('path') ?? '')).meta,
 }

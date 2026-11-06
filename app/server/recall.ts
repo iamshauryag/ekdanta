@@ -10,11 +10,16 @@ interface Chunk {
   title: string
   folder: string
   platform?: string
+  exemplar?: boolean
   text: string
   vec: number[]
 }
 
+// Bump when chunks gain a field, so an older index is rebuilt rather than half-filled.
+const INDEX_VERSION = 2
+
 interface IndexFile {
+  version?: number
   embedder: string // which model made the vectors
   files: Record<string, number> // path → mtime when indexed
   chunks: Chunk[]
@@ -33,14 +38,16 @@ export function paragraphs(body: string): string[] {
 }
 
 async function load(): Promise<IndexFile> {
-  if (index && index.embedder === embedder().id) return index
+  if (index && index.embedder === embedder().id && index.version === INDEX_VERSION) return index
   try {
     index = JSON.parse(await fs.readFile(INDEX_PATH, 'utf8')) as IndexFile
   } catch {
     index = null
   }
   // Vectors from a different embedding model can't be compared: start again.
-  if (!index || index.embedder !== embedder().id) index = { embedder: embedder().id, files: {}, chunks: [] }
+  if (!index || index.embedder !== embedder().id || index.version !== INDEX_VERSION) {
+    index = { version: INDEX_VERSION, embedder: embedder().id, files: {}, chunks: [] }
+  }
   return index
 }
 
@@ -57,7 +64,7 @@ async function indexFile(ix: IndexFile, f: FileEntry) {
     const batch = paras.slice(i, i + 32)
     const vecs = await embedder().embed(batch, 'document')
     batch.forEach((text, j) =>
-      ix.chunks.push({ doc: f.path, title: f.title, folder: f.folder, platform: f.platform, text, vec: vecs[j] }),
+      ix.chunks.push({ doc: f.path, title: f.title, folder: f.folder, platform: f.platform, exemplar: f.exemplar, text, vec: vecs[j] }),
     )
   }
   ix.files[f.path] = f.mtime
@@ -108,6 +115,7 @@ export interface RecallResult {
   folder: string
   text: string
   score: number
+  exemplar: boolean
 }
 
 export async function search(query: string, opts: { exclude?: string; limit?: number; platform?: string } = {}) {
@@ -115,7 +123,7 @@ export async function search(query: string, opts: { exclude?: string; limit?: nu
   const [q] = await embedder().embed([query], 'query')
   const scored = ix.chunks
     .filter((c) => c.doc !== opts.exclude && (!opts.platform || c.platform === opts.platform))
-    .map((c) => ({ doc: c.doc, title: c.title, folder: c.folder, text: c.text, score: cosine(q, c.vec) }))
+    .map((c) => ({ doc: c.doc, title: c.title, folder: c.folder, text: c.text, exemplar: !!c.exemplar, score: cosine(q, c.vec) }))
     .sort((a, b) => b.score - a.score)
   const best = scored[0]?.score ?? 0
   // A strong result shouldn't be padded out with weak ones.

@@ -1,5 +1,5 @@
 import type { HistoryItem } from '../editor/controller.ts'
-import type { Status } from '../lib/api.ts'
+import type { Status, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
 import { helpMod } from '../editor/help.ts'
 
@@ -23,6 +23,8 @@ interface Props {
   path: string | null
   exemplar: boolean
   onExemplar: () => void
+  voice: VoiceSummary | undefined
+  onVoice: () => void
   onClearHistory: () => void
 }
 
@@ -144,6 +146,16 @@ function Piece(p: Props) {
             </label>
           </dd>
         </div>
+        {p.voice && (
+          <div>
+            <dt>Voice</dt>
+            <dd>
+              <button className="link" onClick={p.onVoice}>
+                {!p.voice.exists ? 'Not built yet' : p.voice.upToDate ? 'Up to date' : 'Out of date'} · view
+              </button>
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Exemplar</dt>
           <dd>

@@ -1,7 +1,8 @@
-import type { FileEntry } from '../lib/api.ts'
+import type { FileEntry, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
+import { helpMod } from '../editor/help.ts'
 
-export type SidebarMode = 'vault' | 'exemplars'
+export type SidebarMode = 'vault' | 'exemplars' | 'voice'
 
 interface Props {
   mode: SidebarMode
@@ -10,6 +11,9 @@ interface Props {
   onOpen: (path: string) => void
   onCreate: (folder: string) => void
   onStar: (path: string) => void
+  voices: VoiceSummary[]
+  voiceView: string | null
+  onVoice: (platform: string) => void
 }
 
 const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
@@ -18,8 +22,8 @@ const ENOUGH = 3
 
 export function Sidebar(p: Props) {
   return (
-    <aside className="sidebar" aria-label={p.mode === 'vault' ? 'Vault' : 'Exemplars'}>
-      {p.mode === 'vault' ? <Vault {...p} /> : <Exemplars {...p} />}
+    <aside className="sidebar" aria-label={p.mode === 'vault' ? 'Vault' : p.mode === 'exemplars' ? 'Exemplars' : 'Voice'}>
+      {p.mode === 'vault' ? <Vault {...p} /> : p.mode === 'exemplars' ? <Exemplars {...p} /> : <Voices {...p} />}
     </aside>
   )
 }
@@ -75,6 +79,22 @@ function Exemplars({ files, current, onOpen, onStar }: Props) {
           </div>
         )
       })}
+    </>
+  )
+}
+
+function Voices({ voices, voiceView, onVoice }: Props) {
+  return (
+    <>
+      <div className="section-label">Voice</div>
+      <p className="sidebar-note">How you write on each platform, learned from your exemplars. <span className="nowrap">{helpMod}3–{helpMod}5</span> follow it.</p>
+      {voices.map((v) => (
+        <button key={v.platform} className={`voice-row${voiceView === v.platform ? ' is-current' : ''}`} onClick={() => onVoice(v.platform)}>
+          <span>{platformLabel(v.platform)}</span>
+          <small className={!v.exists ? '' : v.upToDate ? 'is-ok' : 'is-stale'}>{!v.exists ? 'Not built' : v.upToDate ? 'Up to date' : 'Out of date'}</small>
+        </button>
+      ))}
+      {!voices.length && <p className="sidebar-hint">Write a few pieces first.</p>}
     </>
   )
 }

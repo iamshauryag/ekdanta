@@ -2,6 +2,7 @@
 // and checks the answer in code before it reaches the writer.
 import { generate, parseJson, status } from './ai.ts'
 import { search } from './recall.ts'
+import { voiceForPrompt } from './voice.ts'
 
 export interface HelpRequest {
   level: 1 | 2 | 3 | 4 | 5
@@ -39,16 +40,20 @@ function norms(platform?: string) {
 const RESTRAINT = `You are Ekdanta, a writing collaborator built on restraint. The writer owns every word.
 Help only as much as you are asked, never more. Never add commentary, preambles, quotation marks around your answer, or explanations.`
 
-/** A few of the writer's own similar paragraphs, so rewrites sound like them. */
+/** The writer's voice profile for this platform, and a few of their own similar paragraphs (exemplars first). */
 async function voiceSamples(req: HelpRequest) {
+  const profile = await voiceForPrompt(req.platform)
   try {
-    const hits = await search(req.scope, { exclude: req.doc, limit: 3 })
-    if (!hits.length) return ''
-    return `\n\nFor reference only, passages the writer wrote elsewhere (match their voice, rhythm and diction; do not reuse their content):\n${hits
+    const hits = (await search(req.scope, { exclude: req.doc, limit: 8 }))
+      .map((h) => ({ ...h, rank: h.score + (h.exemplar ? 0.05 : 0) }))
+      .sort((a, b) => b.rank - a.rank)
+      .slice(0, 3)
+    if (!hits.length) return profile
+    return `${profile}\n\nFor reference only, passages the writer wrote elsewhere (match their voice, rhythm and diction; do not reuse their content):\n${hits
       .map((h) => `---\n${h.text}`)
       .join('\n')}\n---`
   } catch {
-    return ''
+    return profile
   }
 }
 
@@ -89,7 +94,7 @@ Level 3, Word: suggest 4 or 5 options for the NEXT word at the writer's cursor. 
 The piece is ${norms(req.platform)}. Return JSON: {"alternatives": ["...", "..."]}`
     const prompt = `Text before the cursor:\n"""${req.scope.slice(-1500)}"""${
       req.after?.trim() ? `\n\nText after the cursor (the next word must lead into it):\n"""${req.after.slice(0, 300)}"""` : ''
-    }${avoidLine(req)}`
+    }${await voiceForPrompt(req.platform)}${avoidLine(req)}`
     const raw = await generate(fast, { system, prompt, json: true, temperature: 0.7, tier: 'fast' })
     const avoid = new Set((req.avoid ?? []).map((a) => a.toLowerCase()))
     const alts = [...new Set(parseJson<{ alternatives: string[] }>(raw).alternatives.map((a) => clean(a).replace(/^[\s.…]+/, '')))]
@@ -102,7 +107,7 @@ The piece is ${norms(req.platform)}. Return JSON: {"alternatives": ["...", "..."
     const system = `${RESTRAINT}
 Level 3, Word: suggest 4 or 5 replacements for the target word or phrase that fit the sentence's grammar and meaning, best first.
 The piece is ${norms(req.platform)}. Return JSON: {"alternatives": ["...", "..."]}`
-    const prompt = `Sentence: ${req.sentence ?? req.scope}\nTarget: ${req.scope}${avoidLine(req)}`
+    const prompt = `Sentence: ${req.sentence ?? req.scope}\nTarget: ${req.scope}${await voiceForPrompt(req.platform)}${avoidLine(req)}`
     const raw = await generate(fast, { system, prompt, json: true, temperature: 0.6, tier: 'fast' })
     const target = req.scope.trim().toLowerCase()
     const avoid = new Set((req.avoid ?? []).map((a) => a.toLowerCase()))

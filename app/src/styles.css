@@ -1331,3 +1331,132 @@ kbd {
     max-width: 100%;
   }
 }
+
+/* ---- Voice ------------------------------------------------------------------------------- */
+.voice-row {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 6px;
+  color: var(--ink);
+  font-weight: 500;
+}
+.voice-row:hover {
+  background: var(--chrome-2);
+}
+.voice-row.is-current {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.voice-row small {
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.voice-row small.is-ok {
+  color: var(--accent);
+}
+.voice-row small.is-stale,
+.voice-state.is-out {
+  color: var(--del-ink);
+}
+.doc-title.static {
+  cursor: default;
+}
+.voice-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: -10px 0 8px;
+  font-size: 12px;
+}
+.voice-sources .chip {
+  color: var(--ink-2);
+  background: var(--chrome);
+}
+.voice-sources .chip.is-exemplar {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.voice-hint {
+  color: var(--ink-3);
+  font-size: 12px;
+  margin: 0 0 12px;
+}
+.voice-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin: 4px 0 22px;
+}
+.voice-error {
+  color: var(--del-ink);
+}
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.btn.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.btn kbd {
+  margin-left: 4px;
+  background: transparent;
+  border-color: currentColor;
+  color: inherit;
+  opacity: 0.7;
+}
+.link {
+  color: var(--accent);
+}
+.link:hover {
+  text-decoration: underline;
+}
+.proposal {
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  margin-bottom: 26px;
+  overflow: hidden;
+}
+.proposal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--line);
+  font-weight: 500;
+}
+.proposal-head .muted {
+  font-weight: 400;
+}
+.proposal-head .spacer {
+  flex: 1;
+}
+.proposal-body {
+  padding: 12px 14px;
+  font: 15px/1.6 var(--serif);
+  white-space: pre-wrap;
+}
+.vd-same {
+  color: var(--ink-2);
+}
+.vd-ins {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+.vd-del {
+  background: var(--del-bg);
+  color: var(--del-ink);
+  text-decoration: line-through;
+}
+.profile-editor .cm-content {
+  font-size: 17px;
+}
+.nowrap {
+  white-space: nowrap;
+}

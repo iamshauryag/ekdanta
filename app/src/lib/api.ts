@@ -33,6 +33,15 @@ export interface Settings {
   theme: 'system' | 'light' | 'dark'
 }
 
+export interface VoiceSummary {
+  platform: string
+  exists: boolean
+  upToDate: boolean
+  built?: string
+  sources: { path: string; title: string; exemplar: boolean }[]
+  exemplars: number
+}
+
 async function json<T>(r: Response): Promise<T> {
   const data = await r.json()
   if (!r.ok) throw new Error((data as { error?: string }).error ?? r.statusText)
@@ -59,6 +68,16 @@ export const api = {
   name: (path: string, title: string) => fetch('/api/name', send('POST', { path, title })).then(json<{ path: string }>),
   discard: (path: string) => fetch('/api/discard', send('POST', { path })).then(json<{ discarded: boolean }>),
   patchMeta: (path: string, patch: Record<string, string | null>) => fetch('/api/meta', send('POST', { path, patch })).then(json),
+  voice: () => fetch('/api/voice').then(json<VoiceSummary[]>),
+  voiceProfile: (platform: string) =>
+    fetch('/api/voice/profile?platform=' + encodeURIComponent(platform))
+      .then(json<{ content: string | null }>)
+      .then((d) => d.content),
+  saveVoiceProfile: (platform: string, content: string) => fetch('/api/voice/profile', send('PUT', { platform, content })).then(json),
+  buildVoice: (platform: string) =>
+    fetch('/api/voice/build', send('POST', { platform }))
+      .then(json<{ content: string }>)
+      .then((d) => d.content),
   history: (doc: string) => fetch('/api/history?doc=' + encodeURIComponent(doc)).then(json<unknown[]>),
   appendHistory: (doc: string, item: unknown) => fetch('/api/history', send('POST', { doc, item })).then(json),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),
