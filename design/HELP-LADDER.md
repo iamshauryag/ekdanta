@@ -14,13 +14,13 @@ This is the interaction spec for Ekdanta's five help levels: exactly how each on
 6. **Same key again = next.** Pressing the level's key while its suggestion is showing cycles to the next suggestion. After the last one, the label shows "No more · ⌘3 to start again".
 7. **Esc or ⌘0 dismisses.** Dismissing is silent and always available.
 8. **Never cover the writer's text.** Cards and lists that open under a line (Recall, Word, the Passage bar) push the following text down rather than floating over it, and the page settles back when they close. Only the margin and the right panel hold help beside the text.
-9. **Everything is recorded.** Each request and its outcome (accepted, rejected, dismissed, edited after accepting) is added to the Help module, anchored to its paragraph.
+9. **Everything is recorded.** Each request and its outcome (accepted, rejected, dismissed, edited after accepting) is added to the History module, anchored to its paragraph.
 
 ### Scope: what the help applies to
 
 | If you have… | ⌘1 Recall | ⌘2 Nudge | ⌘3 Word | ⌘4 Sentence | ⌘5 Passage |
 |---|---|---|---|---|---|
-| **No selection** | Current paragraph | Current paragraph | Word at the caret | Continue from the caret | Current paragraph |
+| **No selection** | Current paragraph | Current paragraph | The next word at the caret | Continue from the caret | Current paragraph |
 | **A word or phrase selected** | The selection | The selection | The selection | Rewrite the sentence containing it | The selection |
 | **A sentence or more selected** | The selection | The selection | Not available (one-line notice) | Rewrite the selection if it is one sentence; otherwise acts as ⌘5 | The selection |
 
@@ -56,7 +56,7 @@ You set a help ceiling (0–5) in Settings or in the Piece module. Asking for a 
 ```
 
 - **Results** are passages from your vault: notes, highlights, past writing and this document's Thinking Space fragments, in that order of priority. Each shows a short excerpt and a **citation chip** (folder / title, plus date or ★ where relevant).
-- **Keys:** <kbd>↑</kbd><kbd>↓</kbd> choose a result; <kbd>⌘↵</kbd> inserts the chosen excerpt at the caret as a quotation with its citation link; <kbd>↵</kbd> on a chip opens the source in a split view; <kbd>⌘1</kbd> again shows the next three; <kbd>⌘⇧1</kbd> ("More") moves all results into the Help module, where there's room to read them.
+- **Keys:** <kbd>↑</kbd><kbd>↓</kbd> choose a result; <kbd>⌘↵</kbd> inserts the chosen excerpt at the caret as a quotation with its citation link; <kbd>↵</kbd> on a chip opens the source in a split view; <kbd>⌘1</kbd> again shows the next three; <kbd>⌘⇧1</kbd> ("More") moves all results into the History module, where there's room to read them.
 - **Relevance floor.** Only results above a similarity threshold are shown. Recall would rather show one strong result than three weak ones.
 
 **The Recall dot.** When Recall has at least one strong result for a paragraph, a 7px dot at 30% opacity appears in the left gutter beside it. It is computed in the background on paragraph change, never on every keystroke. Clicking the dot is the same as pressing ⌘1 there. The dot can be turned off in Settings and is hidden in Focus mode.
@@ -65,7 +65,7 @@ You set a help ceiling (0–5) in Settings or in the Piece module. Asking for a 
 
 **Purpose:** unstick you without putting words in your mouth.
 
-**Appearance.** A single line of italic serif text in the page's right margin, level with the paragraph, in the secondary ink colour. If the right panel is open, the Nudge appears at the top of the Help module instead, anchored to the paragraph.
+**Appearance.** A single line of italic serif text in the page's right margin, level with the paragraph, in the secondary ink colour. If there isn't room in the margin (both side panels open on a narrow window), the Nudge sits as a quiet line under its paragraph instead.
 
 ```
   Speed gives you the first idea that arrives,      ⌘2 · NUDGE
@@ -74,14 +74,17 @@ You set a help ceiling (0–5) in Settings or in the Piece module. Asking for a 
 ```
 
 - **Content rule:** one question or one direction, at most 20 words. Never a sentence you could paste into the draft. Nudges are checked in code before display: anything that looks like draft prose (several sentences, or no question or imperative) is discarded and regenerated once, then the level reports "No useful nudge here" rather than break the rule.
-- **Keys:** <kbd>⌘2</kbd> again for a different question; <kbd>Esc</kbd> to dismiss; **Resolve** (click, or <kbd>⌘↵</kbd>) marks it answered in the Help module.
+- **Keys:** <kbd>⌘2</kbd> again for a different question; <kbd>Esc</kbd> to dismiss; **Resolve** (click, or <kbd>⌘↵</kbd>) marks it answered in the History module.
 - A Nudge **is never inserted** into the document. There is no "accept".
 
 **Typical nudges:** "What's the counter-argument?", "Which example would a reader remember?", "You noted 'kept drafts vs deleted drafts' but haven't used it. Still relevant?"
 
-### ⌘3 · Word — a few alternatives
+### ⌘3 · Word — a few candidates
 
-**Purpose:** the word is almost right.
+**Purpose:** the word is almost right, or the next one won't come.
+
+- **A word or short phrase selected:** alternatives to replace it.
+- **Nothing selected:** options for the *next* word at the cursor. Picking one inserts it with exactly one space before it.
 
 **Appearance.** A compact list directly below the word, aligned to its left edge, in the prose serif.
 
@@ -171,9 +174,9 @@ Errors never appear as modal dialogs and never interrupt typing.
 - **Debounce:** the Recall dot recomputes at most once per paragraph change, after 1.5 s without typing.
 - **Cancel:** <kbd>Esc</kbd> during loading cancels the request (and the provider call, where the API allows).
 
-## The Help module record
+## The History module
 
-Every request is written to the document's help history (`.ekdanta/history/<document>.jsonl`) and shown in the Help module:
+Every request is written to the document's help history (`.ekdanta/history/<document>.jsonl`) and shown in the History module:
 
 | Field | Example |
 |---|---|
@@ -191,7 +194,7 @@ All five levels work in Focus mode and look the same, except:
 
 - The Recall dot is hidden.
 - Nudges appear in the margin even though the panel is hidden.
-- "More" (⌘⇧1) leaves Focus mode and opens the Help module.
+- "More" (⌘⇧1) leaves Focus mode and opens the History module.
 
 ## Accessibility
 

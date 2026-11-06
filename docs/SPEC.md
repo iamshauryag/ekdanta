@@ -19,13 +19,13 @@ The AI is a collaborator, not a ghostwriter. The default is silence. Help scales
 | 0 Silent | Nothing (at most a faint margin dot when it has something relevant) | — |
 | 1 Recall | Surfaces *your own* material: a note, a quote, a past paragraph | "You wrote about this in March" |
 | 2 Nudge | A question or a direction, never prose | "What's the counter-argument?" |
-| 3 Word | A word or a few candidates | Three alternatives for "ripple" |
+| 3 Word | A few candidate words: replacements for a selected word, or the next word at the cursor | Three alternatives for "ripple" |
 | 4 Sentence | Continues or rewrites one sentence, shown as a diff | — |
 | 5 Passage | Rewrites a paragraph or section on explicit instruction, shown as a diff | — |
 
 The writer sets a default ceiling (for example "never above level 3 unless I ask"). Generating whole pages is not a feature.
 
-**Shortcuts.** Each level is one keystroke, because a writer needs different help at different moments in the same document: **Cmd+1** Recall, **Cmd+2** Nudge, **Cmd+3** Word, **Cmd+4** Sentence, **Cmd+5** Passage; **Esc** or **Cmd+0** dismisses. Pressing the same key again cycles to the next suggestion at that level. In browsers, Cmd/Ctrl+1–9 switch tabs and cannot be reliably overridden, so the browser build uses an alternate (for example Option/Alt+1–5). All bindings are remappable.
+**Shortcuts.** Each level is one keystroke, because a writer needs different help at different moments in the same document: **Cmd+1** Recall, **Cmd+2** Nudge, **Cmd+3** Word, **Cmd+4** Sentence, **Cmd+5** Passage; **Esc** or **Cmd+0** dismisses. Pressing the same key again cycles to the next suggestion at that level. Some browsers keep Cmd/Ctrl+1–9 for switching tabs, so Option/Alt+1–5 always works as well; the app notices which one reaches it and labels shortcuts to match. All bindings are remappable.
 
 ## Cursor → writing
 
@@ -72,7 +72,13 @@ No model training in v1.
 - **Sentence and Passage (4–5):** a stronger model, given the instruction, the surrounding text, the voice profile and 3–5 retrieved samples of the writer's own similar writing. The output always passes through a deterministic diff.
 - **Voice profile:** generated per platform from the writer's corpus into a readable, editable file.
 - **Taste:** accept/reject decisions are stored locally and used as examples in prompts. Later, optionally, a small local model or adapter could be fine-tuned per writer.
-- **Providers:** bring your own key (Anthropic, OpenAI, Google) or run locally with Ollama. A fast tier for levels 1–3 and a strong tier for 4–5.
+- **Providers:** whatever the writer already has, in this order:
+  1. **A signed-in AI CLI** (Claude Code today; Codex and Gemini CLI planned). Ekdanta keeps a few sessions warm and reads each answer as soon as it arrives, so a request takes about 1–2 s for Word and 2–5 s for longer help. Requests count against the writer's own plan.
+  2. **An API key** (Anthropic, OpenAI or Google), billed per request.
+  3. **A local model through Ollama**, for fully offline use.
+
+  A fast tier (a small model such as Claude Haiku) serves Word; a strong tier (such as Claude Sonnet) serves Nudge, Sentence and Passage.
+- **Embeddings:** Recall uses a small embedding model that runs inside the app (bge-small, about 33 MB, downloaded once). There is nothing to install, and nothing leaves the machine for Recall.
 
 ## Weighting the writer's past work
 
@@ -112,7 +118,7 @@ Not every document — or sentence — represents a writer equally well. Weighti
 ## Architecture
 
 - **Storage:** local-first. Plain Markdown with YAML front-matter, `[[wikilinks]]`, and JSON Canvas for thinking maps, in a folder the writer owns. A search index (SQLite and embeddings) lives alongside it and can always be rebuilt.
-- **App:** a [Tauri](https://tauri.app) desktop app with a React and TypeScript UI, and an editor built on TipTap/ProseMirror with track-changes-style diffs. A browser build shares the same codebase (using the File System Access API for local folders).
+- **App:** a [Tauri](https://tauri.app) desktop app with a React and TypeScript UI. A browser build shares the same codebase (using the File System Access API for local folders). The MVP runs in the browser against a small local server and uses [CodeMirror](https://codemirror.net) as the editor, which edits the Markdown file exactly as it is on disk; help suggestions and diffs are drawn as editor decorations, so the writer's text is untouched until they accept a change.
 - **Core package:** retrieval, voice profile, restraint policy, the diff engine (deterministic, never the model) and provider adapters.
 - **Privacy:** no hosted backend and no telemetry in v1.
 
@@ -126,6 +132,8 @@ Not every document — or sentence — represents a writer equally well. Weighti
 
 Later: on-request continuation, agent tasks, web search, the browser extension, linter checks.
 
+**Status:** a first version is in [`app/`](../app/). It has the vault and editor, all five help levels on real models (with Recall over the writer's own notes), word-level diff review, the help ceiling and Focus mode. Knowledge import, voice profiles and the Thinking Space come next.
+
 ## Non-goals (v1)
 
 Full-page or essay generation · team collaboration · hosted accounts and billing · AI-detection evasion.
@@ -138,6 +146,8 @@ Full-page or essay generation · team collaboration · hosted accounts and billi
 - **First user:** the project starts as a tool its author uses daily for essays, posts, emails and messages. Success means reaching a draft you're proud of faster, in your own voice.
 
 ## Open questions
+
+- **Provider terms:** before the public release recommends signing in through an AI CLI, check each provider's current terms for third-party apps that use a personal plan.
 
 - Which knowledge sources to support after Google Docs, Word and Keep (Kindle, Readwise, Notion, Apple Notes)?
 - Final name.

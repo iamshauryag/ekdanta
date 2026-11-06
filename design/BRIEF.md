@@ -32,7 +32,7 @@ Ekdanta is a "Cursor for writers": a local-first app that holds all of your writ
 | Module | Shows | Empty state |
 |---|---|---|
 | **Material** | This piece's Thinking Space fragments, with used ones ticked and unused ones visible, plus sources you've pinned (notes, highlights, past writing). Drag a fragment into the page to quote it. | "No thinking yet. ⌘T opens the Thinking Space." |
-| **Help** | A history of help you summoned in this document: Nudges, Recall results and diffs (accepted, rejected, edited after accepting), each anchored to its paragraph. You can resolve or clear items. | Hidden from the icon row until you've asked for help once. |
+| **History** | A history of help you summoned in this document: Nudges, Recall results and diffs (accepted, rejected, edited after accepting), each anchored to its paragraph. You can resolve or clear items. | Hidden from the icon row until you've asked for help once. |
 | **Piece** | Facts about the document: platform, word count against the platform's typical length, active voice profile, help ceiling, and an outline built from headings and paragraph first lines. No AI content. | Always has content. |
 
 **Material shows one group at a time.** Fragments are listed under their cluster labels. Only the group that matches the paragraph being written is open (marked "this paragraph"); every other group folds to one line with a count, such as "The body 0/3". Opening a group is one click. Following the caret only changes which of your own groups is open; it never adds content.
@@ -63,7 +63,7 @@ What makes Cursor feel intuitive, and how it carries over:
 |---|---|---|
 | **Tab ghost text**: grey continuation at the cursor; Tab accepts, keep typing to ignore | Zero UI, zero mode switch; ignoring costs nothing | We keep the presentation, not the trigger: Cursor offers ghost text unprompted, and Ekdanta **never** does. Only after you press **Cmd+4** does a continuation appear as ghost text. Tab accepts, Esc or typing dismisses, Cmd+4 again cycles. |
 | **Cmd+K inline bar** at the selection; type an instruction; the result appears as an inline red/green diff with Accept/Reject | Help stays at the point of focus; instruction and result in one place | **Cmd+5 Passage**: a small instruction bar opens at the selection, then an inline word-level diff. Cmd+Enter accepts all, Cmd+Backspace rejects all, or accept/reject per change. Also used for Cmd+4 rewrites of a selected sentence. |
-| **Autocomplete-style lists** at the cursor, navigated with the keyboard | Familiar; choosing is faster than reading | **Cmd+3 Word**: 3–5 alternatives in a compact list under the word. Arrows and Enter pick, Esc closes. |
+| **Autocomplete-style lists** at the cursor, navigated with the keyboard | Familiar; choosing is faster than reading | **Cmd+3 Word**: 3–5 options in a compact list under the cursor: replacements for a selected word, or the next word when nothing is selected. Arrows and Enter pick, Esc closes. |
 | **Side chat (Cmd+L)** for longer, exploratory requests | Keeps long output off the page | **Recall** results that go beyond one item, and later Agent tasks, open in a right panel. The page itself never fills with chat. |
 | **Same keys everywhere, minimal chrome** | Muscle memory beats menus | Every level works the same way in every document. No toolbar is needed to reach help. |
 
@@ -113,7 +113,7 @@ Static HTML mockups of the main editor, each with a light/dark toggle. Open them
 
 - [`mockups/direction-a.html`](mockups/direction-a.html): Direction A, two layouts (centred page; left page with a margin column).
 - [`mockups/direction-b.html`](mockups/direction-b.html): Direction B, two layouts (pure focus page; vault overlay with Recall).
-- [`mockups/direction-a3.html`](mockups/direction-a3.html): **the chosen direction.** Studio with the modular right panel (Material, Help, Piece) and Focus mode.
+- [`mockups/direction-a3.html`](mockups/direction-a3.html): **the chosen direction.** Studio with the modular right panel (Material, History, Piece) and Focus mode.
 - [`mockups/thinking-space.html`](mockups/thinking-space.html): the Thinking Space (loose map, clusters, and the hand-off into drafting).
 - [`mockups/help-levels.html`](mockups/help-levels.html): each help level, ⌘1 to ⌘5, in the editor.
 - [`mockups/help-review.html`](mockups/help-review.html): reviewing a diff (inline and side by side) and every help state.

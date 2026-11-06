@@ -37,7 +37,7 @@ Ekdanta has one main window and a small number of modes inside it. There are no 
 ```
 
 - **Rail (left):** Vault, Search, Exemplars (★), Voice, Settings. Each opens in the left sidebar, so the page never moves sideways.
-- **Right panel:** one module at a time (Material <kbd>⌘⌥1</kbd>, Help <kbd>⌘⌥2</kbd>, Piece <kbd>⌘⌥3</kbd>). <kbd>⌘\\</kbd> collapses it, and the page re-centres.
+- **Right panel:** one module at a time (Material <kbd>⌘⌥1</kbd>, History <kbd>⌘⌥2</kbd>, Piece <kbd>⌘⌥3</kbd>). <kbd>⌘\\</kbd> collapses it, and the page re-centres.
 - **Status:** platform, voice profile, help ceiling and word count, shown only on hover at the bottom edge.
 
 ### Global shortcuts
@@ -49,12 +49,12 @@ Ekdanta has one main window and a small number of modes inside it. There are no 
 | <kbd>⌘T</kbd> | Thinking Space for this document |
 | <kbd>⌘.</kbd> | Focus mode |
 | <kbd>⌘\\</kbd> | Collapse or expand the right panel |
-| <kbd>⌘⌥1</kbd>–<kbd>⌘⌥3</kbd> | Right panel module: Material, Help, Piece |
+| <kbd>⌘⌥1</kbd>–<kbd>⌘⌥3</kbd> | Right panel module: Material, History, Piece |
 | <kbd>⌘P</kbd> / <kbd>⌘⇧F</kbd> | Quick open / search |
 | <kbd>⌘N</kbd> | New document |
 | <kbd>⌘,</kbd> | Settings |
 
-All shortcuts are remappable. In the browser build, the help levels move to <kbd>⌥1</kbd>–<kbd>⌥5</kbd> because browsers reserve <kbd>⌘1</kbd>–<kbd>⌘9</kbd> for tabs.
+All shortcuts are remappable. Some browsers keep <kbd>⌘1</kbd>–<kbd>⌘9</kbd> for switching tabs, so <kbd>⌥1</kbd>–<kbd>⌥5</kbd> always work too; Ekdanta notices which reaches it and labels shortcuts to match.
 
 ## Files on disk
 
@@ -81,7 +81,7 @@ my-vault/
 **Goal:** from a fresh install to writing in your own vault, in under two minutes. Import is optional and can run in the background.
 
 1. **Welcome.** One screen: "Ekdanta works on a folder of Markdown files you own." Two buttons: **Open an existing folder** (for example an Obsidian vault) and **Create a new vault**.
-2. **Model.** Choose a provider: Anthropic, OpenAI or Google (paste a key, stored in the system keychain), or Ollama (detected automatically if running). A **Skip for now** link leaves every help level disabled except Recall, which works offline on local embeddings.
+2. **Model.** Ekdanta looks for what's already there: a signed-in AI CLI (such as Claude Code), then an API key, then Ollama, and shows what it found. The writer can add an API key (stored in the system keychain) or change the choice. A **Skip for now** link leaves every help level disabled except Recall, which always works offline with its built-in embedding model.
 3. **Import (optional).** Pick sources: Google Docs (via a Google Takeout or Drive export), Word files, Google Keep, or "a folder of Markdown". Each shows what it expects, for example "Drop your Takeout .zip here".
 4. **Import runs in the background.** You land in the editor straight away, on a blank document or the vault's most recent file. A quiet progress line in the status area reads "Importing 214 documents… 38%".
 5. **Review platforms.** When the import finishes, a single review sheet lists the imported documents with a guessed platform (Essay, LinkedIn, Email, Text, Blog, Note) and original dates. You can correct the guesses in bulk, or click **Looks right**.
@@ -121,13 +121,13 @@ The general shape is the same at every level:
 1. **Ask.** Press the level's key. Help applies to the selection, or to the caret's word, sentence or paragraph if nothing is selected.
 2. **See.** The suggestion appears where your attention already is: at the cursor, or beside the paragraph. A small label always names the level ("⌘3 · Word").
 3. **Decide.** Accept, cycle to the next suggestion (press the same key again), or dismiss (<kbd>Esc</kbd>, or simply keep typing).
-4. **Recorded.** The request and your decision are added to the Help module, anchored to the paragraph.
+4. **Recorded.** The request and your decision are added to the History module, anchored to the paragraph.
 
 | Level | Typical moment | What you do |
 |---|---|---|
-| ⌘1 Recall | "I know I've written about this before." | Card under the line. <kbd>⌘↵</kbd> inserts a quote with its citation; "More" opens results in the Help module. |
+| ⌘1 Recall | "I know I've written about this before." | Card under the line. <kbd>⌘↵</kbd> inserts a quote with its citation; "More" opens results in the History module. |
 | ⌘2 Nudge | Stuck, but you don't want words put in your mouth. | One question beside the paragraph. Resolve it, or ask for another. |
-| ⌘3 Word | The word is almost right. | List of alternatives under the word. Arrows and <kbd>↵</kbd> to pick. |
+| ⌘3 Word | The word is almost right, or the next one won't come. | With a word selected, alternatives for it; with nothing selected, options for the next word. Arrows and <kbd>↵</kbd> to pick. |
 | ⌘4 Sentence | You know where the sentence goes but not how. | Ghost text after the caret (or an inline diff if a sentence is selected). <kbd>Tab</kbd> accepts. |
 | ⌘5 Passage | A paragraph needs reworking and you can say how. | Instruction bar ("make this less abstract"), then an inline diff (flow 5). |
 
@@ -180,5 +180,5 @@ The diff is always computed by code, word by word, from the original and the mod
 ## Open questions
 
 - **Exemplar shortcut:** is <kbd>⌘⇧8</kbd> (the ★ key on US layouts) discoverable enough, or should starring live only in the UI?
-- **Help history retention:** should resolved items in the Help module be cleared after a time, or kept for good as a record of how the piece was written?
+- **Help history retention:** should resolved items in the History module be cleared after a time, or kept for good as a record of how the piece was written?
 - **Thinking Space for short pieces:** emails and texts rarely need a canvas. Should ⌘T be hidden for those platforms, or simply never suggested?

@@ -158,7 +158,7 @@ Continuation text in `--ink-3`, same family and size as the prose, inline after 
 ### Panel module tabs
 Three 34 × 28 icon buttons with their shortcut beneath (`⌘⌥1`, 9.5px, `--ink-4`). The active tab gets `--accent-soft` and `--accent`. The collapse control sits at the far right.
 
-### Help item
+### History item
 `--page` card on `--chrome`, radius 9, no border. A `¶N` tag, the level and time, then the content and outcome. Hover adds a 1.5px `--accent-line` ring and tints the paragraph on the page.
 
 ### Fragment
