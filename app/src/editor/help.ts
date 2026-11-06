@@ -16,9 +16,7 @@ export interface RecallResult {
   score: number
 }
 
-export type Hunk =
-  | { kind: 'eq'; text: string }
-  | { kind: 'chg'; del: string; ins: string; state: 'pending' | 'accepted' | 'rejected' }
+export type Hunk = { kind: 'eq'; text: string } | { kind: 'chg'; del: string; ins: string; state: 'pending' | 'accepted' | 'rejected' }
 
 // Positions are document positions. `at` is where a card goes: just after the block the help is about.
 export type Help =
@@ -29,7 +27,7 @@ export type Help =
   | { kind: 'word'; level: 3; mode: 'replace' | 'next'; from: number; to: number; at: number; options: string[]; sel: number; seen: string[] }
   | { kind: 'ghost'; level: 4; from: number; to: number; at: number; text: string; seen: string[] }
   // A subject, title, excerpt or opening line drawn from the draft. Its card sits at the top of the page.
-  | { kind: 'edge'; level: 3; slot: EdgeSlot; from: number; to: number; at: number; options: EdgeCandidate[]; sel: number; seen: string[] }
+  | { kind: 'edge'; level: 3; slot: EdgeSlot; from: number; to: number; at: number; options: EdgeCandidate[]; sel: number; seen: string[]; note?: string }
   | { kind: 'bar'; level: 4 | 5; from: number; to: number; busy: boolean }
   | {
       kind: 'diff'
@@ -205,7 +203,7 @@ function buildDecorations(doc: PMNode, help: Help, d: Decoration[]) {
       break
     case 'edge':
       scope(help.from, help.to)
-      card(help.at, `edge-${help.slot}-${help.options.map((o) => o.text).join('|')}-${help.sel}`, () => edgeWidget(help), -1)
+      card(help.at, `edge-${help.slot}-${help.options.map((o) => o.text).join('|')}-${help.sel}-${help.note ?? ''}`, () => edgeWidget(help), -1)
       break
     case 'ghost':
       card(help.at, `ghost-${help.text}`, () => el('span', 'hl-ghost', help.text), 1)
@@ -374,9 +372,13 @@ function edgeWidget(help: Extract<Help, { kind: 'edge' }>) {
   const foot = el('div', 'hl-card-foot')
   const hints = el('span')
   hints.append(kbd('↑↓'), ' choose · ', kbd('↵'), ' use · ', kbd('Esc'))
-  const more = el('button', 'hl-link', help.slot === 'title' || help.slot === 'opening' ? `${helpMod}3 more` : 'More')
-  more.onmousedown = press(() => hooks?.moreEdge())
-  foot.append(hints, more)
+  // Once the draft has no more lines to offer, say so where 'more' was and keep these to choose from.
+  if (help.note) foot.append(hints, el('span', 'hl-meta', help.note))
+  else {
+    const more = el('button', 'hl-link', help.slot === 'title' || help.slot === 'opening' ? `${helpMod}3 more` : 'More')
+    more.onmousedown = press(() => hooks?.moreEdge())
+    foot.append(hints, more)
+  }
   list.append(foot)
   return list
 }
@@ -599,9 +601,7 @@ function commonTrailingSpace(a: string, b: string) {
 }
 
 export function changedRatio(original: string, hunks: Hunk[]) {
-  const changedWords = hunks
-    .filter((h): h is Hunk & { kind: 'chg' } => h.kind === 'chg')
-    .reduce((n, h) => n + h.del.split(/\s+/).filter(Boolean).length, 0)
+  const changedWords = hunks.filter((h): h is Hunk & { kind: 'chg' } => h.kind === 'chg').reduce((n, h) => n + h.del.split(/\s+/).filter(Boolean).length, 0)
   const total = original.split(/\s+/).filter(Boolean).length || 1
   return changedWords / total
 }

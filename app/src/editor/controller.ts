@@ -75,10 +75,7 @@ function insertPlain(tr: Transaction, from: number, to: number, text: string) {
   // Replaced text keeps its own formatting. New text between two runs gets only what both share,
   // so a word added after bold text isn't bold unless the text after it is too.
   const $from = tr.doc.resolve(from)
-  const marks =
-    to > from
-      ? (tr.doc.resolve(from + 1).marks() ?? [])
-      : $from.marks().filter((m) => (tr.doc.resolve(Math.min(to, tr.doc.content.size)).nodeAfter?.marks ?? []).some((n) => n.eq(m)))
+  const marks = to > from ? (tr.doc.resolve(from + 1).marks() ?? []) : $from.marks().filter((m) => (tr.doc.resolve(Math.min(to, tr.doc.content.size)).nodeAfter?.marks ?? []).some((n) => n.eq(m)))
   if (to > from) tr.delete(from, to)
   let pos = from
   text.split(/\n{2,}/).forEach((para, i) => {
@@ -119,7 +116,7 @@ export class HelpController {
       pickEdge: (i) => this.pickEdge(i),
       moreEdge: () => {
         const h = this.help
-        if (h?.kind === 'edge') this.fetchEdge(h.slot, [...h.seen, ...h.options.map((o) => o.text)])
+        if (h?.kind === 'edge' && !h.note) this.fetchEdge(h.slot, [...h.seen, ...h.options.map((o) => o.text)])
       },
       insertRecall: (i) => this.insertRecall(i),
       openSource: (doc) => this.opts.openDoc(doc),
@@ -149,6 +146,21 @@ export class HelpController {
   private set(help: Help | null) {
     window.clearTimeout(this.slowTimer)
     this.view.dispatch(setHelp(this.view.state.tr, help))
+    if (help && 'at' in help && help.at === 0) this.resyncCaret()
+  }
+
+  /**
+   * A card drawn at the very top of the page sits right before the caret when it's at the start of
+   * the text. Chrome keeps a stale caret after an uneditable block is drawn next to it and silently
+   * drops typing there, so set the same caret again once the card is on the page.
+   */
+  private resyncCaret() {
+    if (!this.view.hasFocus()) return
+    const sel = this.view.dom.ownerDocument.getSelection()
+    if (!sel || !sel.rangeCount || !this.view.dom.contains(sel.anchorNode)) return
+    const range = sel.getRangeAt(0).cloneRange()
+    sel.removeAllRanges()
+    sel.addRange(range)
   }
 
   private record(item: Omit<HistoryItem, 'at'>) {
@@ -182,10 +194,7 @@ export class HelpController {
       } else {
         this.ceilingPrompt = { level, at: Date.now() }
         const para = paragraphAt(state, sel.head)
-        const text =
-          this.opts.ceiling() === 0
-            ? 'Help is off · change the ceiling in the Piece panel'
-            : `Ceiling is ${this.opts.ceiling()} · press ${helpMod}${level} again to allow once`
+        const text = this.opts.ceiling() === 0 ? 'Help is off · change the ceiling in the Piece panel' : `Ceiling is ${this.opts.ceiling()} · press ${helpMod}${level} again to allow once`
         this.set({ kind: 'notice', from: para.from, to: para.to, at: para.after, text })
         return
       }
@@ -203,7 +212,9 @@ export class HelpController {
           : this.fetchWord(current.from, current.to, current.at, [...current.seen, ...current.options])
       if (current.kind === 'ghost') return this.fetchGhost(current.at, [...current.seen, current.text])
       // ⌘3 again asks for more titles or opening lines; a subject or excerpt card leaves ⌘3 in the text as it was.
-      if (current.kind === 'edge' && (current.slot === 'title' || current.slot === 'opening')) return this.fetchEdge(current.slot, [...current.seen, ...current.options.map((o) => o.text)])
+      // Once the draft is used up the card stays as it is, saying so.
+      if (current.kind === 'edge' && (current.slot === 'title' || current.slot === 'opening'))
+        return current.note ? undefined : this.fetchEdge(current.slot, [...current.seen, ...current.options.map((o) => o.text)])
       if (current.kind === 'nudge') return this.fetchNudge(current.from, current.to, current.history)
     }
 
@@ -222,7 +233,10 @@ export class HelpController {
     if (level === 4) {
       if (sel.empty) return this.fetchGhost(sel.head, [])
       const text = textOf(this.doc, sel.from, sel.to)
-      const sentences = text.trim().split(/(?<=[.!?])\s+/).filter(Boolean)
+      const sentences = text
+        .trim()
+        .split(/(?<=[.!?])\s+/)
+        .filter(Boolean)
       if (sentences.length > 1) return this.openBar(5, sel.from, sel.to)
       // A word or phrase selected: rewrite the whole sentence around it.
       const p = paragraphAt(state, sel.from)
@@ -290,6 +304,8 @@ export class HelpController {
     const from = para?.from ?? 0
     const to = para?.to ?? 0
     const label = edgeLabel(slot)
+    // Asking for more keeps the card that's open, in case the draft has nothing new to offer.
+    const shown = this.help?.kind === 'edge' && this.help.slot === slot ? this.help : null
     const id = ++this.seq
     this.set({ kind: 'loading', level: 3, from, to, at: 0, label })
     this.slowTimer = window.setTimeout(() => {
@@ -309,6 +325,7 @@ export class HelpController {
       if (data.error) throw new Error(data.error)
       if (data.kind === 'error') throw new Error(data.message)
       if (data.kind === 'empty') {
+        if (shown && seen.length) return this.set({ ...shown, note: data.message })
         this.record({ level: 3, from, outcome: 'empty', detail: `${EDGE_NAMES[slot]}: ${data.message}` })
         return this.set({ kind: 'notice', level: 3, from, to, at: 0, text: data.message, label })
       }

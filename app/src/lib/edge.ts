@@ -14,6 +14,8 @@ export const EDGE_NAMES: Record<EdgeSlot, string> = { subject: 'Subject', openin
 export const MIN_SENTENCES = 3
 
 export const NOTHING_FITS = 'Nothing short enough in your draft yet'
+/** Asked for more after every line the draft offers has been shown. */
+export const NO_MORE = 'No more lines in your draft'
 export const TOO_SHORT = 'Write a few sentences first · these are drawn from your draft'
 
 export interface EdgeCandidate {
@@ -49,11 +51,24 @@ export function titleHelp(level: number, sentences: number, ceiling: number, kin
   return { mode: 'body' }
 }
 
-/** The sentences of a plain-text draft: whole sentences of two words or more. */
+// Short forms whose full stop doesn't end a sentence ('Dr. Smith', 'e.g. this', 'J. Smith').
+const ABBREVIATION = /(?:^|[\s(])(?:Dr|Mr|Mrs|Ms|Mx|Prof|Sr|Jr|St|Mt|vs|e\.g|i\.e|\p{Lu})\.$/u
+
+// A line on its own that greets or signs off ('Hi Priya,', 'Thanks,', 'Best wishes,'): not a sentence.
+const SALUTATION = /^(?:\S+\s+){0,3}\S+,$/
+
+/** The sentences of a plain-text draft: whole sentences of two words or more, without greetings or sign-offs. */
 export function sentencesOf(text: string): string[] {
   return text
     .split(/\n+/)
-    .flatMap((line) => line.split(/(?<=[.!?…]["'”’)\]]*)\s+(?=\S)/))
+    .filter((line) => !SALUTATION.test(line.trim()))
+    .flatMap((line) =>
+      line.split(/(?<=[.!?…]["'”’)\]]*)\s+(?=\S)/).reduce<string[]>((acc, part) => {
+        if (acc.length && ABBREVIATION.test(acc[acc.length - 1])) acc[acc.length - 1] += ' ' + part
+        else acc.push(part)
+        return acc
+      }, []),
+    )
     .map((s) => s.trim())
     .filter((s) => s.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length >= 2)
 }
@@ -69,32 +84,42 @@ const normNumber = (n: string) => n.replace(/[\s,]/g, '').toLowerCase()
 
 /** Numbers in a candidate that don't appear in the draft, as written there ('$5M' needs '$5M', not just '5'). */
 export function inventedNumbers(text: string, draft: string): string[] {
-  const have = new Set((draft.match(NUMBER) ?? []).map(normNumber))
-  return (text.match(NUMBER) ?? []).filter((n) => !have.has(normNumber(n)))
+  const have = new Set((squash(draft).match(NUMBER) ?? []).map(normNumber))
+  return (squash(text).match(NUMBER) ?? []).filter((n) => !have.has(normNumber(n)))
 }
 
 // Words that are capitalised for grammar, not because they name anything.
 const COMMON = new Set(
   (
     'a an the and or but nor so yet for of in on at to by with from as into onto over under about after before ' +
-    "i i’m i'm me my we our us you your he she it its they them their this that these those what why how when where who which " +
+    "i i'm me my we our us you your he she it its they them their this that these those what why how when where who which " +
     'is are was were be been am do does did have has had will would can could should may might must not no yes ' +
     'here there if then than just only also every each all some any more most less one why'
   ).split(' '),
 )
 
 /** Capitalised words (names, places, products) in a candidate that the draft never mentions. */
+// Curly and straight apostrophes are the same letter: "Don’t" in a draft is "Don't" in a candidate.
 export function inventedNames(text: string, draft: string): string[] {
-  const words = new Set((draft.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? []).map((w) => w.replace(/['’]s$/, '')))
-  return (text.match(/\p{Lu}[\p{L}\p{N}'’-]*/gu) ?? []).filter((w) => {
-    const lower = w.toLowerCase().replace(/['’]s$/, '')
+  const words = new Set(
+    (
+      squash(draft)
+        .toLowerCase()
+        .match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu) ?? []
+    ).map((w) => w.replace(/'s$/, '')),
+  )
+  return (squash(text).match(/\p{Lu}[\p{L}\p{N}'-]*/gu) ?? []).filter((w) => {
+    const lower = w.toLowerCase().replace(/'s$/, '')
     return !COMMON.has(lower) && !words.has(lower)
   })
 }
 
 /** Tidy a model's line for its slot: no wrapping quotes, no label, one line, no full stop after a title. */
 export function cleanLine(text: string, slot: EdgeSlot) {
-  let t = squash(text.replace(/^(subject|title|excerpt|opening line|headline)\s*:\s*/i, ''))
+  let t = text
+    .replace(/^\s*(subject|title|excerpt|opening line|headline)\s*:\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
   t = t.replace(/^["'“‘](.*)["'”’]$/s, '$1').trim()
   if (slot === 'title' || slot === 'subject') t = t.replace(/(?<!\.)\.$/, '')
   return t
@@ -124,10 +149,29 @@ export function guardCandidates(raw: unknown, draft: string, slot: EdgeSlot, opt
     if (!inDraft(source, draft)) continue
     if (inventedNumbers(t, draft).length || inventedNames(t, draft).length) continue
     seen.add(key)
-    out.push({ text: t, source: squash(source) })
+    out.push({ text: inWritersQuotes(t, draft), source: asWritten(source, draft) })
     if (out.length === 5) break
   }
   return out
+}
+
+const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/** A sentence exactly as the draft has it (its quotes and spacing), not as the model copied it. */
+export function asWritten(source: string, draft: string) {
+  const pattern = squash(source)
+    .split('')
+    .map((ch) => (ch === "'" ? "['‘’]" : ch === '"' ? '["“”]' : ch === ' ' ? '\\s+' : escape(ch)))
+    .join('')
+  return draft.match(new RegExp(pattern))?.[0] ?? squash(source)
+}
+
+/** Apostrophes and quotes in the writer's style: a draft typed with curly ones gets curly ones back. */
+export function inWritersQuotes(line: string, draft: string) {
+  let t = line
+  if (/’/.test(draft) && !/(\p{L})'(\p{L})/u.test(draft)) t = t.replace(/(\p{L})'(\p{L})/gu, '$1’$2')
+  if (/[“”]/.test(draft) && !/"/.test(draft)) t = t.replace(/"([^"]*)"/g, '“$1”')
+  return t
 }
 
 /**
@@ -148,6 +192,6 @@ export function openingEdit(firstParagraph: string, line: string, source: string
 
 /** A short version of a source sentence for the faint 'from: …' line. */
 export function fromLine(source: string, max = 90) {
-  const s = squash(source)
+  const s = source.replace(/\s+/g, ' ').trim()
   return s.length > max ? s.slice(0, max - 1).replace(/\s+\S*$/, '') + '…' : s
 }

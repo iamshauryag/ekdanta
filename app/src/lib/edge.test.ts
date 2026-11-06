@@ -1,6 +1,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EDGE_LIMITS, cleanLine, fieldSlot, fromLine, guardCandidates, inDraft, inventedNames, inventedNumbers, openingEdit, sentencesOf, showSuggestLink, titleHelp, titleSlot } from './edge.ts'
+import {
+  EDGE_LIMITS,
+  asWritten,
+  cleanLine,
+  fieldSlot,
+  fromLine,
+  guardCandidates,
+  inDraft,
+  inWritersQuotes,
+  inventedNames,
+  inventedNumbers,
+  openingEdit,
+  sentencesOf,
+  showSuggestLink,
+  titleHelp,
+  titleSlot,
+} from './edge.ts'
 
 const DRAFT = `We shipped the new onboarding last Tuesday. Signups went up 40% in a week. Maria from support caught the bug that had blocked half of them.
 
@@ -135,4 +151,26 @@ test('fromLine shortens long sources on a word boundary', () => {
   assert.equal(fromLine('Short one.'), 'Short one.')
   const s = fromLine('word '.repeat(40), 30)
   assert.ok(s.length <= 30 && s.endsWith('…'))
+})
+
+test('curly apostrophes in the draft don’t make a contraction look like an invented name', () => {
+  const draft = 'I’ve kept a notebook for years. Don’t throw out the bad pages. We’re all slower than we think. It’s fine to start small.'
+  assert.deepEqual(inventedNames("Don't throw out the bad pages", draft), [])
+  assert.deepEqual(inventedNames('We’re all slower', "We're all slower than we think."), [])
+  const raw = sentencesOf(draft.replace(/’/g, "'")).map((s) => ({ text: s.replace(/\.$/, ''), source: s }))
+  const got = guardCandidates(raw, draft, 'opening')
+  assert.equal(got.length, 4)
+  // The writer's own apostrophes come back, in the line and in its source.
+  assert.equal(got[1].text, 'Don’t throw out the bad pages')
+  assert.equal(got[1].source, 'Don’t throw out the bad pages.')
+  assert.equal(asWritten('"It works," she said.', 'He waved. “It works,”  she said. Then.'), '“It works,”  she said.')
+  assert.equal(inWritersQuotes("Don't stop", 'plain straight draft'), "Don't stop")
+})
+
+test('greetings, sign-offs and abbreviations don’t make sentences', () => {
+  const email = 'Hi Priya,\n\nWe met Dr. Smith on Monday. She liked the plan.\n\nThanks,\nSam'
+  assert.deepEqual(sentencesOf(email), ['We met Dr. Smith on Monday.', 'She liked the plan.'])
+  assert.deepEqual(sentencesOf('Ask e.g. a friend first. Then wait.'), ['Ask e.g. a friend first.', 'Then wait.'])
+  // A line of four words or fewer ending in a comma is a greeting; a longer one is still prose.
+  assert.equal(sentencesOf('When I started this job, I thought I knew everything,').length, 1)
 })

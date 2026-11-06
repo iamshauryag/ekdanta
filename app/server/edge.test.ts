@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 process.env.EKDANTA_FAKE_MODEL = '1'
 const { runEdge, fakeCandidates } = await import('./edge.ts')
-const { NOTHING_FITS, TOO_SHORT, inDraft } = await import('../src/lib/edge.ts')
+const { NOTHING_FITS, NO_MORE, TOO_SHORT, inDraft } = await import('../src/lib/edge.ts')
 
 const EMAIL = `Thanks for meeting with us on Monday. We went through the pilot results with the whole team. The numbers held up across all three sites. We would like to start the rollout in March. Could you confirm the contract terms by Friday?`
 
@@ -30,7 +30,15 @@ test('asking again leaves out what was shown; when nothing is left, it says so',
   const again = await runEdge({ slot: 'opening', text: EMAIL, kind: 'linkedin', avoid: first.candidates.map((c) => c.text) })
   if (again.kind === 'edge') assert.ok(!again.candidates.some((c) => first.candidates.some((f) => f.text === c.text)))
   const all = fakeCandidates(EMAIL).map((c) => c.text.replace(/[.!]$/, ''))
-  assert.deepEqual(await runEdge({ slot: 'opening', text: EMAIL, avoid: all }), { kind: 'empty', message: NOTHING_FITS })
+  assert.deepEqual(await runEdge({ slot: 'opening', text: EMAIL, avoid: all }), { kind: 'empty', message: NO_MORE })
+})
+
+test('when every line is too long for the slot, it says nothing fits', async () => {
+  const long = 'Extraordinarily considerable organisational responsibilities overwhelmingly characterised everything yesterday afternoon.'
+  assert.deepEqual(await runEdge({ slot: 'subject', text: [long, long.replace('yesterday', 'tomorrow'), long.replace('afternoon', 'evening')].join(' ') }), {
+    kind: 'empty',
+    message: NOTHING_FITS,
+  })
 })
 
 test('an unknown slot falls back to a title', async () => {

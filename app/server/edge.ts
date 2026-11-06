@@ -2,7 +2,7 @@
 // The model proposes; the code guards in src/lib/edge.ts decide what the writer sees.
 import { settingsNow } from './settings.ts'
 import { describeKind } from '../src/lib/kinds.ts'
-import { EDGE_LIMITS, MIN_SENTENCES, NOTHING_FITS, TOO_SHORT, guardCandidates, sentencesOf, type EdgeCandidate, type EdgeSlot } from '../src/lib/edge.ts'
+import { EDGE_LIMITS, MIN_SENTENCES, NOTHING_FITS, NO_MORE, TOO_SHORT, guardCandidates, sentencesOf, type EdgeCandidate, type EdgeSlot } from '../src/lib/edge.ts'
 
 export interface EdgeRequest {
   slot: EdgeSlot
@@ -45,10 +45,12 @@ export async function runEdge(req: EdgeRequest): Promise<EdgeResponse> {
   const text = String(req.text ?? '').slice(0, 12000)
   if (sentencesOf(text).length < MIN_SENTENCES) return { kind: 'empty', message: TOO_SHORT }
   const opts = { avoid: req.avoid, current: req.current }
+  // Nothing new after lines were already shown means the draft is used up, not that nothing fits.
+  const none = (): EdgeResponse => ({ kind: 'empty', message: req.avoid?.length ? NO_MORE : NOTHING_FITS })
 
   if (process.env.EKDANTA_FAKE_MODEL) {
     const candidates = guardCandidates(fakeCandidates(text), text, slot, opts)
-    return candidates.length ? { kind: 'edge', candidates, provider: 'fake' } : { kind: 'empty', message: NOTHING_FITS }
+    return candidates.length ? { kind: 'edge', candidates, provider: 'fake' } : none()
   }
 
   // Loaded only when a real model answers (ai.ts pulls in the Claude session pool).
@@ -78,5 +80,5 @@ Return JSON: {"candidates": [{"text": "...", "source": "the exact sentence from 
     candidates = [...candidates, ...more].slice(0, 5)
     avoid.push(...more.map((c) => c.text))
   }
-  return candidates.length ? { kind: 'edge', candidates, provider: s.strong } : { kind: 'empty', message: NOTHING_FITS }
+  return candidates.length ? { kind: 'edge', candidates, provider: s.strong } : none()
 }
