@@ -49,6 +49,7 @@ const COMMAND_LIST = [
   { id: 'piece', label: 'Panel: Piece', group: 'App', key: 'Ctrl-Alt-4' },
   { id: 'brief', label: 'Pin a brief', group: 'App', key: '' },
   { id: 'settings', label: 'Settings', group: 'App', key: 'Alt-,' },
+  { id: 'readAloud', label: 'Read aloud', group: 'App', key: '' },
 ] as const satisfies readonly Command[]
 
 export const COMMANDS: Command[] = [...COMMAND_LIST]

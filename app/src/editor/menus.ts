@@ -21,6 +21,8 @@ interface Item {
   keywords?: string
   /** The remappable command it runs, whose key is shown too. */
   cmd?: string
+  /** Left out of the menu when this says so (a feature the browser can't do). */
+  hidden?: () => boolean
   run: (editor: Editor, range: Range) => void
 }
 
@@ -84,12 +86,26 @@ export const SLASH: Item[] = [
     run: (e, r) => e.chain().focus().deleteRange(r).insertContent('[[').run(),
   },
   { label: "Today's date", keywords: 'date now today', section: 'Insert', run: (e, r) => e.chain().focus().deleteRange(r).insertContent(today()).run() },
+  {
+    label: 'Read aloud',
+    cmd: 'readAloud',
+    detail: 'from here',
+    keywords: 'listen speak voice hear tts proofread',
+    section: 'Listen',
+    // Only when the browser has a voice to read with.
+    hidden: () => !(typeof window !== 'undefined' && window.speechSynthesis?.getVoices().length),
+    run: (e, r) => {
+      e.chain().focus().deleteRange(r).run()
+      window.dispatchEvent(new Event('ekdanta:read-aloud'))
+    },
+  },
 ]
 
 /** Match on keywords as well as names ("/h1", "/todo", "/hr"). */
 function filterSlash(query: string) {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   return SLASH.filter((item) => {
+    if (item.hidden?.()) return false
     const hay = `${item.label} ${item.keywords ?? ''}`.toLowerCase().split(/\s+/)
     return words.every((w) => hay.some((h) => h.startsWith(w)))
   })

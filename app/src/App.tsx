@@ -17,6 +17,7 @@ import { Icon } from './components/Icon.tsx'
 import { helpMod } from './editor/help.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
+import { READ_WPM, readingTimes } from './lib/sentences.ts'
 
 function usePref<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(() => {
@@ -572,6 +573,7 @@ export function App() {
       history: () => openTab('history'),
       piece: () => openTab('piece'),
       brief: () => void (docRef.current && pinBrief(docRef.current.path)),
+      readAloud: () => (livePreview ? window.dispatchEvent(new Event('ekdanta:read-aloud')) : notify('Read aloud works on the page, not in the Markdown view')),
     }
     const onKey = (e: KeyboardEvent) => {
       if (focus && e.key === 'Escape' && !document.querySelector('.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost')) return setFocus(false)
@@ -586,7 +588,7 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, save, newDraft, setPanelOpen, setPanelTab, files, thinkingOpen])
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab, files, thinkingOpen, livePreview, notify])
 
   const current = files.find((f) => f.path === path)
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
@@ -754,6 +756,8 @@ export function App() {
                 onEditor={setEditor}
                 onFormat={setFormat}
                 onOutline={setOutline}
+                lang={() => docRef.current?.meta.lang}
+                onReadUnavailable={() => notify('This browser has no voices to read aloud with. Settings → Writing explains.')}
               />
             ) : (
               <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} />
@@ -819,8 +823,11 @@ export function App() {
 
       <footer className="statusbar">
         <span>
-          {platformLabel(platform)} · Ceiling {ceiling} · {format?.selectedWords ? `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words` : `${words.toLocaleString()} words`}
-          {words >= 60 && ` · ${Math.max(1, Math.round(words / 230))} min read`}
+          {platformLabel(platform)} · Ceiling {ceiling} ·{' '}
+          <span className="word-count" title={readingTimes(format?.selectedWords || words) || undefined}>
+            {format?.selectedWords ? `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words` : `${words.toLocaleString()} words`}
+            {words >= 60 && ` · ${Math.max(1, Math.round(words / READ_WPM))} min read`}
+          </span>
         </span>
         <span className="muted">
           {mod}1 Recall · {mod}2 Nudge · {mod}3 Word · {mod}4 Sentence · {mod}5 Passage

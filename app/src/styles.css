@@ -3039,3 +3039,95 @@ button.keymap-key:hover {
 .brief-input:focus {
   border-color: var(--accent-line);
 }
+
+/* feature: read-aloud */
+.pm .read-now {
+  background: var(--accent-soft);
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition: background 0.15s;
+}
+/* Focus mode dims the other paragraphs; the one being read stays lit. */
+.app.is-focus:not(.no-para-focus) .pm > .is-reading {
+  opacity: 1;
+}
+.read-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 44px;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  color: var(--ink-2);
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font: 500 12px var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.read-bar button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--ink-2);
+}
+.read-bar button:hover:not(:disabled) {
+  background: var(--chrome-2);
+  color: var(--ink);
+}
+.read-bar button:disabled {
+  opacity: 0.35;
+}
+.read-bar svg,
+.fmt-bar .is-read svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.read-bar .read-play svg path,
+.read-bar rect {
+  fill: currentColor;
+}
+.read-bar .read-play svg path[d^='M5 3.5'] {
+  fill: none;
+  stroke-width: 2;
+}
+.read-count {
+  padding: 0 8px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.read-online {
+  padding: 2px 8px 2px 0;
+  color: var(--ink-3);
+  font-weight: 400;
+  white-space: nowrap;
+}
+.fmt-bar .is-read {
+  display: grid;
+  place-items: center;
+}
+.read-speed {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.select.read-voice {
+  max-width: 260px;
+}
+@media (max-width: 600px) {
+  .read-bar {
+    bottom: 16px;
+  }
+}

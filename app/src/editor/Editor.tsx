@@ -12,6 +12,8 @@ import { helpKey, helpOf, helpPlugin, noteCmdWorks, paragraphAt, textOf, type He
 import { parseMarkdown, serializeMarkdown, type Source } from './markdown.ts'
 import { PageLinkMenu, SlashMenu, type PageRef } from './menus.ts'
 import { extensions, resolver } from './schema.ts'
+import { readAloudPlugin } from './readAloud.ts'
+import { ReadAloudBar, canReadAloud, readAloud, useReadAloud } from '../components/ReadAloudBar.tsx'
 import { replaceAll, replaceCurrent, searchPlugin, searchState, setSearch, step } from './search.ts'
 
 export interface Heading {
@@ -53,6 +55,10 @@ interface Props {
   onEditor?: (editor: TiptapEditor | null) => void
   onFormat?: (f: EditorFormat) => void
   onOutline?: (h: Heading[]) => void
+  /** The document's language (front matter `lang`), so read-aloud picks a voice for it. */
+  lang?: () => string | undefined
+  /** Read aloud was asked for, but this browser has no voices to read with. */
+  onReadUnavailable?: () => void
 }
 
 /** Which help level a keydown asks for: ⌥1–⌥5 everywhere, ⌘1–⌘5 where the browser allows it. */
@@ -102,7 +108,10 @@ export function Editor(props: Props) {
   const [find, setFind] = useState(false)
   const [link, setLink] = useState<{ href: string; x: number; y: number } | null>(null)
 
-  resolver.pageTitle = (target) => p().pages().find((pg) => pg.target === target || pg.target.split('/').pop() === target)?.title
+  resolver.pageTitle = (target) =>
+    p()
+      .pages()
+      .find((pg) => pg.target === target || pg.target.split('/').pop() === target)?.title
   resolver.assetUrl = (src) => p().assetUrl(src)
 
   // Made once per document: new options on every render would make the editor reconfigure itself,
@@ -115,7 +124,7 @@ export function Editor(props: Props) {
           name: 'ekdanta',
           // Ahead of every other key handler: help first, then the writer's own shortcuts.
           priority: 1000,
-          addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), currentBlock, new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
+          addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), currentBlock, readAloudPlugin(), new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
         }),
         SlashMenu,
         PageLinkMenu.configure({ pages: () => p().pages() }),
@@ -178,6 +187,7 @@ export function Editor(props: Props) {
     [props.docKey],
   )
   const editor = useEditor(options, [props.docKey])
+  const reading = useReadAloud(editor, { lang: () => p().lang?.(), onUnavailable: () => p().onReadUnavailable?.() })
 
   // Everything is tied to the editor actually on the page. (In development React mounts components
   // twice, so an editor created first may already be gone.)
@@ -350,11 +360,12 @@ export function Editor(props: Props) {
         shouldShow={({ editor: ed, state }) => !state.selection.empty && ed.isFocused && !helpOf(state) && !(state.selection instanceof NodeSelection) && !ed.isActive('codeBlock')}
         options={{ placement: 'top', offset: 8 }}
       >
-        <SelectionBar editor={editor} />
+        <SelectionBar editor={editor} canRead={canReadAloud(reading.voices)} />
       </BubbleMenu>
       <EditorContent editor={editor} />
       <LinkCard editor={editor} onEdit={(href, x, y) => setLink({ href, x, y })} openPage={(t) => p().openPage(t)} />
       {link && <LinkEditor editor={editor} at={link} onClose={() => setLink(null)} />}
+      <ReadAloudBar state={reading.state} reader={reading.reader.current} online={reading.online} />
     </div>
   )
 }
@@ -382,7 +393,7 @@ const BAR: { label: string; name: string; id: string; mark: Mark; cls: string }[
   { label: 'Link', name: 'Link', id: 'link', mark: 'link', cls: 'is-link' },
 ]
 
-function SelectionBar({ editor }: { editor: TiptapEditor }) {
+function SelectionBar({ editor, canRead }: { editor: TiptapEditor; canRead: boolean }) {
   useEditorTick(editor)
   const on = marksOf(editor)
   return (
@@ -400,6 +411,21 @@ function SelectionBar({ editor }: { editor: TiptapEditor }) {
           {b.label}
         </button>
       ))}
+      {canRead && (
+        <button
+          className="is-read"
+          title={titled('Read aloud', 'readAloud')}
+          aria-label="Read aloud"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            readAloud()
+          }}
+        >
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M2.5 6v4h2.5l3.5 3V3L5 6zM11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.6a6 6 0 0 1 0 8.8" />
+          </svg>
+        </button>
+      )}
     </div>
   )
 }
@@ -472,7 +498,10 @@ function LinkEditor({ editor, at, onClose }: { editor: TiptapEditor; at: { href:
         const text = editor.state.doc.textBetween(from, to)
         const lead = text.length - text.trimStart().length
         const trail = text.length - text.trimEnd().length
-        chain.setTextSelection({ from: from + lead, to: to - trail }).setLink({ href: full }).run()
+        chain
+          .setTextSelection({ from: from + lead, to: to - trail })
+          .setLink({ href: full })
+          .run()
       }
     }
     onClose()
