@@ -12,6 +12,8 @@ export interface Command {
   key: string
 }
 
+export const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
+
 const COMMAND_LIST = [
   { id: 'bold', label: 'Bold', group: 'Text', key: 'Mod-b' },
   { id: 'italic', label: 'Italic', group: 'Text', key: 'Mod-i' },
@@ -48,13 +50,14 @@ const COMMAND_LIST = [
   { id: 'history', label: 'Panel: History', group: 'App', key: 'Ctrl-Alt-3' },
   { id: 'piece', label: 'Panel: Piece', group: 'App', key: 'Ctrl-Alt-4' },
   { id: 'settings', label: 'Settings', group: 'App', key: 'Alt-,' },
+  // ⌘⇧I on a Mac; elsewhere Ctrl+Shift+I opens the browser's developer tools, so Ctrl+Alt+I.
+  { id: 'captureIdea', label: 'Capture idea', group: 'App', key: isMac ? 'Mod-Shift-i' : 'Mod-Alt-i' },
+  { id: 'ideas', label: 'Ideas', group: 'App', key: '' },
 ] as const satisfies readonly Command[]
 
 export const COMMANDS: Command[] = [...COMMAND_LIST]
 /** Every command's id, so a typo in App's action map is a type error. */
 export type CommandId = (typeof COMMAND_LIST)[number]['id']
-
-export const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
 // ---- The bindings in use: defaults, with the writer's changes on top ----------------------------
 
@@ -174,6 +177,8 @@ const RESERVED_MAC: Record<string, string> = {
   'Mod-p': 'prints the page',
 }
 const RESERVED_OTHER: Record<string, string> = {
+  'Mod-Shift-i': 'opens developer tools',
+  'Mod-Shift-j': 'opens developer tools',
   'Mod-w': 'closes the tab',
   'Mod-t': 'opens a browser tab',
   'Mod-n': 'opens a browser window',

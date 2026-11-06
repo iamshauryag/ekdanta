@@ -11,6 +11,7 @@ import { HelpController, type HistoryItem } from './controller.ts'
 import { helpKey, helpOf, helpPlugin, noteCmdWorks, paragraphAt, textOf, type Help, type Level } from './help.ts'
 import { parseMarkdown, serializeMarkdown, type Source } from './markdown.ts'
 import { PageLinkMenu, SlashMenu, type PageRef } from './menus.ts'
+import { promptPlugin } from './prompts.ts'
 import { extensions, resolver } from './schema.ts'
 import { replaceAll, replaceCurrent, searchPlugin, searchState, setSearch, step } from './search.ts'
 
@@ -115,7 +116,7 @@ export function Editor(props: Props) {
           name: 'ekdanta',
           // Ahead of every other key handler: help first, then the writer's own shortcuts.
           priority: 1000,
-          addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), currentBlock, new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
+          addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), promptPlugin(), currentBlock, new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
         }),
         SlashMenu,
         PageLinkMenu.configure({ pages: () => p().pages() }),

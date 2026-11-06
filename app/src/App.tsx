@@ -14,6 +14,10 @@ import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
+import { MoreMenu } from './components/MoreMenu.tsx'
+import { CaptureBox } from './components/CaptureBox.tsx'
+import { IdeasPage } from './components/IdeasPage.tsx'
+import { IDEAS_FILE } from './lib/special.ts'
 import { helpMod } from './editor/help.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
@@ -71,6 +75,10 @@ export function App() {
   const [voices, setVoices] = useState<VoiceSummary[]>([])
   const [voiceView, setVoiceView] = useState<string | null>(null) // a platform whose profile fills the page
   const refreshVoices = useCallback(() => api.voice().then(setVoices), [])
+  // Ideas: the full-page list, the one-line capture box, and a counter that tells the list to re-read.
+  const [ideasView, setIdeasView] = useState(false)
+  const [captureOpen, setCaptureOpen] = useState(false)
+  const [ideasVersion, setIdeasVersion] = useState(0)
   const [trash, setTrash] = useState<Trashed[]>([])
   const refreshTrash = useCallback(() => api.trash().then(setTrash), [])
   const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null)
@@ -196,6 +204,7 @@ export function App() {
       }
       setFresh((f) => (f === next ? f : null))
       setVoiceView(null)
+      setIdeasView(false)
       setPath(next)
     },
     [save, refreshFiles, setPath],
@@ -340,7 +349,41 @@ export function App() {
 
   const openVoice = (platform: string) => {
     refreshVoices()
+    setIdeasView(false)
     setVoiceView(platform)
+  }
+
+  const openIdeas = () => {
+    setVoiceView(null)
+    setIdeasView(true)
+  }
+
+  /** Add an idea to ideas.md. If ideas.md is the open page, it's saved first and re-read after, so neither edit is lost. */
+  const captureIdea = async (text: string) => {
+    const d = docRef.current
+    const isOpen = d?.path.toLowerCase() === IDEAS_FILE
+    if (isOpen && saveTimer.current !== undefined) await save()
+    const { added } = await api.captureIdea(text)
+    if (isOpen && added && docRef.current === d) {
+      const { meta, body, raw } = splitFrontMatter(await api.read(d.path))
+      docRef.current = { path: d.path, meta, body, rawMeta: raw }
+      setLoaded({ ...docRef.current, key: `${d.path}#${Date.now()}` })
+    }
+    if (added && !files.some((f) => f.path.toLowerCase() === IDEAS_FILE)) refreshFiles()
+    setIdeasVersion((v) => v + 1)
+    notify(added ? 'Saved to Ideas' : 'Already in Ideas today')
+  }
+
+  /** Begin a piece of a kind from an idea, and open it with the caret in its title. */
+  const startIdea = async (text: string, kind: string) => {
+    try {
+      const { path: rel } = await api.startIdea(text, kind)
+      await refreshFiles()
+      setFresh(rel)
+      await openDoc(rel)
+    } catch (e) {
+      notify(`Couldn't start it: ${(e as Error).message}`)
+    }
   }
 
   const showSidebar = (mode: SidebarMode) => {
@@ -493,6 +536,8 @@ export function App() {
       outline: () => openTab('outline'),
       history: () => openTab('history'),
       piece: () => openTab('piece'),
+      captureIdea: () => setCaptureOpen((o) => !o),
+      ideas: () => openIdeas(),
     }
     const onKey = (e: KeyboardEvent) => {
       if (focus && e.key === 'Escape' && !document.querySelector('.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost')) return setFocus(false)
@@ -534,6 +579,12 @@ export function App() {
     },
     [files, openDoc, refreshFiles],
   )
+
+  // The rail's ⋯ More menu: things that don't need a button of their own.
+  const moreItems = [
+    { id: 'ideas', label: 'Ideas', run: openIdeas },
+    { id: 'captureIdea', label: 'Capture idea', run: () => setCaptureOpen(true) },
+  ]
 
   /** Images are linked relative to the document, and served from the vault. */
   const assetUrl = useCallback((src: string) => {
@@ -605,6 +656,7 @@ export function App() {
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'voice' ? ' is-on' : ''}`} title="Voice" onClick={() => showSidebar('voice')}>
           <Icon name="voice" />
         </button>
+        <MoreMenu items={moreItems} />
         <div className="rail-spacer" />
         <button className="rail-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
           <Icon name="focus" />
@@ -621,7 +673,7 @@ export function App() {
           voices={voices}
           voiceView={voiceView}
           onVoice={openVoice}
-          current={voiceView ? null : path}
+          current={voiceView || ideasView ? null : path}
           onOpen={openDoc}
           onCreate={newDraft}
           onStar={toggleExemplar}
@@ -633,8 +685,9 @@ export function App() {
 
       <main className="page-area">
         {voiceView && <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />}
-        {loaded && !voiceView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={setLivePreview} />}
-        {loaded && !voiceView && (
+        {ideasView && !voiceView && <IdeasPage version={ideasVersion} onCapture={captureIdea} onStart={startIdea} onOpenDoc={openDoc} />}
+        {loaded && !voiceView && !ideasView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={setLivePreview} />}
+        {loaded && !voiceView && !ideasView && (
           <div className="page">
             <div className="doc-meta">
               <label className="platform">
@@ -728,6 +781,7 @@ export function App() {
           )}
         </div>
       )}
+      {captureOpen && <CaptureBox onCapture={captureIdea} onClose={() => setCaptureOpen(false)} />}
       {thinkingOpen && loaded && <ThinkingSpace doc={loaded.path} title={title} onClose={closeThinking} />}
 
       {settingsOpen && settings && <Settings settings={settings} status={status} onChange={changeSettings} onClose={() => setSettingsOpen(false)} />}

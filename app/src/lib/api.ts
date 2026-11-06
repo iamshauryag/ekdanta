@@ -7,6 +7,8 @@ export interface FileEntry {
   platform?: string
   exemplar: boolean
   mtime: number
+  /** The idea this piece was started from. */
+  fromIdea?: string
 }
 
 export interface Status {
@@ -89,6 +91,15 @@ export interface Thinking {
 }
 type Frag = { id: string; text: string }
 
+export interface IdeaRow {
+  text: string
+  /** As written after it in ideas.md: "6 Nov 2026". */
+  date?: string
+  starred: boolean
+  /** The newest piece started from it, while that piece exists. */
+  started?: { path: string; title: string }
+}
+
 async function json<T>(r: Response): Promise<T> {
   const data = await r.json()
   if (!r.ok) throw new Error((data as { error?: string }).error ?? r.statusText)
@@ -135,8 +146,7 @@ export const api = {
       .then((d) => d.content),
   thinking: (doc: string) => fetch('/api/thinking?doc=' + encodeURIComponent(doc)).then(json<Thinking>),
   saveThinking: (doc: string, t: Thinking) => fetch('/api/thinking', send('PUT', { doc, ...t })).then(json),
-  thinkingLinks: (fragments: Frag[], skip: string[]) =>
-    fetch('/api/thinking/links', send('POST', { fragments, skip })).then(json<{ links: { from: string; to: string; label: string }[] }>),
+  thinkingLinks: (fragments: Frag[], skip: string[]) => fetch('/api/thinking/links', send('POST', { fragments, skip })).then(json<{ links: { from: string; to: string; label: string }[] }>),
   thinkingClusters: (fragments: Frag[]) => fetch('/api/thinking/clusters', send('POST', { fragments })).then(json<{ clusters: { label: string; ids: string[] }[] }>),
   thinkingRecall: (doc: string, fragments: Frag[], taken: string[]) =>
     fetch('/api/thinking/recall', send('POST', { doc, fragments, taken })).then(json<{ chips: Record<string, { doc: string; title: string; folder: string } | null> }>),
@@ -144,5 +154,9 @@ export const api = {
     fetch('/api/thinking/material', send('POST', { doc, fragments, paragraph })).then(json<{ covered: string[]; nearest: string | null }>),
   history: (doc: string) => fetch('/api/history?doc=' + encodeURIComponent(doc)).then(json<unknown[]>),
   appendHistory: (doc: string, item: unknown) => fetch('/api/history', send('POST', { doc, item })).then(json),
+  ideas: () => fetch('/api/ideas').then(json<{ exists: boolean; ideas: IdeaRow[] }>),
+  captureIdea: (text: string) => fetch('/api/ideas', send('POST', { text })).then(json<{ added: boolean; text: string; date: string }>),
+  starIdea: (text: string, starred: boolean) => fetch('/api/ideas/star', send('POST', { text, starred })).then(json<{ starred: boolean }>),
+  startIdea: (text: string, kind: string) => fetch('/api/ideas/start', send('POST', { text, kind })).then(json<{ path: string }>),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),
 }

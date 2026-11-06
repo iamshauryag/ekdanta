@@ -17,6 +17,8 @@ export interface FileEntry {
   platform?: string
   exemplar: boolean
   mtime: number
+  /** The idea from ideas.md this piece was started from (front matter `from-idea`). */
+  fromIdea?: string
 }
 
 /** Resolve a vault-relative path, refusing anything that escapes the vault. */
@@ -36,6 +38,7 @@ const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
     platform: meta.platform,
     exemplar: meta.exemplar === 'true',
     mtime: stat.mtime,
+    ...(meta['from-idea']?.trim() ? { fromIdea: meta['from-idea'] } : {}),
   }
 })
 
