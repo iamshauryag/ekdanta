@@ -7,6 +7,7 @@ import {
   changedRatio,
   computeHunks,
   dotOf,
+  edgeLabel,
   helpKey,
   helpMod,
   helpOf,
@@ -21,6 +22,8 @@ import {
   type Level,
   type RecallResult,
 } from './help.ts'
+import { EDGE_NAMES, openingEdit, sentencesOf, titleHelp, type EdgeCandidate, type EdgeSlot } from '../lib/edge.ts'
+import { isPromptParagraph } from '../lib/special.ts'
 
 export interface HistoryItem {
   level: Level
@@ -38,6 +41,10 @@ export interface ControllerOptions {
   ceiling: () => number
   record: (item: HistoryItem) => void
   openDoc: (path: string) => void
+  /** What a title, subject or excerpt says now, so edge lines don't offer it back. */
+  edgeCurrent?: (slot: EdgeSlot) => string
+  /** Use an accepted title, subject or excerpt (an opening line is proposed on the page instead). */
+  acceptEdge?: (slot: EdgeSlot, text: string) => void
 }
 
 type Resp =
@@ -48,6 +55,8 @@ type Resp =
   | { kind: 'rewrite'; text: string }
   | { kind: 'empty'; message: string }
   | { kind: 'error'; message: string }
+
+type EdgeResp = { kind: 'edge'; candidates: EdgeCandidate[] } | { kind: 'empty'; message: string } | { kind: 'error'; message: string; error?: string }
 
 const EMPTY_MESSAGES: Record<Level, string> = {
   1: 'Nothing in your vault on this yet',
@@ -107,6 +116,11 @@ export class HelpController {
       runInstruction: (t) => this.runInstruction(t),
       dismiss: () => this.dismiss(),
       pickWord: (i) => this.pickWord(i),
+      pickEdge: (i) => this.pickEdge(i),
+      moreEdge: () => {
+        const h = this.help
+        if (h?.kind === 'edge') this.fetchEdge(h.slot, [...h.seen, ...h.options.map((o) => o.text)])
+      },
       insertRecall: (i) => this.insertRecall(i),
       openSource: (doc) => this.opts.openDoc(doc),
       resolveNudge: () => this.resolveNudge(),
@@ -146,7 +160,7 @@ export class HelpController {
     if (!h) return
     this.seq++
     if (h.kind === 'diff') return this.finishDiff('rejected')
-    if (['recall', 'nudge', 'word', 'ghost'].includes(h.kind)) {
+    if (['recall', 'nudge', 'word', 'ghost', 'edge'].includes(h.kind)) {
       this.record({ level: (h as { level: Level }).level, from: h.from, outcome: 'dismissed' })
     }
     this.set(null)
@@ -188,6 +202,8 @@ export class HelpController {
           ? this.fetchNextWord(current.from, [...current.seen, ...current.options])
           : this.fetchWord(current.from, current.to, current.at, [...current.seen, ...current.options])
       if (current.kind === 'ghost') return this.fetchGhost(current.at, [...current.seen, current.text])
+      // ⌘3 again asks for more titles or opening lines; a subject or excerpt card leaves ⌘3 in the text as it was.
+      if (current.kind === 'edge' && (current.slot === 'title' || current.slot === 'opening')) return this.fetchEdge(current.slot, [...current.seen, ...current.options.map((o) => o.text)])
       if (current.kind === 'nudge') return this.fetchNudge(current.from, current.to, current.history)
     }
 
@@ -218,6 +234,121 @@ export class HelpController {
       return this.fetchRewrite(4, map.pos(start), map.pos(start + sentence.length), '')
     }
     return sel.empty ? this.openBar(5, para.from, para.to) : this.openBar(5, sel.from, sel.to)
+  }
+
+  /**
+   * A help key pressed in the title. ⌘3 with a draft of 3+ sentences suggests a title (or, for kinds
+   * whose title isn't published, an opening line) drawn from the draft; every other key moves to the
+   * start of the text and runs there. See titleHelp() in lib/edge.ts for the whole table.
+   */
+  requestFromTitle(level: Level) {
+    const current = this.help
+    if (level === 3 && current?.kind === 'edge' && (current.slot === 'title' || current.slot === 'opening')) {
+      this.view.focus()
+      return this.request(3)
+    }
+    const plan = titleHelp(level, sentencesOf(this.draftText()).length, this.opts.ceiling(), this.opts.platform())
+    if (plan.mode === 'edge') {
+      this.view.focus()
+      return this.fetchEdge(plan.slot, [])
+    }
+    this.view.dispatch(this.view.state.tr.setSelection(TextSelection.atStart(this.doc)))
+    this.view.focus()
+    this.request(level)
+  }
+
+  /** The writer's own prose: paragraphs and list items, not headings, code or template prompts. */
+  draftText() {
+    const parts: string[] = []
+    this.doc.descendants((node, pos) => {
+      if (node.type.name === 'codeBlock' || node.type.name === 'heading') return false
+      if (node.type.name !== 'paragraph') return true
+      const text = textOf(this.doc, pos + 1, pos + node.nodeSize - 1).trim()
+      if (text && !isPromptParagraph(text)) parts.push(text)
+      return false
+    })
+    return parts.join('\n\n')
+  }
+
+  /** The first paragraph of the text: where an opening line goes. */
+  private firstParagraph() {
+    let found: { from: number; to: number } | null = null
+    this.doc.descendants((node, pos) => {
+      if (found) return false
+      if (node.type.name === 'paragraph' && !isPromptParagraph(node.textContent)) {
+        found = { from: pos + 1, to: pos + node.nodeSize - 1 }
+        return false
+      }
+      return node.type.name !== 'codeBlock' && node.type.name !== 'heading'
+    })
+    return found as { from: number; to: number } | null
+  }
+
+  /** Ask for edge lines for a slot. The card sits at the top of the page, under the title. */
+  async fetchEdge(slot: EdgeSlot, seen: string[]) {
+    const para = slot === 'opening' ? this.firstParagraph() : null
+    const from = para?.from ?? 0
+    const to = para?.to ?? 0
+    const label = edgeLabel(slot)
+    const id = ++this.seq
+    this.set({ kind: 'loading', level: 3, from, to, at: 0, label })
+    this.slowTimer = window.setTimeout(() => {
+      const h = this.help
+      if (id === this.seq && h?.kind === 'loading') this.view.dispatch(setHelp(this.view.state.tr, { ...h, slow: true }))
+    }, 8000)
+    this.view.dispatch(this.view.state.tr.scrollIntoView())
+    document.querySelector('.page-area')?.scrollTo({ top: 0 })
+    try {
+      const r = await fetch('/api/edge', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ slot, text: this.draftText(), kind: this.opts.platform(), current: this.edgeCurrent(slot), avoid: seen }),
+      })
+      const data = (await r.json()) as EdgeResp & { error?: string }
+      if (id !== this.seq) return
+      if (data.error) throw new Error(data.error)
+      if (data.kind === 'error') throw new Error(data.message)
+      if (data.kind === 'empty') {
+        this.record({ level: 3, from, outcome: 'empty', detail: `${EDGE_NAMES[slot]}: ${data.message}` })
+        return this.set({ kind: 'notice', level: 3, from, to, at: 0, text: data.message, label })
+      }
+      this.set({ kind: 'edge', level: 3, slot, from, to, at: 0, options: data.candidates, sel: 0, seen })
+      this.record({ level: 3, from, outcome: 'shown', detail: `${EDGE_NAMES[slot]} · ${data.candidates.length} from your draft` })
+    } catch (e) {
+      if (id !== this.seq) return
+      const msg = (e as Error).message
+      this.record({ level: 3, from, outcome: 'error', detail: msg })
+      this.set({ kind: 'notice', level: 3, from, to, at: 0, text: friendlyError(msg), tone: 'error', label })
+    }
+  }
+
+  /** What a slot says now: the field's value, or for an opening line, the first sentence. */
+  private edgeCurrent(slot: EdgeSlot) {
+    if (slot !== 'opening') return this.opts.edgeCurrent?.(slot) ?? ''
+    const para = this.firstParagraph()
+    return para ? (sentencesOf(textOf(this.doc, para.from, para.to))[0] ?? '') : ''
+  }
+
+  /** Use a candidate: a title, subject or excerpt goes to the writer's field; an opening line is proposed on the page. */
+  private pickEdge(i: number) {
+    const h = this.help
+    if (h?.kind !== 'edge') return
+    const c = h.options[i]
+    if (!c) return
+    if (h.slot !== 'opening') {
+      this.set(null)
+      this.opts.acceptEdge?.(h.slot, c.text)
+      this.record({ level: 3, from: h.from, outcome: 'accepted', detail: `${EDGE_NAMES[h.slot]}: ${c.text}` })
+      return
+    }
+    const para = this.firstParagraph()
+    if (!para) return this.set(null)
+    const original = textOf(this.doc, para.from, para.to)
+    const hunks = computeHunks(original, openingEdit(original, c.text, c.source))
+    const at = blockEnd(this.view.state, para.to)
+    if (!hunks.some((x) => x.kind === 'chg')) return this.set({ kind: 'notice', level: 3, from: para.from, to: para.to, at, text: 'That’s already how it opens', label: edgeLabel('opening') })
+    this.set({ kind: 'diff', level: 3, from: para.from, to: para.to, at, original, hunks, focus: -1, instruction: '', bar: false, sideBySide: changedRatio(original, hunks) > 0.6 })
+    this.view.focus()
   }
 
   /** Is there room to the right of the text column for a margin note? */
@@ -340,7 +471,7 @@ export class HelpController {
 
   private runInstruction(instruction: string) {
     const h = this.help
-    if (!h || (h.kind !== 'bar' && h.kind !== 'diff')) return
+    if (!h || (h.kind !== 'bar' && h.kind !== 'diff') || h.level === 3) return
     // Refining always works from the original text, never from the last suggestion.
     this.fetchRewrite(h.level, h.from, h.to, instruction)
   }
@@ -459,7 +590,7 @@ export class HelpController {
 
   moveSelection(delta: number) {
     const h = this.help
-    if (h?.kind === 'word') {
+    if (h?.kind === 'word' || h?.kind === 'edge') {
       this.set({ ...h, sel: (h.sel + delta + h.options.length) % h.options.length })
       return true
     }
@@ -476,6 +607,10 @@ export class HelpController {
     const h = this.help
     if (h?.kind === 'word') {
       this.pickWord(h.sel)
+      return true
+    }
+    if (h?.kind === 'edge') {
+      this.pickEdge(h.sel)
       return true
     }
     if (h?.kind === 'recall') {

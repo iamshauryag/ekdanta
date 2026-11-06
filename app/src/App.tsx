@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Editor as TiptapEditor } from '@tiptap/core'
-import { Editor, type EditorFormat, type Heading } from './editor/Editor.tsx'
+import { Editor, helpLevel, type EditorFormat, type Heading } from './editor/Editor.tsx'
 import type { PageRef } from './editor/menus.ts'
 import { SourceEditor } from './editor/Source.tsx'
 import { kindName, kinds, setKinds } from './lib/kinds.ts'
@@ -14,7 +14,8 @@ import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
-import { helpMod } from './editor/help.ts'
+import { helpMod, noteCmdWorks } from './editor/help.ts'
+import { fieldSlot, type EdgeSlot } from './lib/edge.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
 
@@ -563,6 +564,16 @@ export function App() {
       .run()
   }
 
+  /** Edge lines: what a slot says now, and where an accepted one goes. */
+  const edgeCurrent = (slot: EdgeSlot) => {
+    const meta = docRef.current?.meta ?? {}
+    return slot === 'title' ? (meta.title ?? '') : slot === 'subject' || slot === 'excerpt' ? (meta[slot] ?? '') : ''
+  }
+  const acceptEdge = (slot: EdgeSlot, text: string) => {
+    if (slot === 'title') setTitle(text)
+    else if (slot === 'subject' || slot === 'excerpt') setMeta({ [slot]: text })
+  }
+
   const editorProps = useMemo(
     () => ({
       doc: () => docRef.current?.path ?? '',
@@ -652,7 +663,13 @@ export function App() {
               <span className="muted">· {loaded.meta.status ?? 'draft'}</span>
               <span className="muted path">{loaded.path}</span>
             </div>
-            <TitleField key={'title:' + loaded.key} value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)} autoFocus={isNew} onCommit={setTitle} />
+            <TitleField
+              key={'title:' + loaded.key}
+              value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)}
+              autoFocus={isNew}
+              onCommit={setTitle}
+              onHelp={livePreview ? (level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } })) : undefined}
+            />
             {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
             {livePreview ? (
               <Editor
@@ -674,6 +691,8 @@ export function App() {
                 onEditor={setEditor}
                 onFormat={setFormat}
                 onOutline={setOutline}
+                edgeCurrent={edgeCurrent}
+                acceptEdge={acceptEdge}
               />
             ) : (
               <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} />
@@ -693,6 +712,10 @@ export function App() {
           platform={platform}
           ceiling={ceiling}
           onCeiling={(ceiling) => changeSettings({ ceiling })}
+          field={(() => {
+            const f = fieldSlot(platform)
+            return f && loaded ? { ...f, value: loaded.meta[f.key] ?? '', canSuggest: livePreview, onChange: (v: string) => setMeta({ [f.key]: v || null }) } : null
+          })()}
           recallDot={recallDot}
           onRecallDot={(recallDot) => changeSettings({ recallDot })}
           status={status}
@@ -748,7 +771,7 @@ export function App() {
 const platformLabel = (p: string) => kindName(kinds(), p)
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */
-function TitleField({ value, autoFocus, onCommit }: { value: string; autoFocus: boolean; onCommit: (t: string) => void }) {
+function TitleField({ value, autoFocus, onCommit, onHelp }: { value: string; autoFocus: boolean; onCommit: (t: string) => void; onHelp?: (level: number) => void }) {
   const ref = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -773,6 +796,16 @@ function TitleField({ value, autoFocus, onCommit }: { value: string; autoFocus: 
       data-placeholder="Untitled"
       onBlur={commit}
       onKeyDown={(e) => {
+        // A help key never types into the title (⌥3 is # on a Mac). ⌘3 may draw a title from the draft;
+        // the others run in the text. The title is committed first, so it's current when help reads it.
+        const level = onHelp ? helpLevel(e.nativeEvent) : null
+        if (level) {
+          e.preventDefault()
+          if (e.metaKey) noteCmdWorks()
+          commit()
+          onHelp!(level)
+          return
+        }
         if (e.key === 'Enter' || e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
           e.preventDefault()
           focusText()

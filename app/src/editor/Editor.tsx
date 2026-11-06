@@ -8,6 +8,7 @@ import { redoDepth, undoDepth } from '@tiptap/pm/history'
 import { COMMANDS, binding, matches, titled } from '../lib/keys.ts'
 import { blockOf, marksOf, runCommand, type Block, type Mark } from './commands.ts'
 import { HelpController, type HistoryItem } from './controller.ts'
+import type { EdgeSlot } from '../lib/edge.ts'
 import { helpKey, helpOf, helpPlugin, noteCmdWorks, paragraphAt, textOf, type Help, type Level } from './help.ts'
 import { parseMarkdown, serializeMarkdown, type Source } from './markdown.ts'
 import { PageLinkMenu, SlashMenu, type PageRef } from './menus.ts'
@@ -53,10 +54,14 @@ interface Props {
   onEditor?: (editor: TiptapEditor | null) => void
   onFormat?: (f: EditorFormat) => void
   onOutline?: (h: Heading[]) => void
+  /** What a title, subject or excerpt says now (for edge lines). */
+  edgeCurrent?: (slot: EdgeSlot) => string
+  /** Use an accepted title, subject or excerpt. */
+  acceptEdge?: (slot: EdgeSlot, text: string) => void
 }
 
 /** Which help level a keydown asks for: ⌥1–⌥5 everywhere, ⌘1–⌘5 where the browser allows it. */
-function helpLevel(e: KeyboardEvent): Level | null {
+export function helpLevel(e: KeyboardEvent): Level | null {
   const m = e.code.match(/^Digit([1-5])$/)
   if (!m || e.shiftKey || e.ctrlKey) return null
   if (e.altKey !== e.metaKey) return Number(m[1]) as Level
@@ -197,6 +202,8 @@ export function Editor(props: Props) {
       ceiling: () => p().ceiling(),
       record: (item) => p().record(item),
       openDoc: (path) => p().openDoc(path),
+      edgeCurrent: (slot) => p().edgeCurrent?.(slot) ?? '',
+      acceptEdge: (slot, text) => p().acceptEdge?.(slot, text),
     })
     p().onEditor?.(editor)
     report(editor)
@@ -276,10 +283,10 @@ export function Editor(props: Props) {
         c.dismiss()
         return true
       }
-      if (h.kind === 'word' || h.kind === 'recall') {
+      if (h.kind === 'word' || h.kind === 'recall' || h.kind === 'edge') {
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') return c.moveSelection(e.key === 'ArrowDown' ? 1 : -1)
-        if ((h.kind === 'word' && (e.key === 'Enter' || e.key === 'Tab') && !mod) || (h.kind === 'recall' && mod && e.key === 'Enter')) return c.pickSelected()
-        if (h.kind === 'word' && /^[1-5]$/.test(e.key) && !mod && !e.altKey && Number(e.key) <= h.options.length) {
+        if (((h.kind === 'word' || h.kind === 'edge') && (e.key === 'Enter' || e.key === 'Tab') && !mod) || (h.kind === 'recall' && mod && e.key === 'Enter')) return c.pickSelected()
+        if ((h.kind === 'word' || h.kind === 'edge') && /^[1-5]$/.test(e.key) && !mod && !e.altKey && Number(e.key) <= h.options.length) {
           c.moveSelection(Number(e.key) - 1 - h.sel)
           return c.pickSelected()
         }
@@ -330,10 +337,28 @@ export function Editor(props: Props) {
       input.onchange = () => addImages([...(input.files ?? [])])
       input.click()
     }
+    // A help key pressed in the title, and 'Suggest from my draft' beside a field: both run here.
+    const fromTitle = (e: Event) => {
+      const level = (e as CustomEvent<{ level: Level }>).detail?.level
+      if (level) controller.current?.requestFromTitle(level)
+    }
+    const edge = (e: Event) => {
+      const slot = (e as CustomEvent<{ slot: EdgeSlot }>).detail?.slot
+      const c = controller.current
+      if (!slot || !c) return
+      editorRef.current?.view.focus()
+      // Asking again while the card is open leaves out what it already showed.
+      const h = c.help
+      c.fetchEdge(slot, h?.kind === 'edge' && h.slot === slot ? [...h.seen, ...h.options.map((o) => o.text)] : [])
+    }
+    window.addEventListener('ekdanta:help', fromTitle)
+    window.addEventListener('ekdanta:edge', edge)
     window.addEventListener('ekdanta:find', openFind)
     window.addEventListener('ekdanta:link', openLink)
     window.addEventListener('ekdanta:image', pickImage)
     return () => {
+      window.removeEventListener('ekdanta:help', fromTitle)
+      window.removeEventListener('ekdanta:edge', edge)
       window.removeEventListener('ekdanta:find', openFind)
       window.removeEventListener('ekdanta:link', openLink)
       window.removeEventListener('ekdanta:image', pickImage)
