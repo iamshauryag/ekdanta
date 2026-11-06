@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { diffLines } from 'diff'
 import { history, historyKeymap, defaultKeymap } from '@codemirror/commands'
-import { markdown } from '@codemirror/lang-markdown'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { syntaxHighlighting } from '@codemirror/language'
+import { classHighlighter } from '@lezer/highlight'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { api, type VoiceSummary } from '../lib/api.ts'
 import { joinFrontMatter, splitFrontMatter } from '../lib/frontmatter.ts'
 import { helpMod } from '../editor/help.ts'
+import { Markdown } from '../lib/markdown.tsx'
+import { formatKeys } from '../editor/format.ts'
 
 interface Props {
   platform: string
@@ -23,6 +27,8 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
   const [proposal, setProposal] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('') // the profile as last typed, for the preview
   const saveTimer = useRef<number | undefined>(undefined)
 
   const load = () =>
@@ -30,11 +36,13 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
       if (content === null) return setProfile(null)
       const { meta, body, raw } = splitFrontMatter(content)
       setProfile({ meta, body, raw })
+      setDraft(body)
     })
   useEffect(() => {
     setProposal(null)
     setError(null)
     setProfile(undefined)
+    setEditing(false)
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [platform])
@@ -62,11 +70,17 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
 
   const onEdit = (body: string) => {
     if (!profile) return
+    setDraft(body)
     window.clearTimeout(saveTimer.current)
     saveTimer.current = window.setTimeout(() => api.saveVoiceProfile(platform, joinFrontMatter(profile.raw, profile.meta, body)), 600)
   }
 
   const sources = summary?.sources ?? []
+  // A quote's [[link]] names the piece it came from.
+  const openLink = (target: string) => {
+    const s = sources.find((x) => x.path.replace(/\.md$/, '').split('/').pop() === target || x.path.replace(/\.md$/, '') === target)
+    return s ? () => onOpenDoc(s.path) : undefined
+  }
   const state = !summary ? '' : !summary.exists ? 'Not built yet' : summary.upToDate ? 'Up to date' : 'Out of date'
   const builtOn = profile?.meta.built ? new Date(profile.meta.built).toLocaleDateString([], { day: 'numeric', month: 'short' }) : null
 
@@ -103,6 +117,17 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
           </button>
         )}
         {error && <span className="voice-error">{error}</span>}
+        <span className="spacer" />
+        {profile && !proposal && (
+          <div className="seg" role="radiogroup" aria-label="View">
+            <button role="radio" aria-checked={!editing} className={!editing ? 'is-on' : ''} onClick={() => setEditing(false)}>
+              Preview
+            </button>
+            <button role="radio" aria-checked={editing} className={editing ? 'is-on' : ''} onClick={() => setEditing(true)}>
+              Markdown
+            </button>
+          </div>
+        )}
       </div>
 
       {proposal && profile && (
@@ -120,7 +145,12 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
           writing. You can edit it, add rules of your own, and {helpMod}3–{helpMod}5 follow it.
         </p>
       )}
-      {profile && !proposal && <ProfileEditor key={platform + (profile.meta.built ?? '')} initial={profile.body} onChange={onEdit} />}
+      {profile && !proposal && editing && <ProfileEditor key={platform + (profile.meta.built ?? '')} initial={draft} onChange={onEdit} />}
+      {profile && !proposal && !editing && (
+        <div onDoubleClick={() => setEditing(true)} title="Double-click to edit">
+          <Markdown className="md profile-preview" text={draft} onLink={openLink} />
+        </div>
+      )}
     </div>
   )
 }
@@ -177,8 +207,10 @@ function ProfileEditor({ initial, onChange }: { initial: string; onChange: (body
         doc: initial,
         extensions: [
           history(),
+          formatKeys(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
-          markdown(),
+          markdown({ base: markdownLanguage }),
+          syntaxHighlighting(classHighlighter),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({ spellcheck: 'true', 'aria-label': 'Voice profile' }),
           EditorView.updateListener.of((u) => u.docChanged && changeRef.current(u.state.doc.toString())),

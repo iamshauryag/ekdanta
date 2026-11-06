@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, type CanvasEdge, type CanvasNode, type Cluster, type ThinkingSide } from '../lib/api.ts'
+import { mergeClusters, newId } from '../lib/thinking.ts'
+import { binding, formatKey, matches } from '../lib/keys.ts'
 
 interface Props {
   doc: string
@@ -10,7 +12,6 @@ interface Props {
 type View = 'loose' | 'clusters'
 type Point = { x: number; y: number }
 
-const newId = () => Math.random().toString(36).slice(2, 10)
 const pair = (a: string, b: string) => [a, b].sort().join('|')
 const PAUSE_MS = 2500 // links and Recall chips are looked for after a pause like this
 
@@ -180,15 +181,7 @@ export function ThinkingSpace({ doc, title, onClose }: Props) {
     setError(null)
     try {
       const { clusters } = await api.thinkingClusters(frags.map((n) => ({ id: n.id, text: n.text! })))
-      // Labels the writer renamed survive regrouping when their theme is still there.
-      const mine = (side.clusters ?? []).filter((c) => c.mine)
-      setSide((s) => ({
-        ...s,
-        clusters: clusters.map((c) => {
-          const kept = mine.find((m) => m.ids.some((id) => c.ids.includes(id)))
-          return { id: newId(), label: kept?.label ?? c.label, mine: !!kept, ids: c.ids }
-        }),
-      }))
+      setSide((s) => ({ ...s, clusters: mergeClusters(s.clusters, clusters) }))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -203,7 +196,7 @@ export function ThinkingSpace({ doc, title, onClose }: Props) {
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.code === 'KeyT' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
+      if (matches(e, binding('thinking'))) {
         e.preventDefault()
         e.stopImmediatePropagation()
         close()
@@ -325,7 +318,7 @@ export function ThinkingSpace({ doc, title, onClose }: Props) {
           )}
         </span>
         <button className="btn primary" onClick={close}>
-          Start drafting → <kbd>⌥T</kbd>
+          Start drafting → {binding('thinking') && <kbd>{formatKey(binding('thinking'))}</kbd>}
         </button>
       </footer>
     </div>

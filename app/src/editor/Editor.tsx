@@ -1,8 +1,16 @@
 import { useEffect, useRef } from 'react'
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { markdown } from '@codemirror/lang-markdown'
-import { EditorState, Prec } from '@codemirror/state'
+import { defaultKeymap, history, historyKeymap, redoDepth, undoDepth } from '@codemirror/commands'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { indentUnit, syntaxHighlighting } from '@codemirror/language'
+import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search'
+import { classHighlighter } from '@lezer/highlight'
+import { Compartment, EditorState, Prec } from '@codemirror/state'
 import { Decoration, EditorView, ViewPlugin, keymap, placeholder, type DecorationSet, type ViewUpdate } from '@codemirror/view'
+import { completions, type PageRef } from './complete.ts'
+import { formatKeys, formatState, formatting, highlightSyntax, type FormatState } from './format.ts'
+import { onBindingsChange } from '../lib/keys.ts'
+import { linkTools, livePreview, type PreviewOptions } from './livepreview.ts'
+import { addImages, pasting } from './paste.ts'
 import { HelpController, type HistoryItem } from './controller.ts'
 import { helpField, helpOwn, noteCmdWorks, paragraphAt, recallDotField, setHelp, type Level } from './help.ts'
 
@@ -20,7 +28,29 @@ interface Props {
   autoFocus?: boolean
   /** The paragraph around the caret, whenever it may have changed. */
   onParagraph?: (text: string) => void
+  /** Show the page formatted (Markdown only where the caret is), or as plain Markdown. */
+  livePreview: boolean
+  pages: () => PageRef[]
+  openPage: (target: string) => void
+  saveImage: (name: string, base64: string) => Promise<string>
+  /** Where an image linked from this document is served from. */
+  assetUrl: (src: string) => string
+  /** The editor, for the toolbar. */
+  onView?: (view: EditorView | null) => void
+  /** What's on at the caret (for the toolbar), and how many words are selected. */
+  onFormat?: (f: EditorFormat) => void
 }
+
+export interface EditorFormat extends FormatState {
+  canUndo: boolean
+  canRedo: boolean
+  selectedWords: number
+}
+
+const preview = new Compartment()
+const keys = new Compartment()
+// ⌘F belongs to the remappable "find" command; the rest of the search keys stay as they are.
+const searchKeys = searchKeymap.filter((k) => k.key !== 'Mod-f')
 
 /** Which help level a keydown asks for: ⌥1–⌥5 everywhere, ⌘1–⌘5 where the browser allows it. */
 function helpLevel(e: KeyboardEvent): Level | null {
@@ -35,9 +65,16 @@ export function Editor(props: Props) {
   const propsRef = useRef(props)
   propsRef.current = props
 
+  const viewRef = useRef<EditorView | null>(null)
+
   useEffect(() => {
     let controller: HelpController | null = null
     const p = () => propsRef.current
+    const previewOpts: PreviewOptions = {
+      assetUrl: (src) => p().assetUrl(src),
+      openPage: (target) => p().openPage(target),
+      pageTitle: (target) => p().pages().find((pg) => pg.target === target || pg.target.split('/').pop() === target)?.title,
+    }
 
     const helpKeys = Prec.highest(
       EditorView.domEventHandlers({
@@ -125,6 +162,15 @@ export function Editor(props: Props) {
           p().record({ level: before.level, at: new Date().toISOString(), from: before.from, outcome: 'dismissed' })
         }
       }
+      if (u.selectionSet || u.docChanged || u.transactions.length) {
+        const sel = u.state.selection.main
+        p().onFormat?.({
+          ...formatState(u.state),
+          canUndo: undoDepth(u.state) > 0,
+          canRedo: redoDepth(u.state) > 0,
+          selectedWords: sel.empty ? 0 : countWords(u.state.sliceDoc(sel.from, sel.to)),
+        })
+      }
       if (u.selectionSet || u.docChanged) {
         controller?.onCursor(p().recallDot())
         const para = paragraphAt(u.state, u.state.selection.main.head)
@@ -139,8 +185,17 @@ export function Editor(props: Props) {
         extensions: [
           helpKeys,
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap]),
-          markdown(),
+          keys.of(formatKeys()),
+          formatting,
+          keymap.of([...searchKeys, ...defaultKeymap, ...historyKeymap]),
+          markdown({ base: markdownLanguage, extensions: [highlightSyntax] }),
+          syntaxHighlighting(classHighlighter),
+          indentUnit.of('    '),
+          search({ top: true }),
+          highlightSelectionMatches({ minSelectionLength: 3 }),
+          completions(() => p().pages()),
+          pasting({ saveImage: (n, b) => p().saveImage(n, b) }),
+          preview.of(previewFor(p().livePreview, previewOpts)),
           EditorView.lineWrapping,
           EditorView.contentAttributes.of({ spellcheck: 'true', autocorrect: 'on', 'aria-label': 'Document' }),
           placeholder('Start writing…'),
@@ -159,14 +214,52 @@ export function Editor(props: Props) {
       openDoc: (path) => p().openDoc(path),
     })
     p().onWordCount(countWords(props.initial))
+    viewRef.current = view
+    p().onView?.(view)
+    // "Image" from the slash menu or the toolbar asks for a file.
+    const pick = () => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = 'image/*'
+      input.multiple = true
+      input.onchange = () => addImages(view, [...(input.files ?? [])], { saveImage: (n, b) => p().saveImage(n, b) })
+      input.click()
+    }
+    view.dom.addEventListener('ekdanta:image', pick)
+    // Shortcuts changed in Settings apply at once.
+    const offKeys = onBindingsChange(() => view.dispatch({ effects: keys.reconfigure(formatKeys()) }))
     if (props.autoFocus !== false) view.focus()
-    return () => view.destroy()
+    return () => {
+      view.dom.removeEventListener('ekdanta:image', pick)
+      offKeys()
+      p().onView?.(null)
+      viewRef.current = null
+      view.destroy()
+    }
     // A new document gets a fresh editor (and a fresh undo history).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.docKey])
 
+  // Switching between Live Preview and Markdown keeps the editor, the caret and the undo history.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    const p = propsRef.current
+    view.dispatch({
+      effects: preview.reconfigure(
+        previewFor(p.livePreview, {
+          assetUrl: (src) => propsRef.current.assetUrl(src),
+          openPage: (t) => propsRef.current.openPage(t),
+          pageTitle: (t) => propsRef.current.pages().find((pg) => pg.target === t || pg.target.split('/').pop() === t)?.title,
+        }),
+      ),
+    })
+  }, [props.livePreview])
+
   return <div className="editor" ref={host} />
 }
+
+const previewFor = (live: boolean, opts: PreviewOptions) => (live ? livePreview(opts) : linkTools(opts))
 
 /** Marks the lines of the paragraph being written, so Focus mode can dim the rest. */
 const currentParagraph = ViewPlugin.fromClass(

@@ -20,6 +20,8 @@ export interface Settings {
   /** In Focus mode, dim every paragraph but the current one. */
   paragraphFocus: boolean
   theme: 'system' | 'light' | 'dark'
+  /** Shortcuts the writer changed: command id → key in CodeMirror's notation ('' to unbind). */
+  keys: Record<string, string>
 }
 
 const env = process.env
@@ -34,6 +36,7 @@ export const DEFAULTS: Settings = {
   recallDot: true,
   paragraphFocus: true,
   theme: 'system',
+  keys: {},
 }
 
 const FILE = path.join(META_DIR, 'settings.json')
@@ -61,10 +64,13 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
     if (key in patch && typeof patch[key] === typeof DEFAULTS[key]) (next as unknown as Record<string, unknown>)[key] = patch[key]
   }
   next.ceiling = Math.max(0, Math.min(5, Math.round(next.ceiling)))
+  next.keys = Object.fromEntries(Object.entries(next.keys ?? {}).filter(([k, v]) => /^[\w.-]+$/.test(k) && typeof v === 'string' && v.length < 40))
   current = next
   await fs.mkdir(META_DIR, { recursive: true })
   // Only what differs from the defaults is written, so the file stays short and readable.
-  const diff = Object.fromEntries(Object.entries(next).filter(([k, v]) => DEFAULTS[k as keyof Settings] !== v))
+  const diff = Object.fromEntries(
+    Object.entries(next).filter(([k, v]) => (k === 'keys' ? Object.keys(v as object).length > 0 : DEFAULTS[k as keyof Settings] !== v)),
+  )
   await fs.writeFile(FILE, JSON.stringify(diff, null, 2) + '\n', 'utf8')
   return next
 }

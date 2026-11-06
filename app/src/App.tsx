@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Editor } from './editor/Editor.tsx'
+import type { EditorView } from '@codemirror/view'
+import { Editor, type EditorFormat } from './editor/Editor.tsx'
+import type { PageRef } from './editor/complete.ts'
+import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
-import { api, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type VoiceSummary } from './lib/api.ts'
+import { api, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Trashed, type VoiceSummary } from './lib/api.ts'
 import { applyPatch, joinFrontMatter, splitFrontMatter, type Meta, type MetaPatch } from './lib/frontmatter.ts'
 import { Panel, type PanelTab } from './components/Panel.tsx'
 import { Settings } from './components/Settings.tsx'
 import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
-import { Sidebar, type SidebarMode } from './components/Sidebar.tsx'
+import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
 import { helpMod } from './editor/help.ts'
+import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
+import { binding, matches, setOverrides, titled } from './lib/keys.ts'
+import { tidyMarks } from './editor/marks.ts'
 
 const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
 
@@ -55,11 +61,24 @@ export function App() {
   const [panelOpen, setPanelOpen] = usePref('panel', true)
   const [panelTab, setPanelTab] = usePref<PanelTab>('panelTab', 'piece')
   const [focus, setFocus] = useState(false)
+  const [livePreview, setLivePreview] = usePref('livePreview', true)
+  const [editorView, setEditorView] = useState<EditorView | null>(null)
+  const [format, setFormat] = useState<EditorFormat | null>(null)
+  const [outline, setOutline] = useState<Heading[]>([])
   const [settings, setSettings] = useState<SettingsT | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [voices, setVoices] = useState<VoiceSummary[]>([])
   const [voiceView, setVoiceView] = useState<string | null>(null) // a platform whose profile fills the page
   const refreshVoices = useCallback(() => api.voice().then(setVoices), [])
+  const [trash, setTrash] = useState<Trashed[]>([])
+  const refreshTrash = useCallback(() => api.trash().then(setTrash), [])
+  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null)
+  const toastTimer = useRef<number | undefined>(undefined)
+  const notify = useCallback((text: string, undo?: () => void) => {
+    window.clearTimeout(toastTimer.current)
+    setToast({ text, undo })
+    toastTimer.current = window.setTimeout(() => setToast(null), 6000)
+  }, [])
   // The open document's Thinking Space, and which of its fragments the draft already uses.
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [thinking, setThinking] = useState<Thinking | null>(null)
@@ -96,7 +115,15 @@ export function App() {
     api.status().then(setStatus)
     api.settings().then(setSettings)
     refreshVoices()
-  }, [refreshFiles, refreshVoices])
+    refreshTrash()
+  }, [refreshFiles, refreshVoices, refreshTrash])
+
+  // The writer's own shortcuts, from Settings.
+  const [, setKeysVersion] = useState(0)
+  useEffect(() => {
+    setOverrides(settings?.keys)
+    setKeysVersion((v) => v + 1) // so tooltips and labels show the new keys
+  }, [settings?.keys])
 
   // Appearance: follow the system unless the writer picked light or dark.
   useEffect(() => {
@@ -123,6 +150,7 @@ export function App() {
       const { meta, body, raw } = splitFrontMatter(content)
       docRef.current = { path, meta, body, rawMeta: raw }
       setLoaded({ ...docRef.current, key: path })
+      setOutline(headingsOf(body))
       setSaved('saved')
     })
     api.history(path).then((h) => !cancelled && setHistory(h as HistoryItem[]))
@@ -140,13 +168,15 @@ export function App() {
     const d = docRef.current
     if (!d) return
     setSaved('saving')
-    await api.write(d.path, joinFrontMatter(d.rawMeta, d.meta, d.body))
+    // The page forgives `**bold **` while it's being typed; the file always gets valid Markdown.
+    await api.write(d.path, joinFrontMatter(d.rawMeta, d.meta, tidyMarks(d.body)))
     setSaved('saved')
   }, [])
 
   const onChange = useCallback(
     (text: string) => {
       if (docRef.current) docRef.current.body = text
+      setOutline((o) => sameOutline(o, headingsOf(text)))
       setSaved('unsaved')
       window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(save, 800)
@@ -198,16 +228,103 @@ export function App() {
     d.meta = { ...d.meta, title }
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
     await save()
-    const { path: next } = await api.name(d.path, title)
-    if (next !== d.path) {
-      const prev = d.path
-      d.path = next
-      renamed.current = next
-      setLoaded((l) => (l ? { ...l, path: next } : l))
-      setFresh((f) => (f === prev ? next : f))
-      setPath(next)
-    }
+    follow((await api.name(d.path, title)).path)
     refreshFiles()
+  }
+
+  /** A new platform moves the piece into that platform's folder. */
+  const setPlatform = async (platform: string) => {
+    const d = docRef.current
+    if (!d) return
+    d.meta = applyPatch(d.meta, { platform })
+    setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
+    await save()
+    follow((await api.place(d.path)).path)
+    refreshFiles()
+    refreshVoices()
+  }
+
+  /** Re-read the open document's front-matter after the server changed it (a move can set the platform). */
+  const reloadMeta = async () => {
+    const d = docRef.current
+    if (!d) return
+    const { meta, raw } = splitFrontMatter(await api.read(d.path))
+    d.meta = meta
+    d.rawMeta = raw
+    setLoaded((l) => (l ? { ...l, meta } : l))
+  }
+
+  /** Everything a page's ⋯ menu does. The open page saves first, so nothing typed is lost. */
+  const fileActions: FileActions = {
+    rename: async (rel, title) => {
+      const isOpen = docRef.current?.path === rel
+      if (isOpen && saveTimer.current !== undefined) await save()
+      const { path: next } = await api.rename(rel, title)
+      if (isOpen) {
+        follow(next)
+        await reloadMeta()
+      }
+      refreshFiles()
+      refreshVoices()
+    },
+    move: async (rel, folder) => {
+      const isOpen = docRef.current?.path === rel
+      if (isOpen && saveTimer.current !== undefined) await save()
+      const { path: next } = await api.move(rel, folder)
+      if (isOpen) {
+        follow(next)
+        await reloadMeta()
+      }
+      await refreshFiles()
+      refreshVoices()
+      notify(`Moved to ${folder.split('/').pop()}`, () => fileActions.move(next, rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''))
+    },
+    duplicate: async (rel) => {
+      if (docRef.current?.path === rel && saveTimer.current !== undefined) await save()
+      const { path: next } = await api.duplicate(rel)
+      await refreshFiles()
+      await openDoc(next)
+    },
+    remove: async (rel) => {
+      const isOpen = docRef.current?.path === rel
+      if (isOpen) {
+        if (saveTimer.current !== undefined) await save()
+        docRef.current = null // nothing left to save to
+      }
+      const item = await api.remove(rel)
+      const left = (await api.files()).filter((f) => f.path !== rel)
+      setFiles(left)
+      if (isOpen) {
+        setLoaded(null)
+        if (left.length) openDoc(left[0].path)
+      }
+      refreshTrash()
+      refreshVoices()
+      notify(`Deleted “${item.title}”`, () => restore(item.id))
+    },
+  }
+
+  const restore = async (id: string) => {
+    const { path: back } = await api.restore(id)
+    await refreshFiles()
+    refreshTrash()
+    refreshVoices()
+    setToast(null)
+    openDoc(back)
+  }
+
+  /** The open document was renamed or moved: keep editing it under its new path. */
+  const follow = (next: string) => {
+    const d = docRef.current
+    if (!d || next === d.path) return
+    const prev = d.path
+    d.path = next
+    renamed.current = next
+    // Rename it in the list now too, or the app would think the open file had gone.
+    setFiles((fs) => fs.map((f) => (f.path === prev ? { ...f, path: next, folder: next.includes('/') ? next.slice(0, next.lastIndexOf('/')) : '' } : f)))
+    setLoaded((l) => (l ? { ...l, path: next } : l))
+    setFresh((f) => (f === prev ? next : f))
+    setPath(next)
   }
 
   /** ★ a document as an exemplar of its platform, or un-star it. */
@@ -263,6 +380,73 @@ export function App() {
     [panelOpen, panelTab, checkMaterial],
   )
 
+  /** Change the Thinking Space from the panel, without opening it. */
+  const changeThinking = (change: (t: Thinking) => Thinking) => {
+    const doc = docRef.current?.path
+    if (!doc) return
+    setThinking((prev) => {
+      const next = change(prev ?? { canvas: { nodes: [], edges: [] }, side: {} })
+      api.saveThinking(doc, next)
+      return next
+    })
+  }
+
+  /** Look for a note of the writer's that matches a thought, as the canvas does after a pause. */
+  const recallFor = async (id: string, text: string) => {
+    const doc = docRef.current?.path
+    if (!doc) return
+    const taken = Object.entries(thinking?.side.recall ?? {}).flatMap(([k, r]) => (r.hit && k !== id ? [r.hit.doc] : []))
+    try {
+      const { chips } = await api.thinkingRecall(doc, [{ id, text }], taken)
+      if (docRef.current?.path !== doc) return
+      changeThinking((t) => ({ ...t, side: { ...t.side, recall: { ...t.side.recall, [id]: { text, hit: chips[id] ?? null } } } }))
+    } catch {
+      /* Recall isn't ready: the thought is kept all the same */
+    }
+  }
+
+  const thoughts = {
+    /** A thought typed into the panel goes onto the canvas, below the others. */
+    add: (text: string) => {
+      const id = newId()
+      changeThinking((t) => {
+        const texts = t.canvas.nodes.filter((n) => n.type === 'text')
+        const x = texts.length ? Math.min(...texts.map((n) => n.x)) : 120
+        const y = texts.length ? Math.max(...texts.map((n) => n.y + n.height)) + 24 : 96
+        const node = { id, type: 'text', text, x: Math.round(x), y: Math.round(y), width: Math.min(320, Math.round(40 + text.length * 7.5)), height: 30 }
+        return { ...t, canvas: { ...t.canvas, nodes: [...t.canvas.nodes, node] } }
+      })
+      recallFor(id, text)
+    },
+    edit: (id: string, text: string) => {
+      if (!text.trim()) return thoughts.remove(id)
+      changeThinking((t) => ({ ...t, canvas: { ...t.canvas, nodes: t.canvas.nodes.map((n) => (n.id === id ? { ...n, text } : n)) } }))
+      recallFor(id, text)
+    },
+    remove: (id: string) => {
+      const before = thinking
+      changeThinking((t) => withoutFragment(t, id))
+      if (before) notify('Thought removed', () => changeThinking(() => before))
+    },
+    /** Tick a fragment off by hand, or un-tick one the draft seemed to cover. */
+    check: (id: string, done: boolean) =>
+      changeThinking((t) => {
+        const checked = { ...t.side.checked }
+        // Back to what the draft shows: no need to remember it.
+        if (done === material.covered.includes(id)) delete checked[id]
+        else checked[id] = done
+        return { ...t, side: { ...t.side, checked } }
+      }),
+    cluster: async () => {
+      const frags = (thinking?.canvas.nodes ?? []).filter((n) => n.type === 'text' && n.text?.trim()).map((n) => ({ id: n.id, text: n.text! }))
+      const { clusters } = await api.thinkingClusters(frags)
+      changeThinking((t) => ({ ...t, side: { ...t.side, clusters: mergeClusters(t.side.clusters, clusters) } }))
+    },
+    ungroup: () => changeThinking((t) => ({ ...t, side: { ...t.side, clusters: [] } })),
+    renameGroup: (id: string, label: string) =>
+      changeThinking((t) => ({ ...t, side: { ...t.side, clusters: t.side.clusters?.map((c) => (c.id === id ? { ...c, label, mine: true } : c)) } })),
+  }
+
   const closeThinking = useCallback(() => {
     setThinkingOpen(false)
     const d = docRef.current
@@ -290,39 +474,33 @@ export function App() {
   // Window-level shortcuts: Focus mode and the panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey
-      if (mod && e.key === '.') {
+      const is = (id: string) => matches(e, binding(id))
+      const run = (fn: () => void) => {
         e.preventDefault()
-        setFocus((f) => !f)
-      } else if (focus && e.key === 'Escape' && !document.querySelector('.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost')) {
-        setFocus(false)
-      } else if (mod && e.key === '\\') {
-        e.preventDefault()
-        setPanelOpen((o) => !o)
-      } else if (mod && e.altKey && /^Digit[123]$/.test(e.code)) {
-        e.preventDefault()
-        setPanelOpen(true)
-        setPanelTab((['material', 'history', 'piece'] as const)[Number(e.code.slice(-1)) - 1])
-      } else if (mod && e.key === 's') {
-        e.preventDefault()
-        save()
-      } else if (e.code === 'Digit8' && e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
-        e.preventDefault()
-        if (docRef.current) toggleExemplar(docRef.current.path)
-      } else if (e.code === 'Comma' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
-        e.preventDefault()
-        setSettingsOpen((o) => !o)
-      } else if (e.code === 'KeyT' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
-        // ⌥T, since browsers keep ⌘T for a new tab. The Thinking Space closes itself.
-        e.preventDefault()
-        if (docRef.current && !thinkingOpen) {
-          if (saveTimer.current !== undefined) save()
-          setThinkingOpen(true)
-        }
-      } else if (e.code === 'KeyN' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
-        // Browsers keep ⌘N for a new window, so ⌥N works too.
-        e.preventDefault()
-        newDraft()
+        fn()
+      }
+      if (focus && e.key === 'Escape' && !document.querySelector('.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost')) setFocus(false)
+      else if (is('focus')) run(() => setFocus((f) => !f))
+      else if (is('panel')) run(() => setPanelOpen((o) => !o))
+      else if (is('save')) run(() => save())
+      else if (is('star')) run(() => docRef.current && toggleExemplar(docRef.current.path))
+      else if (is('settings')) run(() => setSettingsOpen((o) => !o))
+      else if (is('newDraft')) run(() => newDraft())
+      else if (is('thinking')) {
+        // The Thinking Space closes itself with the same key.
+        run(() => {
+          if (docRef.current && !thinkingOpen) {
+            if (saveTimer.current !== undefined) save()
+            setThinkingOpen(true)
+          }
+        })
+      } else {
+        const tab = (['material', 'outline', 'history', 'piece'] as const).find((t) => is(t))
+        if (tab)
+          run(() => {
+            setPanelOpen(true)
+            setPanelTab(tab)
+          })
       }
     }
     window.addEventListener('keydown', onKey)
@@ -334,6 +512,51 @@ export function App() {
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
   const title = loaded ? (loaded.meta.title ?? current?.title ?? '') : ''
   const isNew = !!loaded && fresh === loaded.path
+
+  // Links between pages use the file name, as Obsidian does: [[on-being-edited]].
+  const pagesRef = useRef<PageRef[]>([])
+  pagesRef.current = files.map((f) => ({ target: f.path.replace(/\.md$/, '').split('/').pop()!, title: f.title, folder: f.folder }))
+
+  /** Follow a [[link]]. A link to a page that doesn't exist yet creates it, as in Obsidian. */
+  const openPage = useCallback(
+    async (target: string) => {
+      const hit = files.find((f) => f.path.replace(/\.md$/, '') === target || f.path.replace(/\.md$/, '').split('/').pop() === target)
+      if (hit) return openDoc(hit.path)
+      const folder = files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
+      const { path: created } = await api.create(folder)
+      const title = target.replace(/[-_]+/g, ' ').replace(/^./, (c) => c.toUpperCase())
+      await api.patchMeta(created, { title })
+      // Keep the name the link uses, so the link finds it.
+      const { path: named } = await api.rename(created, title)
+      await refreshFiles()
+      openDoc(named)
+    },
+    [files, openDoc, refreshFiles],
+  )
+
+  /** Images are linked relative to the document, and served from the vault. */
+  const assetUrl = useCallback((src: string) => {
+    if (/^(https?:|data:)/i.test(src)) return src
+    const doc = docRef.current?.path ?? ''
+    const parts = (doc.includes('/') ? doc.slice(0, doc.lastIndexOf('/')).split('/') : []).concat(decodeURI(src).split('/'))
+    const out: string[] = []
+    for (const part of parts) {
+      if (part === '..') out.pop()
+      else if (part && part !== '.') out.push(part)
+    }
+    return '/api/asset?path=' + encodeURIComponent(out.join('/'))
+  }, [])
+
+  const saveImage = useCallback(async (name: string, data: string) => (await api.saveImage(docRef.current?.path ?? '', name, data)).src, [])
+
+  /** Put the caret on a heading from the Outline. */
+  const goToHeading = (h: Heading) => {
+    const view = editorView
+    if (!view) return
+    const pos = Math.min(h.pos, view.state.doc.length)
+    view.dispatch({ selection: { anchor: view.state.doc.lineAt(pos).to }, scrollIntoView: true })
+    view.focus()
+  }
 
   const editorProps = useMemo(
     () => ({
@@ -358,10 +581,10 @@ export function App() {
         </div>
         <div className="titlebar-meta">
           <span className={`save-state is-${saved}`}>{saved === 'saved' ? 'Saved' : saved === 'saving' ? 'Saving…' : 'Edited'}</span>
-          <button className="icon-btn" title="Focus mode (⌘.)" onClick={() => setFocus(true)}>
+          <button className="icon-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
             <Icon name="focus" />
           </button>
-          <button className="icon-btn" title="Right panel (⌘\)" onClick={() => setPanelOpen((o) => !o)}>
+          <button className="icon-btn" title={titled('Right panel', 'panel')} onClick={() => setPanelOpen((o) => !o)}>
             <Icon name="panel" />
           </button>
         </div>
@@ -377,29 +600,30 @@ export function App() {
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'voice' ? ' is-on' : ''}`} title="Voice" onClick={() => showSidebar('voice')}>
           <Icon name="voice" />
         </button>
-        <button className="rail-btn" title="New draft (⌥N)" onClick={() => newDraft()}>
+        <button className="rail-btn" title={titled('New draft', 'newDraft')} onClick={() => newDraft()}>
           <Icon name="compose" />
         </button>
         <div className="rail-spacer" />
-        <button className="rail-btn" title="Focus mode (⌘.)" onClick={() => setFocus(true)}>
+        <button className="rail-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
           <Icon name="focus" />
         </button>
-        <button className={`rail-btn${settingsOpen ? ' is-on' : ''}`} title="Settings (⌥,)" onClick={() => setSettingsOpen((o) => !o)}>
+        <button className={`rail-btn${settingsOpen ? ' is-on' : ''}`} title={titled('Settings', 'settings')} onClick={() => setSettingsOpen((o) => !o)}>
           <Icon name="settings" />
         </button>
       </nav>
 
-      {sidebarOpen && <Sidebar mode={sidebarMode} files={files} voices={voices} voiceView={voiceView} onVoice={openVoice} current={voiceView ? null : path} onOpen={openDoc} onCreate={newDraft} onStar={toggleExemplar} />}
+      {sidebarOpen && <Sidebar mode={sidebarMode} files={files} voices={voices} voiceView={voiceView} onVoice={openVoice} current={voiceView ? null : path} onOpen={openDoc} onCreate={newDraft} onStar={toggleExemplar} actions={fileActions} trash={trash} onRestore={restore} />}
 
       <main className="page-area">
         {voiceView && (
           <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />
         )}
+        {loaded && !voiceView && !focus && <Toolbar view={editorView} format={format} livePreview={livePreview} onLivePreview={setLivePreview} />}
         {loaded && !voiceView && (
           <div className="page">
             <div className="doc-meta">
               <label className="platform">
-                <select value={platform} onChange={(e) => setMeta({ platform: e.target.value })} aria-label="Platform">
+                <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Platform">
                   {(PLATFORMS.includes(platform) ? PLATFORMS : [...PLATFORMS, platform]).map((p) => (
                     <option key={p} value={p}>
                       {platformLabel(p)}
@@ -414,7 +638,7 @@ export function App() {
               <span className="muted path">{loaded.path}</span>
             </div>
             <TitleField key={'title:' + loaded.key} value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)} autoFocus={isNew} onCommit={setTitle} />
-            {isNew && !words && <PlatformPicker value={platform} onPick={(p) => setMeta({ platform: p })} />}
+            {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
             <Editor
               key={loaded.key}
               docKey={loaded.key}
@@ -426,6 +650,13 @@ export function App() {
               openDoc={openDoc}
               onWordCount={setWords}
               onParagraph={onParagraph}
+              livePreview={livePreview}
+              pages={() => pagesRef.current}
+              openPage={openPage}
+              saveImage={saveImage}
+              assetUrl={assetUrl}
+              onView={setEditorView}
+              onFormat={setFormat}
             />
           </div>
         )}
@@ -449,22 +680,43 @@ export function App() {
           exemplar={!!current?.exemplar}
           voice={voices.find((v) => v.platform === platform)}
           onVoice={() => openVoice(platform)}
+          outline={outline}
+          onHeading={goToHeading}
           thinking={thinking}
           covered={material.covered}
           nearest={material.nearest}
           onThinking={() => setThinkingOpen(true)}
+          thoughts={thoughts}
+          onOpenDoc={openDoc}
           onExemplar={() => current && toggleExemplar(current.path)}
           onClearHistory={() => setHistory([])}
         />
       )}
 
+      {toast && (
+        <div className="toast" role="status">
+          <span>{toast.text}</span>
+          {toast.undo && (
+            <button
+              onClick={() => {
+                toast.undo!()
+                setToast(null)
+              }}
+            >
+              Undo
+            </button>
+          )}
+        </div>
+      )}
       {thinkingOpen && loaded && <ThinkingSpace doc={loaded.path} title={title} onClose={closeThinking} />}
 
       {settingsOpen && settings && <Settings settings={settings} status={status} onChange={changeSettings} onClose={() => setSettingsOpen(false)} />}
 
       <footer className="statusbar">
         <span>
-          {platformLabel(platform)} · Ceiling {ceiling} · {words.toLocaleString()} words
+          {platformLabel(platform)} · Ceiling {ceiling} ·{' '}
+          {format?.selectedWords ? `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words` : `${words.toLocaleString()} words`}
+          {words >= 60 && ` · ${Math.max(1, Math.round(words / 230))} min read`}
         </span>
         <span className="muted">
           {mod}1 Recall · {mod}2 Nudge · {mod}3 Word · {mod}4 Sentence · {mod}5 Passage
@@ -473,6 +725,27 @@ export function App() {
     </div>
   )
 }
+
+export interface Heading {
+  level: number
+  text: string
+  pos: number
+}
+
+/** The headings in a document, for the Outline (fenced code skipped). */
+function headingsOf(body: string): Heading[] {
+  const out: Heading[] = []
+  let pos = 0
+  let fenced = false
+  for (const line of body.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced
+    const m = !fenced && line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/)
+    if (m) out.push({ level: m[1].length, text: m[2].replace(/[*_`~=]|<\/?u>/g, ''), pos })
+    pos += line.length + 1
+  }
+  return out
+}
+const sameOutline = (a: Heading[], b: Heading[]) => (a.length === b.length && a.every((h, i) => h.text === b[i].text && h.level === b[i].level && h.pos === b[i].pos) ? a : b)
 
 const platformLabel = (p: string) => (p === 'linkedin' ? 'LinkedIn' : p[0].toUpperCase() + p.slice(1))
 

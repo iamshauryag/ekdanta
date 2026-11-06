@@ -18,6 +18,19 @@ EKDANTA_VAULT=~/path/to/vault npm run dev
 
 Ekdanta stores its settings, index and help history in `.ekdanta/` inside the vault. It is safe to delete.
 
+## Writing and the vault
+
+Ekdanta writes plain Markdown but reads like a finished page, as in Obsidian's Live Preview: headings, lists, checkboxes, quotes, links, highlights and images show formatted, and the Markdown behind them stays out of sight (links show theirs while the caret is in them). The Markdown button at the end of the toolbar shows the source instead.
+
+- **Toolbar**, laid out like Google Docs': undo and redo, text style, bold, italic, underline, strikethrough, highlight, inline code, link, bulleted, numbered and checklists, indent, Insert (divider, table, image, page link, date), clear formatting, and find and replace.
+- **Type /** at the start of a line (or after a space) for any block, as in Notion: `/h1`, `/todo`, `/quote`, `/table`… Markdown typed directly works too: `# `, `- `, `1. `, `[] `, `> `, `---`.
+- **Type [[** to link to another page. ⌘-click a link to open it, or put the caret in it for Open, Edit, Copy and Remove. A link to a page that doesn't exist yet creates it.
+- **Select text** for a small bar with the inline styles.
+- **Paste** keeps formatting from Google Docs and web pages, a URL pasted over selected words links them, and ⌘⇧V pastes plain text. Paste or drop an image and it is saved in `attachments/` in the vault.
+- **Outline** (⌃⌥2) lists the page's headings; click one to go there. The status bar shows the selection's word count and reading time.
+
+Each page in the sidebar has a ⋯ menu: **Rename** (double-click works too) renames the file and updates every `[[link]]` to it; **Move to…** files it in another folder, and moving it into a platform's folder makes it a piece for that platform; **Duplicate**; and **Delete**, which can be undone and keeps the page under **Recently deleted** (in `.ekdanta/trash/`) until you empty it. Changing a piece's platform moves it into that platform's folder, unless you filed it in a folder of your own.
+
 ## Models
 
 Ekdanta uses whatever you already have. By default it picks, in this order:
@@ -32,15 +45,17 @@ Settings (⌥,) can pin a provider, choose the Claude models, use the local mode
 
 ## Voice profiles
 
-Each platform gets a short, readable profile in `.ekdanta/voice/<platform>.md`, built from your ★ exemplars (topped up with recent pieces while there are fewer than three). Every trait quotes your own writing, and Ekdanta checks each quote against the source before keeping it. Edit the traits freely; anything under **Your rules** is yours and a rebuild never changes it. A rebuild is shown as a diff to accept or reject, and ⌘3–⌘5 follow the profile for the piece's platform.
+Each platform gets a short, readable profile in `.ekdanta/voice/<platform>.md`, built from your ★ exemplars (topped up with recent pieces while there are fewer than three). Every trait quotes your own writing, and Ekdanta checks each quote against the source before keeping it. Edit the traits freely; anything under **Your rules** is yours and a rebuild never changes it. A rebuild is shown as a diff to accept or reject, and ⌘3–⌘5 follow the profile for the piece's platform. The profile opens as a formatted page; switch to Markdown to edit it.
 
 ## Thinking Space
 
 ⌥T opens a full-screen canvas for the open piece, for getting what's in your head out before (or while) drafting. Type fragments anywhere: Return starts the next one, a click puts one where you clicked, and dragging moves them. After a pause, Ekdanta suggests a few dashed links between related fragments ("same idea", "contradicts", "example of") and shows a chip where a fragment matches one of your notes. Click a link to remove it; hold ⌥ to hide them all. **Clusters** groups fragments into themes on request; click a label to rename it. Nothing is ever moved or rewritten.
 
-**Start drafting** (⌥T again) returns to the page, with the fragments in the Material panel: the group nearest the paragraph you're writing is open, fragments the draft already covers are ticked, and you can drag one onto the page. The canvas is saved as `<piece>.canvas` in [JSON Canvas](https://jsoncanvas.org) format, so it opens in Obsidian too.
+**Start drafting** (⌥T again) returns to the page, with the fragments in the Material panel: the group nearest the paragraph you're writing is open, fragments the draft already covers are ticked, and you can drag one onto the page. You can keep thinking there without opening the canvas: add, edit or remove thoughts, tick one off by hand, group them into themes and rename a theme. A thought that matches one of your notes shows it underneath. The canvas is saved as `<piece>.canvas` in [JSON Canvas](https://jsoncanvas.org) format, so it opens in Obsidian too.
 
 ## Keys
+
+Every shortcut below except the help ladder's can be changed in Settings → Keyboard shortcuts: click one and press the new keys. Ekdanta warns when keys are already taken, by another command (offering to swap) or by the browser or macOS.
 
 The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tabs; there, use ⌥ (Option) instead. Ekdanta notices which one reaches it and labels everything to match.
 
@@ -54,10 +69,17 @@ The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tab
 | ⌘↵ / ⌘⌫ | Accept all / reject all |
 | ⌥T | Thinking Space for the open piece (browsers keep ⌘T for a new tab) |
 | ⌥N | New draft, in the current folder (browsers keep ⌘N for a new window) |
+| ⌘B · ⌘I · ⌘U · ⌘⇧X | Bold · italic · underline · strikethrough |
+| ⌘E · ⌘⇧H · ⌘K | Inline code · highlight · link |
+| ⌘⇧0 · ⌘⇧1–3 | Normal text · heading 1–3 (on a Mac, ⌘⇧3 is the screenshot key: rebind Heading 3 in Settings) |
+| ⌘⇧7 · ⌘⇧8 · ⌘⇧9 | Numbered list · bulleted list · checklist (⌘↵ ticks a to-do) |
+| Tab · ⇧Tab · ⌘] · ⌘[ | Nest and un-nest list items |
+| ⌘F | Find and replace |
+| ⌘⇧V | Paste as plain text |
 | ⌥⇧8 | Star the open piece as an exemplar (it sounds like you), or un-star it |
 | ⌥, | Settings: help ceiling, models, appearance, the Recall index |
 | ⌘. | Focus mode |
-| ⌘\ · ⌘⌥1–3 | Right panel · Material, History, Piece |
+| ⌘\ · ⌃⌥1–4 | Right panel · Material, Outline, History, Piece |
 
 ## What's not here yet
 

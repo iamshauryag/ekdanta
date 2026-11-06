@@ -10,7 +10,7 @@ import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
 import { refresh, search, paragraphs } from './recall.ts'
-import { VAULT, appendHistory, createDoc, discardIfEmpty, listFiles, nameDoc, readDoc, readHistory, splitFrontMatter, writeDoc } from './vault.ts'
+import { VAULT, appendHistory, createDoc, discardIfEmpty, listFiles, listTrash, readAsset, saveAsset, moveToFolder, nameDoc, placeDoc, renameDoc, duplicateDoc, restoreDoc, trashDoc, readDoc, readHistory, splitFrontMatter, writeDoc } from './vault.ts'
 
 type Handler = (req: IncomingMessage, url: URL) => Promise<unknown>
 
@@ -48,6 +48,45 @@ const routes: Record<string, Handler> = {
     const next = await nameDoc(path, title)
     if (next !== path) refresh().catch(() => {})
     return { path: next }
+  },
+  'POST /api/place': async (req) => {
+    const { path } = await body<{ path: string }>(req)
+    const next = await placeDoc(path)
+    if (next !== path) refresh().catch(() => {})
+    return { path: next }
+  },
+  'POST /api/rename': async (req) => {
+    const { path, title } = await body<{ path: string; title: string }>(req)
+    const next = await renameDoc(path, title)
+    refresh().catch(() => {})
+    return { path: next }
+  },
+  'POST /api/move': async (req) => {
+    const { path, folder } = await body<{ path: string; folder: string }>(req)
+    const next = await moveToFolder(path, folder)
+    refresh().catch(() => {})
+    return { path: next }
+  },
+  'POST /api/duplicate': async (req) => {
+    const { path } = await body<{ path: string }>(req)
+    return { path: await duplicateDoc(path) }
+  },
+  'POST /api/delete': async (req) => {
+    const { path } = await body<{ path: string }>(req)
+    const item = await trashDoc(path)
+    refresh().catch(() => {})
+    return item
+  },
+  'POST /api/asset': async (req) => {
+    const { doc, name, data } = await body<{ doc: string; name: string; data: string }>(req)
+    return { src: await saveAsset(doc, name, data) }
+  },
+  'GET /api/trash': async () => listTrash(),
+  'POST /api/restore': async (req) => {
+    const { id } = await body<{ id: string }>(req)
+    const path = await restoreDoc(id)
+    refresh().catch(() => {})
+    return { path }
   },
   'POST /api/discard': async (req) => {
     const { path } = await body<{ path: string }>(req)
@@ -137,6 +176,18 @@ export function ekdantaApi(): Plugin {
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         if (!req.url?.startsWith('/api/')) return next()
         const url = new URL(req.url, 'http://localhost')
+        // Images are served as themselves, not as JSON.
+        if (req.method === 'GET' && url.pathname === '/api/asset') {
+          try {
+            const { type, data } = await readAsset(url.searchParams.get('path') ?? '')
+            res.setHeader('content-type', type)
+            res.setHeader('content-security-policy', "default-src 'none'; style-src 'unsafe-inline'")
+            return res.end(data)
+          } catch {
+            res.statusCode = 404
+            return res.end()
+          }
+        }
         const handler = routes[`${req.method} ${url.pathname}`]
         if (!handler) return next()
         try {

@@ -1,4 +1,5 @@
-import type { FileEntry, VoiceSummary } from '../lib/api.ts'
+import { useEffect, useRef, useState } from 'react'
+import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
 import { helpMod } from '../editor/help.ts'
 
@@ -14,6 +15,17 @@ interface Props {
   voices: VoiceSummary[]
   voiceView: string | null
   onVoice: (platform: string) => void
+  actions: FileActions
+  trash: Trashed[]
+  onRestore: (id: string) => void
+}
+
+/** What a page's ⋯ menu can do to it. */
+export interface FileActions {
+  rename: (path: string, title: string) => void
+  move: (path: string, folder: string) => void
+  duplicate: (path: string) => void
+  remove: (path: string) => void
 }
 
 const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
@@ -28,8 +40,9 @@ export function Sidebar(p: Props) {
   )
 }
 
-function Vault({ files, current, onOpen, onCreate, onStar }: Props) {
+function Vault({ files, current, onOpen, onCreate, onStar, actions, trash, onRestore }: Props) {
   const folders = [...new Set(files.map((f) => f.folder))].sort()
+  const [showTrash, setShowTrash] = useState(false)
   return (
     <>
       <div className="section-label">Vault</div>
@@ -44,15 +57,36 @@ function Vault({ files, current, onOpen, onCreate, onStar }: Props) {
           {files
             .filter((f) => f.folder === folder)
             .map((f) => (
-              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} />
+              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} actions={actions} folders={folders} />
             ))}
         </div>
       ))}
+      {trash.length > 0 && (
+        <div className="folder trash">
+          <button className="folder-name trash-head" onClick={() => setShowTrash((o) => !o)} aria-expanded={showTrash}>
+            <span>Recently deleted</span>
+            <span className="count">{trash.length}</span>
+          </button>
+          {showTrash &&
+            trash.map((t) => (
+              <div key={t.id} className="file-row trashed">
+                <span className="file" title={`Was ${t.path}`}>
+                  {t.title}
+                </span>
+                <button className="restore" onClick={() => onRestore(t.id)}>
+                  Restore
+                </button>
+              </div>
+            ))}
+          {showTrash && <p className="sidebar-hint">Kept in .ekdanta/trash in the vault until you empty it.</p>}
+        </div>
+      )}
     </>
   )
 }
 
-function Exemplars({ files, current, onOpen, onStar }: Props) {
+function Exemplars({ files, current, onOpen, onStar, actions }: Props) {
+  const folders = [...new Set(files.map((f) => f.folder))].sort()
   const platformOf = (f: FileEntry) => (f.platform ?? 'essay').toLowerCase()
   // The usual platforms first, then anything else the vault uses (notes, say).
   const used = [...new Set([...PLATFORMS, ...files.map(platformOf)])].filter((pl) => files.some((f) => platformOf(f) === pl))
@@ -69,7 +103,7 @@ function Exemplars({ files, current, onOpen, onStar }: Props) {
               <span className="count">{starred.length}</span>
             </div>
             {starred.map((f) => (
-              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} />
+              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} actions={actions} folders={folders} />
             ))}
             {PLATFORMS.includes(pl) && starred.length < ENOUGH && (
               <p className="sidebar-hint">
@@ -99,12 +133,65 @@ function Voices({ voices, voiceView, onVoice }: Props) {
   )
 }
 
-function FileRow({ f, current, onOpen, onStar }: { f: FileEntry; current: string | null; onOpen: (p: string) => void; onStar: (p: string) => void }) {
+function FileRow({
+  f,
+  current,
+  onOpen,
+  onStar,
+  actions,
+  folders,
+}: {
+  f: FileEntry
+  current: string | null
+  onOpen: (p: string) => void
+  onStar: (p: string) => void
+  actions: FileActions
+  folders: string[]
+}) {
+  const [menu, setMenu] = useState<null | 'main' | 'move' | 'new-folder'>(null)
+  const [renaming, setRenaming] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!menu) return
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setMenu(null)
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setMenu(null)
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [menu])
+  const act = (fn: () => void) => () => {
+    setMenu(null)
+    fn()
+  }
+
   return (
-    <div className={`file-row${f.path === current ? ' is-current' : ''}`}>
-      <button className={`file${f.path === current ? ' is-current' : ''}${f.title === 'Untitled' ? ' is-untitled' : ''}`} onClick={() => onOpen(f.path)}>
-        {f.title}
-      </button>
+    <div ref={box} className={`file-row${f.path === current ? ' is-current' : ''}${menu ? ' has-menu' : ''}`}>
+      {renaming ? (
+        <input
+          className="file rename"
+          defaultValue={f.title === 'Untitled' ? '' : f.title}
+          placeholder="Title"
+          aria-label="New title"
+          autoFocus
+          onFocus={(e) => e.target.select()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+            else if (e.key === 'Escape') setRenaming(false)
+          }}
+          onBlur={(e) => {
+            setRenaming(false)
+            const title = e.target.value.trim()
+            if (title && title !== f.title) actions.rename(f.path, title)
+          }}
+        />
+      ) : (
+        <button className={`file${f.path === current ? ' is-current' : ''}${f.title === 'Untitled' ? ' is-untitled' : ''}`} onClick={() => onOpen(f.path)} onDoubleClick={() => setRenaming(true)}>
+          {f.title}
+        </button>
+      )}
       <button
         className={`star${f.exemplar ? ' is-on' : ''}`}
         aria-pressed={f.exemplar}
@@ -113,6 +200,58 @@ function FileRow({ f, current, onOpen, onStar }: { f: FileEntry; current: string
       >
         <Icon name="star" />
       </button>
+      <button className="more" title="More" aria-haspopup="menu" aria-expanded={!!menu} onClick={() => setMenu(menu ? null : 'main')}>
+        <Icon name="more" />
+      </button>
+      {menu === 'main' && (
+        <div className="menu" role="menu">
+          <button role="menuitem" onClick={act(() => setRenaming(true))}>
+            Rename
+          </button>
+          <button role="menuitem" onClick={() => setMenu('move')}>
+            Move to… <span className="muted">›</span>
+          </button>
+          <button role="menuitem" onClick={act(() => actions.duplicate(f.path))}>
+            Duplicate
+          </button>
+          <button role="menuitem" onClick={act(() => onStar(f.path))}>
+            {f.exemplar ? 'Un-star' : 'Star as exemplar'}
+          </button>
+          <hr />
+          <button role="menuitem" className="danger" onClick={act(() => actions.remove(f.path))}>
+            Delete
+          </button>
+        </div>
+      )}
+      {menu === 'move' && (
+        <div className="menu" role="menu">
+          <button className="menu-back" onClick={() => setMenu('main')}>
+            ‹ Move to
+          </button>
+          {folders.map((folder) => (
+            <button key={folder} role="menuitem" disabled={folder === f.folder} onClick={act(() => actions.move(f.path, folder))}>
+              {folderLabel(folder)}
+              {folder === f.folder && <span className="muted">here</span>}
+            </button>
+          ))}
+          <hr />
+          <button role="menuitem" onClick={() => setMenu('new-folder')}>
+            New folder…
+          </button>
+        </div>
+      )}
+      {menu === 'new-folder' && (
+        <form
+          className="menu"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const name = new FormData(e.currentTarget).get('folder')?.toString().trim()
+            if (name) act(() => actions.move(f.path, name))()
+          }}
+        >
+          <input name="folder" placeholder="Folder name" aria-label="Folder name" autoFocus />
+        </form>
+      )}
     </div>
   )
 }

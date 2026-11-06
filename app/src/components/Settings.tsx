@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type Settings as S, type Status } from '../lib/api.ts'
 import { helpMod } from '../editor/help.ts'
+import { KeyMap } from './KeyMap.tsx'
 
 interface Props {
   settings: S
@@ -127,32 +128,15 @@ export function Settings({ settings: s, status, onChange, onClose }: Props) {
         </section>
 
         <section>
-          <h3>Shortcuts</h3>
-          <dl className="keys">
-            {SHORTCUTS.map(([keys, what]) => (
-              <div key={keys}>
-                <dt>{keys.replaceAll('⌘', helpMod === '⌥' && /⌘[1-5]/.test(keys) ? '⌥' : '⌘')}</dt>
-                <dd>{what}</dd>
-              </div>
-            ))}
-          </dl>
+          <h3>Keyboard shortcuts</h3>
+          <p className="sheet-note">Click a shortcut and press the keys you want. Changes apply at once.</p>
+          <KeyMap overrides={s.keys ?? {}} onChange={(keys) => onChange({ keys })} />
         </section>
       </div>
     </div>
   )
 }
 
-const SHORTCUTS: [string, string][] = [
-  ['⌘1 – ⌘5', 'Recall, Nudge, Word, Sentence, Passage'],
-  ['Esc', 'Dismiss a suggestion'],
-  ['⌥N', 'New draft'],
-  ['⌥T', 'Thinking Space for this piece'],
-  ['⌥⇧8', 'Star or un-star as an exemplar'],
-  ['⌘.', 'Focus mode'],
-  ['⌘\\', 'Right panel'],
-  ['⌘⌥1 – ⌘⌥3', 'Material, History, Piece'],
-  ['⌥,', 'Settings'],
-]
 
 const cap = (v: string | number) => {
   const t = String(v)

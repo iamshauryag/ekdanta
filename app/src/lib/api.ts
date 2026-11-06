@@ -20,6 +20,13 @@ export interface Status {
   embedder: string
 }
 
+export interface Trashed {
+  id: string
+  path: string
+  title: string
+  deleted: string
+}
+
 export interface Settings {
   provider: 'auto' | 'claude-cli' | 'anthropic-api' | 'ollama'
   wordLocal: boolean
@@ -31,6 +38,8 @@ export interface Settings {
   recallDot: boolean
   paragraphFocus: boolean
   theme: 'system' | 'light' | 'dark'
+  /** Shortcuts the writer changed: command id → key ('' to unbind). */
+  keys: Record<string, string>
 }
 
 export interface VoiceSummary {
@@ -70,6 +79,7 @@ export interface ThinkingSide {
   clusters?: Cluster[]
   linkedSig?: string // the fragments as they were when links were last suggested
   recall?: Record<string, { text: string; hit: { doc: string; title: string; folder: string } | null }>
+  checked?: Record<string, boolean> // fragments the writer ticked (true) or un-ticked (false) by hand
 }
 export interface Thinking {
   canvas: { nodes: CanvasNode[]; edges: CanvasEdge[] }
@@ -101,6 +111,14 @@ export const api = {
   write: (path: string, content: string) => fetch('/api/file', send('PUT', { path, content })).then(json),
   create: (folder: string, platform?: string) => fetch('/api/new', send('POST', { folder, platform })).then(json<{ path: string }>),
   name: (path: string, title: string) => fetch('/api/name', send('POST', { path, title })).then(json<{ path: string }>),
+  place: (path: string) => fetch('/api/place', send('POST', { path })).then(json<{ path: string }>),
+  rename: (path: string, title: string) => fetch('/api/rename', send('POST', { path, title })).then(json<{ path: string }>),
+  move: (path: string, folder: string) => fetch('/api/move', send('POST', { path, folder })).then(json<{ path: string }>),
+  duplicate: (path: string) => fetch('/api/duplicate', send('POST', { path })).then(json<{ path: string }>),
+  remove: (path: string) => fetch('/api/delete', send('POST', { path })).then(json<Trashed>),
+  saveImage: (doc: string, name: string, data: string) => fetch('/api/asset', send('POST', { doc, name, data })).then(json<{ src: string }>),
+  trash: () => fetch('/api/trash').then(json<Trashed[]>),
+  restore: (id: string) => fetch('/api/restore', send('POST', { id })).then(json<{ path: string }>),
   discard: (path: string) => fetch('/api/discard', send('POST', { path })).then(json<{ discarded: boolean }>),
   patchMeta: (path: string, patch: Record<string, string | null>) => fetch('/api/meta', send('POST', { path, patch })).then(json),
   voice: () => fetch('/api/voice').then(json<VoiceSummary[]>),
