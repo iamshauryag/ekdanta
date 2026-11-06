@@ -28,7 +28,14 @@ export function isSpecialPath(path: string, excluded: readonly string[] = []): b
   })
 }
 
-/** A paragraph that is only a template's writing prompt, `*Prompt: …*`: guidance, not the writer's words. */
+/**
+ * A paragraph that is only a template's writing prompt: guidance, not the writer's words. Either the
+ * whole paragraph is emphasised, `*Prompt: …*` (or `_…_`, `**…**`, and it may wrap), or it is one
+ * line that opens with the label `**Prompt:**` (or `*Prompt:*`). Emphasis inside the prompt is fine;
+ * a prompt with the writer's own lines after it is not a prompt paragraph.
+ */
 export function isPromptParagraph(text: string): boolean {
-  return /^([*_])Prompt:[^*_]*\1$/i.test(text.trim())
+  const t = text.trim()
+  // The prompt's closing mark ends a line, so it must end the paragraph too.
+  return /^(\*\*|__|\*|_)Prompt:(?:(?!\1\n)[\s\S])*\1$/i.test(t) || /^(\*\*|__|\*|_)Prompt:\1[ \t][^\n]*$/i.test(t)
 }

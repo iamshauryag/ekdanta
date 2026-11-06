@@ -8,6 +8,7 @@ import path from 'node:path'
 
 /** The parts of a request isLocalRequest looks at (an http.IncomingMessage has them). */
 export interface RequestLike {
+  method?: string
   socket?: { remoteAddress?: string } | null
   headers: Record<string, string | string[] | undefined>
 }
@@ -39,22 +40,54 @@ const header = (req: RequestLike, name: string) => {
 
 /**
  * True only for a request made on this machine, to this machine: from a loopback address, not
- * forwarded by a proxy, addressed to a loopback host name, and (when the browser says which page
- * sent it) from a page on that same host.
+ * forwarded by a proxy, addressed to a loopback host name, and from a page on that same host (or
+ * typed into the address bar). A GET must show that with Origin or Sec-Fetch-Site, which every
+ * current browser sends; a script on this machine can send `Sec-Fetch-Site: none`.
  */
 export function isLocalRequest(req: RequestLike): boolean {
   if (!isLoopbackAddress(req.socket?.remoteAddress)) return false
   if (header(req, 'x-forwarded-for') || header(req, 'x-forwarded-host') || header(req, 'forwarded')) return false
   const host = header(req, 'host')
   if (!host || !isLoopbackHost(host)) return false
+  // Browsers say whether the request comes from another site. Origin alone isn't enough: they
+  // leave it off a cross-site GET (an <img>, a link, a navigation).
+  const site = header(req, 'sec-fetch-site')
+  if (site !== undefined && site !== 'same-origin' && site !== 'none') return false
   const origin = header(req, 'origin')
-  if (origin === undefined) return true
+  if (origin === undefined) {
+    // A GET with neither header could be another site's <img> in a browser too old to send
+    // Sec-Fetch-Site. Other methods carry Origin whenever a page sends them.
+    return site !== undefined || !/^(GET|HEAD)$/i.test(req.method ?? '')
+  }
   try {
     return new URL(origin).host.toLowerCase() === host.trim().toLowerCase()
   } catch {
     return false // "null" (a sandboxed frame or a file://) or garbage
   }
 }
+
+/** An error with an HTTP status, for the API router to answer with. */
+export class HttpError extends Error {
+  readonly status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+/** The status the API answers a failed request with: an HttpError's own, otherwise 500. */
+export const statusOf = (e: unknown) => (e instanceof HttpError ? e.status : 500)
+
+/**
+ * Wrap a route so it answers only requests made on this machine (not over the tailnet, not from
+ * another site): for routes that run programs or write outside the vault. Others get a 403.
+ */
+export const local =
+  <Req extends RequestLike, Rest extends unknown[], R>(handler: (req: Req, ...rest: Rest) => R) =>
+  (req: Req, ...rest: Rest): R => {
+    if (!isLocalRequest(req)) throw new HttpError(403, 'Only available on this computer')
+    return handler(req, ...rest)
+  }
 
 export interface ToolResult {
   stdout: string

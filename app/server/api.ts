@@ -10,7 +10,7 @@ import { material, readThinking, recallChips, suggestClusters, suggestLinks, wri
 import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
-import { isLocalRequest } from './net.ts'
+import { local, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import {
   VAULT,
@@ -36,23 +36,7 @@ import {
 
 type Handler = (req: IncomingMessage, url: URL) => Promise<unknown>
 
-/** An error with an HTTP status, for the router to answer with. */
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message)
-  }
-}
-
-/** Only for requests made on this machine (not over the tailnet, not from another site): for routes that run programs or write outside the vault. */
-export const local =
-  (handler: Handler): Handler =>
-  (req, url) => {
-    if (!isLocalRequest(req)) throw new HttpError(403, 'Only available on this computer')
-    return handler(req, url)
-  }
+export { local }
 
 async function body<T>(req: IncomingMessage): Promise<T> {
   let raw = ''
@@ -239,7 +223,7 @@ export function ekdantaApi(): Plugin {
           res.setHeader('content-type', 'application/json')
           res.end(JSON.stringify(result))
         } catch (e) {
-          res.statusCode = e instanceof HttpError ? e.status : 500
+          res.statusCode = statusOf(e)
           res.setHeader('content-type', 'application/json')
           res.end(JSON.stringify({ error: (e as Error).message }))
         }

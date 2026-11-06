@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_KINDS, cleanKinds, kindOfFolder } from './kinds.ts'
+import { DEFAULT_KINDS, cleanKinds, kindOfFolder, newKind } from './kinds.ts'
 
 test('cleanKinds keeps template and doc fields that are well formed', () => {
   const [k] = cleanKinds([
@@ -35,4 +35,15 @@ test('special folders hold no kind', () => {
   assert.equal(kindOfFolder(kinds, 'journal'), undefined)
   assert.equal(kindOfFolder(kinds, 'templates'), undefined)
   assert.equal(kindOfFolder(kinds, 'essays')?.id, 'essay')
+})
+
+test('a kind never files into a special folder', () => {
+  assert.equal(newKind('Template', DEFAULT_KINDS)?.folder, 'my-templates')
+  assert.equal(newKind('Journal', DEFAULT_KINDS)?.folder, 'journals') // not the special journal/
+  assert.equal(newKind('Source', DEFAULT_KINDS)?.folder, 'my-sources')
+  assert.equal(newKind('Export', DEFAULT_KINDS)?.folder, 'my-exports')
+  const [kind] = cleanKinds([{ id: 'journal', name: 'Journal', folder: 'journal', guidance: '', words: 300 }])!
+  assert.equal(kind.folder, 'my-journal')
+  assert.equal(kindOfFolder([kind], 'my-journal')?.id, 'journal')
+  assert.equal(kindOfFolder([kind], 'journal'), undefined)
 })

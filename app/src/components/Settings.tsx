@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type Settings as S, type Status } from '../lib/api.ts'
 import { helpMod } from '../editor/help.ts'
+import { SPECIAL_FOLDERS } from '../lib/special.ts'
 import { KeyMap } from './KeyMap.tsx'
 import { Kinds } from './Kinds.tsx'
 
@@ -210,6 +211,13 @@ export function Settings({ settings: s, status, onChange, onClose }: Props) {
                 <button className="btn" onClick={rebuild}>
                   Rebuild
                 </button>
+              </Row>
+              <Row label="Left out" hint="Top-level folders of material, not your own finished writing. Recall and voice skip them.">
+                <span className="path folders">
+                  {SPECIAL_FOLDERS.map((f) => (
+                    <span key={f}>{f}/</span>
+                  ))}
+                </span>
               </Row>
             </section>
           )}

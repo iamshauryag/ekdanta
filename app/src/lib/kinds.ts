@@ -56,8 +56,15 @@ export function newKind(name: string, taken: Kind[]): Kind | null {
   if (!base) return null
   let id = base
   for (let n = 2; taken.some((k) => k.id === id); n++) id = `${base}-${n}`
-  return { id, name, folder: plural(id), guidance: '', words: 800 }
+  return { id, name, folder: kindFolder(plural(id)), guidance: '', words: 800 }
 }
+
+/**
+ * A folder a kind can file into. Special folders (templates, journal, sources…) are left out of
+ * Recall and voice, so a kind named "Template" or "Journal" files into my-templates/ or my-journal/
+ * instead: its pieces are the writer's own and should count like any other.
+ */
+const kindFolder = (folder: string) => (isSpecialPath(folder) ? `my-${folder}` : folder)
 
 /** Keep only well-formed kinds (settings come from a file the writer can edit). */
 export function cleanKinds(value: unknown): Kind[] | null {
@@ -66,7 +73,7 @@ export function cleanKinds(value: unknown): Kind[] | null {
   for (const k of value as Partial<Kind>[]) {
     if (!k || typeof k.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(k.id) || out.some((o) => o.id === k.id)) continue
     const name = typeof k.name === 'string' && k.name.trim() ? k.name.trim().slice(0, 40) : k.id
-    const folder = kindId(typeof k.folder === 'string' ? k.folder : '') || plural(k.id)
+    const folder = kindFolder(kindId(typeof k.folder === 'string' ? k.folder : '') || plural(k.id))
     const guidance = typeof k.guidance === 'string' ? k.guidance.trim().slice(0, 400) : ''
     const words = Math.max(1, Math.min(50000, Math.round(Number(k.words) || 800)))
     const kind: Kind = { id: k.id, name, folder, guidance, words }
