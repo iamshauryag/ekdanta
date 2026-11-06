@@ -165,13 +165,16 @@ export async function lastWritten(rel: string): Promise<{ mtime: number; hash: s
 // Files Ekdanta keeps beside or about a document. They follow it through rename, move, trash and
 // restore. The name is also the file's name inside a trash folder, so it must stay stable.
 
-const sidecarList: { name: string; of: (rel: string) => string }[] = []
+const sidecarList: { name: string; of: (rel: string) => string; content: boolean }[] = []
 
-/** Make a per-document file (or folder) follow its document. `of` maps a document's vault path to the file's absolute path. */
-export function registerSidecar(name: string, of: (rel: string) => string) {
+/**
+ * Make a per-document file (or folder) follow its document. `of` maps a document's vault path to the file's absolute path.
+ * A sidecar that holds the writer's own words (`content: true`) keeps an otherwise empty new draft from being discarded.
+ */
+export function registerSidecar(name: string, of: (rel: string) => string, opts: { content?: boolean } = {}) {
   if (!/^[\w.-]+$/.test(name) || name === 'doc.md' || name === 'info.json') throw new Error(`Bad sidecar name: ${name}`)
   if (sidecarList.some((s) => s.name === name)) throw new Error(`Sidecar ${name} is already registered`)
-  sidecarList.push({ name, of })
+  sidecarList.push({ name, of, content: Boolean(opts.content) })
 }
 
 /** A document's sidecars: [absolute path, name]. */
@@ -424,8 +427,9 @@ export async function discardIfEmpty(rel: string) {
   if (!isUntitled(rel)) return false
   const { meta, body } = splitFrontMatter(await readDoc(rel))
   if (meta.title?.trim() || body.trim()) return false
-  // Thinking already done for it counts as content.
+  // Thinking already done for it counts as content, and so does anything else the writer put beside it.
   if (await exists(resolveInVault(canvasOf(rel)))) return false
+  for (const s of sidecarList) if (s.content && (await exists(s.of(rel)))) return false
   await fs.unlink(resolveInVault(rel))
   cache.invalidate(rel)
   // Its sidecars go too, so the next untitled.md doesn't inherit them.

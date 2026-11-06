@@ -84,6 +84,10 @@ export function App() {
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [thinking, setThinking] = useState<Thinking | null>(null)
   const [material, setMaterial] = useState<{ covered: string[]; nearest: string | null }>({ covered: [], nearest: null })
+  // The brief pinned beside the open document ('' for none), and whether its paste box is open.
+  const [brief, setBrief] = useState('')
+  const [briefEditing, setBriefEditing] = useState(false)
+  const briefFor = useRef<string | null>(null) // a page opened from its ⋯ menu to pin a brief
   const paragraph = useRef('')
   const materialTimer = useRef<number | undefined>(undefined)
   const ceiling = settings?.ceiling ?? 5
@@ -157,6 +161,13 @@ export function App() {
     setThinking(null)
     setMaterial({ covered: [], nearest: null })
     api.thinking(path).then((t) => !cancelled && setThinking(t))
+    setBrief('')
+    setBriefEditing(briefFor.current === path)
+    briefFor.current = null
+    api
+      .brief(path)
+      .then((b) => !cancelled && setBrief(b))
+      .catch(() => {})
     return () => {
       cancelled = true
     }
@@ -301,6 +312,47 @@ export function App() {
       refreshVoices()
       notify(`Deleted “${item.title}”`, () => restore(item.id))
     },
+    pinBrief: (rel) => void pinBrief(rel),
+    hasBrief: (rel) => rel === docRef.current?.path && brief.trim() !== '',
+  }
+
+  /** Pin a brief to a page (or edit the one it has): open the page, and the paste box in the Piece tab. */
+  const pinBrief = async (rel: string) => {
+    setPanelOpen(true)
+    setPanelTab('piece')
+    if (docRef.current?.path === rel) return setBriefEditing(true)
+    briefFor.current = rel
+    await openDoc(rel)
+  }
+
+  const saveBrief = async (text: string) => {
+    const d = docRef.current
+    if (!d) return
+    if (!text.trim()) return unpinBrief()
+    const saved = await api.pinBrief(d.path, text)
+    if (docRef.current === d) {
+      setBrief(saved)
+      setBriefEditing(false)
+    }
+  }
+
+  const unpinBrief = async () => {
+    const d = docRef.current
+    if (!d) return
+    const was = brief
+    await api.pinBrief(d.path, '')
+    setBrief('')
+    setBriefEditing(false)
+    if (was)
+      notify('Brief unpinned', async () => {
+        // A rename since then updates d.path, so the brief goes back to the page wherever it is now.
+        try {
+          await api.pinBrief(d.path, was)
+          if (docRef.current === d) setBrief(was)
+        } catch (e) {
+          notify(`Couldn’t pin the brief back: ${(e as Error).message}`)
+        }
+      })
   }
 
   const restore = async (id: string) => {
@@ -493,6 +545,7 @@ export function App() {
       outline: () => openTab('outline'),
       history: () => openTab('history'),
       piece: () => openTab('piece'),
+      brief: () => void (docRef.current && pinBrief(docRef.current.path)),
     }
     const onKey = (e: KeyboardEvent) => {
       if (focus && e.key === 'Escape' && !document.querySelector('.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost')) return setFocus(false)
@@ -659,7 +712,8 @@ export function App() {
                 // Back from the Markdown view, the page is read afresh from what was written there.
                 key={loaded.key}
                 docKey={loaded.key}
-                autoFocus={!isNew}
+                // Opened to pin a brief: the paste box keeps the focus.
+                autoFocus={!isNew && !briefEditing}
                 initial={docRef.current?.body ?? loaded.body}
                 onChange={onChange}
                 {...editorProps}
@@ -710,6 +764,11 @@ export function App() {
           onOpenDoc={openDoc}
           onExemplar={() => current && toggleExemplar(current.path)}
           onClearHistory={() => setHistory([])}
+          brief={brief}
+          briefEditing={briefEditing}
+          onBriefEditing={setBriefEditing}
+          onBriefSave={saveBrief}
+          onBriefUnpin={unpinBrief}
         />
       )}
 

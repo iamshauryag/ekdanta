@@ -144,5 +144,13 @@ export const api = {
     fetch('/api/thinking/material', send('POST', { doc, fragments, paragraph })).then(json<{ covered: string[]; nearest: string | null }>),
   history: (doc: string) => fetch('/api/history?doc=' + encodeURIComponent(doc)).then(json<unknown[]>),
   appendHistory: (doc: string, item: unknown) => fetch('/api/history', send('POST', { doc, item })).then(json),
+  brief: (doc: string) =>
+    fetch('/api/brief?doc=' + encodeURIComponent(doc))
+      .then(json<{ text: string }>)
+      .then((d) => d.text),
+  pinBrief: (doc: string, text: string) =>
+    fetch('/api/brief', send('PUT', { doc, text }))
+      .then(json<{ text: string }>)
+      .then((d) => d.text),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),
 }

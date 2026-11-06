@@ -6,6 +6,7 @@ import type { Heading } from '../editor/Editor.tsx'
 import { Icon } from './Icon.tsx'
 import { binding, formatKey, titled } from '../lib/keys.ts'
 import { helpMod } from '../editor/help.ts'
+import { BriefCard } from './BriefCard.tsx'
 
 export type PanelTab = 'material' | 'outline' | 'history' | 'piece'
 
@@ -48,6 +49,12 @@ interface Props {
   thoughts: Thoughts
   onOpenDoc: (path: string) => void
   onClearHistory: () => void
+  /** The pinned brief ('' for none), and the paste box for it. */
+  brief: string
+  briefEditing: boolean
+  onBriefEditing: (on: boolean) => void
+  onBriefSave: (text: string) => Promise<void>
+  onBriefUnpin: () => void
 }
 
 export function Panel(p: Props) {
@@ -345,6 +352,7 @@ function Piece(p: Props) {
   const s = p.status
   return (
     <>
+      <BriefCard key={p.path ?? ''} text={p.brief} platform={p.platform} editing={p.briefEditing} onEditing={p.onBriefEditing} onSave={p.onBriefSave} onUnpin={p.onBriefUnpin} />
       <div className="panel-head">
         Piece <em>· facts</em>
       </div>

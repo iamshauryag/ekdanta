@@ -47,6 +47,7 @@ const COMMAND_LIST = [
   { id: 'outline', label: 'Panel: Outline', group: 'App', key: 'Ctrl-Alt-2' },
   { id: 'history', label: 'Panel: History', group: 'App', key: 'Ctrl-Alt-3' },
   { id: 'piece', label: 'Panel: Piece', group: 'App', key: 'Ctrl-Alt-4' },
+  { id: 'brief', label: 'Pin a brief', group: 'App', key: '' },
   { id: 'settings', label: 'Settings', group: 'App', key: 'Alt-,' },
 ] as const satisfies readonly Command[]
 

@@ -5,6 +5,8 @@ import { search } from './recall.ts'
 import { voiceForPrompt } from './voice.ts'
 import { settingsNow } from './settings.ts'
 import { describeKind } from '../src/lib/kinds.ts'
+import { withBrief } from '../src/lib/brief.ts'
+import { briefForPrompt } from './brief.ts'
 
 export interface HelpRequest {
   level: 1 | 2 | 3 | 4 | 5
@@ -70,10 +72,16 @@ export async function runHelp(req: HelpRequest): Promise<Record<string, unknown>
   if (!strong || !fast) return { kind: 'error', message: 'No model available. Start Ollama, or sign in to the Claude CLI.' }
 
   if (req.level === 2) {
-    const system = `${RESTRAINT}
+    // A pinned brief (the question or email this piece answers) grounds the nudge; without one, nothing changes.
+    const { system, prompt } = withBrief(
+      {
+        system: `${RESTRAINT}
 Level 2, Nudge: reply with ONE question (or one short direction) that helps the writer think about the given paragraph. At most 20 words.
-Never write prose the writer could paste into the draft. Never praise. The piece is ${norms(req.platform)}.`
-    const prompt = `${context(req)}Paragraph the writer is working on:\n"""${req.scope}"""${avoidLine(req)}`
+Never write prose the writer could paste into the draft. Never praise. The piece is ${norms(req.platform)}.`,
+        prompt: `${context(req)}Paragraph the writer is working on:\n"""${req.scope}"""${avoidLine(req)}`,
+      },
+      await briefForPrompt(req.doc),
+    )
     for (let attempt = 0; attempt < 2; attempt++) {
       const raw = clean(await generate(strong, { system, prompt, temperature: 0.8 }))
       if (isNudge(raw)) return { kind: 'nudge', text: raw, provider: strong }
