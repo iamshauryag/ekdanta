@@ -2,7 +2,7 @@
 // Mac, Ctrl+Shift+B elsewhere). The writer's changes are saved in settings; anything unchanged follows
 // the defaults here. The help ladder's own keys (⌘1–⌘5, Tab, Esc, ⌘↵) aren't remapped here.
 
-export type Group = 'Text' | 'Blocks' | 'Editing' | 'App'
+export type Group = 'Text' | 'Blocks' | 'Editing' | 'Navigate' | 'App'
 
 export interface Command {
   id: string
@@ -12,7 +12,7 @@ export interface Command {
   key: string
 }
 
-export const COMMANDS: Command[] = [
+const COMMAND_LIST = [
   { id: 'bold', label: 'Bold', group: 'Text', key: 'Mod-b' },
   { id: 'italic', label: 'Italic', group: 'Text', key: 'Mod-i' },
   { id: 'underline', label: 'Underline', group: 'Text', key: 'Mod-u' },
@@ -48,7 +48,11 @@ export const COMMANDS: Command[] = [
   { id: 'history', label: 'Panel: History', group: 'App', key: 'Ctrl-Alt-3' },
   { id: 'piece', label: 'Panel: Piece', group: 'App', key: 'Ctrl-Alt-4' },
   { id: 'settings', label: 'Settings', group: 'App', key: 'Alt-,' },
-]
+] as const satisfies readonly Command[]
+
+export const COMMANDS: Command[] = [...COMMAND_LIST]
+/** Every command's id, so a typo in App's action map is a type error. */
+export type CommandId = (typeof COMMAND_LIST)[number]['id']
 
 export const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
 
@@ -73,9 +77,27 @@ export const bindings = () => Object.fromEntries(COMMANDS.map((c) => [c.id, bind
 // ---- Reading and showing keys -------------------------------------------------------------
 
 const CODE_KEYS: Record<string, string> = {
-  Comma: ',', Period: '.', Slash: '/', Backslash: '\\', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'",
-  Minus: '-', Equal: '=', Backquote: '`', Space: 'Space', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace', Delete: 'Delete',
-  Escape: 'Escape', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight',
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  Backslash: '\\',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Semicolon: ';',
+  Quote: "'",
+  Minus: '-',
+  Equal: '=',
+  Backquote: '`',
+  Space: 'Space',
+  Enter: 'Enter',
+  Tab: 'Tab',
+  Backspace: 'Backspace',
+  Delete: 'Delete',
+  Escape: 'Escape',
+  ArrowUp: 'ArrowUp',
+  ArrowDown: 'ArrowDown',
+  ArrowLeft: 'ArrowLeft',
+  ArrowRight: 'ArrowRight',
 }
 
 /** The key that was pressed, named the same way whatever the keyboard layout or modifiers (⌥ changes e.key on a Mac). */
@@ -118,7 +140,12 @@ export function formatKey(key: string): string {
   if (isMac) {
     const sym: Record<string, string> = { Ctrl: '⌃', Alt: '⌥', Shift: '⇧', Mod: '⌘' }
     // Apple's order: ⌃ ⌥ ⇧ ⌘.
-    return ['Ctrl', 'Alt', 'Shift', 'Mod'].filter((m) => parts.includes(m)).map((m) => sym[m]).join('') + name
+    return (
+      ['Ctrl', 'Alt', 'Shift', 'Mod']
+        .filter((m) => parts.includes(m))
+        .map((m) => sym[m])
+        .join('') + name
+    )
   }
   const word: Record<string, string> = { Mod: 'Ctrl', Alt: 'Alt', Shift: 'Shift' }
   return [...['Mod', 'Alt', 'Shift'].filter((m) => parts.includes(m)).map((m) => word[m]), name].join('+')
@@ -144,6 +171,7 @@ const RESERVED_MAC: Record<string, string> = {
   'Mod-l': 'the address bar',
   'Mod-r': 'reloads the page',
   'Mod-Shift-t': 'reopens a closed tab',
+  'Mod-p': 'prints the page',
 }
 const RESERVED_OTHER: Record<string, string> = {
   'Mod-w': 'closes the tab',
@@ -153,6 +181,7 @@ const RESERVED_OTHER: Record<string, string> = {
   'Mod-r': 'reloads the page',
   'Mod-Shift-t': 'reopens a closed tab',
   'Alt-F4': 'closes the window',
+  'Mod-p': 'prints the page',
 }
 
 /** Why a key won't reach Ekdanta, if the system or the browser keeps it. */
