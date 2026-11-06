@@ -74,26 +74,49 @@ export function onBeforeWrite(hook: WriteHook) {
   }
 }
 
-/** Replace a file in one step: write a temporary file beside it, then rename it over the original. */
+/**
+ * Replace a file in one step: write a temporary file beside it, then rename it over the original.
+ * A symlinked document is written through to its target (the link stays a link), a hard-linked one
+ * is written in place (a rename would split it from its other names), and the file keeps its mode.
+ */
 export async function atomicWrite(abs: string, data: string | Buffer) {
-  await fs.mkdir(path.dirname(abs), { recursive: true })
+  const real = await fs.realpath(abs).catch(() => abs) // a new file, or a dangling link: write where asked
+  const old = await fs.stat(real).catch(() => null)
+  if (old && old.nlink > 1) return fs.writeFile(real, data)
+  await fs.mkdir(path.dirname(real), { recursive: true })
   // A dot-file, so a listing never shows a half-written document.
-  const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`)
+  const tmp = path.join(path.dirname(real), `.${path.basename(real)}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`)
   try {
-    await fs.writeFile(tmp, data)
-    await fs.rename(tmp, abs)
+    await fs.writeFile(tmp, data, old ? { mode: old.mode & 0o7777 } : {})
+    if (old) await fs.chmod(tmp, old.mode & 0o7777) // writeFile's mode is masked by the umask
+    await fs.rename(tmp, real)
   } catch (e) {
     await fs.unlink(tmp).catch(() => {})
     throw e
   }
 }
 
+// One write at a time per document, so the write record always describes the file on disk:
+// two overlapping saves (an autosave and ⌘S, a save and a rename's relink) can't interleave.
+const writing = new Map<string, Promise<unknown>>()
+function oneAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (writing.get(key) ?? Promise.resolve()).then(fn, fn)
+  const tail = run.catch(() => {})
+  writing.set(key, tail)
+  tail.then(() => writing.get(key) === tail && writing.delete(key))
+  return run
+}
+
 export async function writeDoc(rel: string, content: string, opts: { reason?: string } = {}): Promise<{ mtime: number }> {
   const abs = resolveInVault(rel)
   if (!abs.endsWith('.md')) throw new Error('Only .md files can be written')
+  return oneAtATime(abs, () => writeNow(rel, abs, content, opts.reason ?? 'save'))
+}
+
+async function writeNow(rel: string, abs: string, content: string, reason: string): Promise<{ mtime: number }> {
   if (writeHooks.length) {
     const oldContent = await fs.readFile(abs, 'utf8').catch(() => null)
-    const w: BeforeWrite = { path: rel, oldContent, newContent: content, reason: opts.reason ?? 'save' }
+    const w: BeforeWrite = { path: rel, oldContent, newContent: content, reason }
     for (const hook of writeHooks) {
       try {
         await hook(w)
@@ -130,6 +153,8 @@ export async function lastWritten(rel: string): Promise<{ mtime: number; hash: s
     const info = JSON.parse(await fs.readFile(writtenInfo(rel), 'utf8')) as { mtime: number; hash: string }
     const body = await fs.readFile(writtenBody(rel), 'utf8')
     if (typeof info.mtime !== 'number' || typeof info.hash !== 'string') return null
+    // The two files are written one after the other; if they don't agree, the record can't be trusted.
+    if (hashOf(body) !== info.hash) return null
     return { mtime: info.mtime, hash: info.hash, body }
   } catch {
     return null

@@ -31,6 +31,7 @@ interface IndexFile {
 const INDEX_PATH = path.join(META_DIR, 'index.json')
 let index: IndexFile | null = null
 let building: Promise<IndexFile> | null = null
+let again: Promise<IndexFile> | null = null
 
 /** Paragraphs worth recalling: prose, not headings, lists of links, one-liners or a template's prompts. */
 export function paragraphs(body: string): string[] {
@@ -71,9 +72,13 @@ async function indexFile(ix: IndexFile, f: FileEntry) {
   ix.files[f.path] = f.mtime
 }
 
-/** Bring the index up to date with the vault: new, changed and deleted files. */
+/**
+ * Bring the index up to date with the vault: new, changed and deleted files. A refresh asked for
+ * while one is running (after a save, or a change to the excluded folders) runs again once it ends,
+ * so it sees what the running one may have missed.
+ */
 export function refresh(): Promise<IndexFile> {
-  if (building) return building
+  if (building) return (again ??= building.catch(() => {}).then(() => ((again = null), refresh())))
   building = (async () => {
     const ix = await load()
     // Templates, journals, sources and the writer's excluded folders aren't recalled; any already

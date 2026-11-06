@@ -25,9 +25,10 @@ export async function statTree(root: string): Promise<FileStat[]> {
       if (entry.name.startsWith('.')) continue
       const abs = path.join(dir, entry.name)
       if (entry.isDirectory()) await walk(abs)
-      else if (entry.isFile() && entry.name.endsWith('.md')) {
-        const stat = await fs.stat(abs).catch(() => null)
-        if (stat) out.push({ path: path.relative(root, abs).split(path.sep).join('/'), mtime: stat.mtimeMs, size: stat.size })
+      // A symlinked note counts (stat follows the link); a symlinked folder isn't walked, which keeps out loops.
+      else if ((entry.isFile() || entry.isSymbolicLink()) && entry.name.endsWith('.md')) {
+        const stat = await fs.stat(abs).catch(() => null) // null: removed, or a dangling link
+        if (stat?.isFile()) out.push({ path: path.relative(root, abs).split(path.sep).join('/'), mtime: stat.mtimeMs, size: stat.size })
       }
     }
   }

@@ -127,3 +127,51 @@ test('discarding an empty untitled draft takes its sidecars with it', async () =
   assert.equal(await vault.lastWritten(rel), null)
   assert.equal(await exists(path.join(meta, 'history', 'essays__untitled.jsonl')), false)
 })
+
+test('overlapping saves of one document leave a record that matches the file', async () => {
+  for (let round = 0; round < 5; round++) {
+    await Promise.all(Array.from({ length: 25 }, (_, i) => vault.writeDoc('essays/race.md', `Version ${i}`)))
+    const disk = await fs.readFile(path.join(root, 'essays/race.md'), 'utf8')
+    const rec = await vault.lastWritten('essays/race.md')
+    assert.equal(rec?.body, disk)
+    assert.equal(rec?.hash, vault.hashOf(disk))
+    assert.equal(rec?.mtime, (await fs.stat(path.join(root, 'essays/race.md'))).mtimeMs)
+  }
+  // A record whose two halves disagree is not trusted.
+  await fs.writeFile(path.join(meta, 'written', 'essays__race.md'), 'something else')
+  assert.equal(await vault.lastWritten('essays/race.md'), null)
+})
+
+test('a symlinked document is listed, and saving it writes through the link', async () => {
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'ekdanta-outside-'))
+  try {
+    const target = path.join(outside, 'real.md')
+    await fs.writeFile(target, '# Linked\n\nOld text.')
+    await fs.symlink(target, path.join(root, 'essays/linked.md'))
+    await fs.symlink(path.join(outside, 'gone.md'), path.join(root, 'essays/dangling.md'))
+    const paths = (await vault.listFiles()).map((f) => f.path)
+    assert.ok(paths.includes('essays/linked.md'))
+    assert.ok(!paths.includes('essays/dangling.md'))
+    await vault.writeDoc('essays/linked.md', '# Linked\n\nEdited in Ekdanta.')
+    assert.ok((await fs.lstat(path.join(root, 'essays/linked.md'))).isSymbolicLink())
+    assert.equal(await fs.readFile(target, 'utf8'), '# Linked\n\nEdited in Ekdanta.')
+    assert.equal((await vault.lastWritten('essays/linked.md'))?.mtime, (await fs.stat(target)).mtimeMs)
+    await fs.rm(path.join(root, 'essays/dangling.md'))
+  } finally {
+    await fs.rm(outside, { recursive: true, force: true })
+    await fs.rm(path.join(root, 'essays/linked.md'), { force: true })
+  }
+})
+
+test('saving keeps a document’s permissions and its hard links', async () => {
+  const abs = path.join(root, 'essays/private.md')
+  await vault.writeDoc('essays/private.md', 'secret')
+  await fs.chmod(abs, 0o600)
+  await vault.writeDoc('essays/private.md', 'still secret')
+  assert.equal((await fs.stat(abs)).mode & 0o777, 0o600)
+  const other = path.join(root, 'other-name.md')
+  await fs.link(abs, other)
+  await vault.writeDoc('essays/private.md', 'seen by both names')
+  assert.equal(await fs.readFile(other, 'utf8'), 'seen by both names')
+  await fs.rm(other)
+})
