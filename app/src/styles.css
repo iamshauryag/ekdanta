@@ -2969,6 +2969,12 @@ button.keymap-key:hover {
   color: var(--ink-3);
   white-space: nowrap;
 }
+.read-online {
+  padding: 2px 8px 2px 0;
+  color: var(--ink-3);
+  font-weight: 400;
+  white-space: nowrap;
+}
 .fmt-bar .is-read {
   display: grid;
   place-items: center;

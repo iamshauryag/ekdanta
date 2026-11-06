@@ -5,7 +5,7 @@ import { SPECIAL_FOLDERS } from '../lib/special.ts'
 import { KeyMap } from './KeyMap.tsx'
 import { Kinds } from './Kinds.tsx'
 import { RATES, listedVoices, readPrefs, sample, saveReadPrefs, useSpeechVoices } from './ReadAloudBar.tsx'
-import { pickVoice, voiceLabel } from '../lib/speak.ts'
+import { isOnlineVoice, pickVoice, voiceLabel } from '../lib/speak.ts'
 
 interface Props {
   settings: S
@@ -260,14 +260,17 @@ function ReadAloudRows() {
     )
   const listed = listedVoices(voices)
   const chosen = listed.find((v) => v.voiceURI === prefs.voice)
+  const used = chosen ?? pickVoice(voices, { systemLang: navigator.language })
   return (
     <>
       <Row
         label="Read aloud voice"
         hint={
-          chosen && !chosen.localService
-            ? 'This voice sends the text it reads to an online service.'
-            : 'Voices on this computer come first; they work offline. A document with a lang property is read in that language.'
+          isOnlineVoice(used)
+            ? chosen
+              ? 'This voice sends the text it reads to an online service.'
+              : 'This computer has no voices of its own, so Automatic uses an online one: it sends the text it reads to an online service.'
+            : 'Voices on this computer work offline. A document with a lang property is read in that language when this computer has a voice for it.'
         }
       >
         <select className="select read-voice" aria-label="Read aloud voice" value={chosen ? prefs.voice : ''} onChange={(e) => change({ voice: e.target.value })}>
@@ -282,7 +285,7 @@ function ReadAloudRows() {
       <Row label="Read aloud speed">
         <div className="read-speed">
           <Seg value={prefs.rate as (typeof RATES)[number]} options={[...RATES]} label={(r) => (r === 1 ? 'Normal' : `${r}×`)} onPick={(rate) => change({ rate })} />
-          <button className="btn" title="Hear a sample" onClick={() => sample(chosen ?? pickVoice(voices, { systemLang: navigator.language }), prefs.rate)}>
+          <button className="btn" title="Hear a sample" onClick={() => sample(used, prefs.rate)}>
             Try
           </button>
         </div>

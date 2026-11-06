@@ -23,6 +23,15 @@ test('page and number abbreviations join only before a number', () => {
 
 test('initials stay with the name', () => {
   assert.deepEqual(split('J. K. Rowling wrote it. Many read it.'), ['J. K. Rowling wrote it.', 'Many read it.'])
+  assert.deepEqual(split('John F. Kennedy spoke. We listened.'), ['John F. Kennedy spoke.', 'We listened.'])
+  assert.deepEqual(split('J. Smith arrived. He sat.'), ['J. Smith arrived.', 'He sat.'])
+})
+
+test('a capital letter ending a sentence is not an initial', () => {
+  assert.deepEqual(split('We chose plan A. Then we left.'), ['We chose plan A.', 'Then we left.'])
+  assert.deepEqual(split('Take vitamin C. It helps.'), ['Take vitamin C.', 'It helps.'])
+  assert.deepEqual(split('Item A. Item B.'), ['Item A.', 'Item B.'])
+  assert.deepEqual(split('We chose Plan A. Then we left.'), ['We chose Plan A.', 'Then we left.'])
 })
 
 test('decimals, addresses and lower-case continuations are not ends', () => {

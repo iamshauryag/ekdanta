@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Reader, pickVoice, sortVoices, voiceLabel, type ReaderState, type Sentence, type SynthLike, type UtteranceLike, type VoiceLike } from './speak.ts'
+import { Reader, isOnlineVoice, pickVoice, sortVoices, voiceLabel, type ReaderState, type Sentence, type SynthLike, type UtteranceLike, type VoiceLike } from './speak.ts'
 
 /** A speechSynthesis that speaks nothing: the test says when each utterance ends. */
 class FakeSynth implements SynthLike {
@@ -37,6 +37,16 @@ function setup() {
   const last = () => states[states.length - 1]
   return { synth, reader, states, last }
 }
+
+test('cancelled by something else on the page (a sample in Settings): paused, not stuck playing', () => {
+  const { synth, reader, last } = setup()
+  reader.start(sentences, 1)
+  synth.cancel()
+  assert.deepEqual(last().state, { status: 'paused', index: 1, total: 3 })
+  reader.toggle()
+  assert.equal(last().state.status, 'playing')
+  assert.deepEqual(synth.spoken, ['She sat down.', 'She sat down.'])
+})
 
 const sentences: Sentence[] = [
   { text: 'Dr. Rao arrived.', from: 1, to: 17 },
@@ -194,6 +204,19 @@ test('a document in another language is read by a voice for that language', () =
   assert.equal(pickVoice(VOICES, { chosen: 'Daniel', docLang: 'en-US' })?.name, 'Daniel')
   // No voice for it: the usual choice.
   assert.equal(pickVoice(VOICES, { chosen: 'Daniel', docLang: 'ja' })?.name, 'Daniel')
+})
+
+test('a document language never swaps a voice on this computer for an online one', () => {
+  const mixed = [v('Samantha', 'en-US', true, true), v('Google français', 'fr-FR', false)]
+  assert.equal(pickVoice(mixed, { docLang: 'fr' })?.name, 'Samantha')
+  assert.equal(pickVoice(mixed, { chosen: 'Samantha', docLang: 'fr' })?.name, 'Samantha')
+  // The writer chose an online voice already: an online one for the document's language is no new leak.
+  const online = [...mixed, v('Google US English', 'en-US', false)]
+  assert.equal(pickVoice(online, { chosen: 'Google US English', docLang: 'fr' })?.name, 'Google français')
+  // A local voice anywhere beats an online one for the system language.
+  assert.equal(pickVoice([v('Google US English', 'en-US', false), v('Thomas', 'fr-FR', true)], { systemLang: 'en-US' })?.name, 'Thomas')
+  assert.equal(isOnlineVoice(mixed[1]), true)
+  assert.equal(isOnlineVoice(mixed[0]), false)
 })
 
 test('only network voices: one of them is used', () => {

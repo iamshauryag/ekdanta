@@ -43,27 +43,38 @@ export const voiceLabel = (v: VoiceLike) => `${v.name} (${v.lang})${v.localServi
 const primary = (lang: string) => lang.toLowerCase().split(/[-_]/)[0]
 
 /**
- * Which voice reads a document. The writer's chosen voice, unless the document says it is in
- * another language (front matter `lang`), in which case the best voice for that language. With no
- * choice made: the system's default voice if it runs locally, else a local voice for the system
- * language, else any local voice; online voices only when there is nothing else.
+ * Which voice reads a document. The writer's chosen voice; with no choice made, the system's
+ * default voice if it runs on this computer, else a local voice for the system language, else any
+ * local voice, and an online voice only when the computer has none. A document that says it is in
+ * another language (front matter `lang`) is read by a voice for that language instead, but never
+ * by trading a voice on this computer for an online one: the writer would not know their text
+ * was leaving the machine.
  */
 export function pickVoice<V extends VoiceLike>(voices: readonly V[], opts: { chosen?: string; docLang?: string; systemLang?: string }): V | null {
   if (!voices.length) return null
   const chosen = opts.chosen ? voices.find((v) => v.voiceURI === opts.chosen) : undefined
-  const best = (lang: string) => {
-    const want = lang.toLowerCase().replace('_', '-')
-    const same = sortVoices(voices.filter((v) => primary(v.lang) === primary(want)))
-    return same.find((v) => v.lang.toLowerCase().replace('_', '-') === want && v.localService) ?? same.find((v) => v.localService && v.default) ?? same.find((v) => v.localService) ?? same[0]
-  }
-  if (opts.docLang && (!chosen || primary(chosen.lang) !== primary(opts.docLang))) {
-    const forDoc = best(opts.docLang)
-    if (forDoc) return forDoc
-  }
-  if (chosen) return chosen
-  const def = voices.find((v) => v.default && v.localService)
+  const usual = chosen ?? autoVoice(voices, opts.systemLang)
+  if (opts.docLang && primary(usual.lang) !== primary(opts.docLang)) return voiceFor(voices, opts.docLang, !usual.localService) ?? usual
+  return usual
+}
+
+/** Does reading with this voice send the text somewhere? */
+export const isOnlineVoice = (v: VoiceLike | null | undefined) => !!v && !v.localService
+
+function autoVoice<V extends VoiceLike>(voices: readonly V[], systemLang?: string): V {
+  const local = voices.filter((v) => v.localService)
+  const def = local.find((v) => v.default)
   if (def) return def
-  return (opts.systemLang ? best(opts.systemLang) : undefined) ?? sortVoices(voices)[0]
+  if (local.length) return (systemLang ? voiceFor(local, systemLang, false) : undefined) ?? sortVoices(local)[0]
+  return (systemLang ? voiceFor(voices, systemLang, true) : undefined) ?? sortVoices(voices)[0]
+}
+
+/** The best voice for a language: this computer's (exact region, then default, then any), and an online one only when allowed. */
+function voiceFor<V extends VoiceLike>(voices: readonly V[], lang: string, online: boolean): V | undefined {
+  const norm = (l: string) => l.toLowerCase().replace('_', '-')
+  const want = norm(lang)
+  const same = sortVoices(voices.filter((v) => primary(v.lang) === primary(want) && (online || v.localService)))
+  return same.find((v) => norm(v.lang) === want && v.localService) ?? same.find((v) => v.localService && v.default) ?? same.find((v) => v.localService) ?? same[0]
 }
 
 // ---- The reader -------------------------------------------------------------------------------
@@ -194,12 +205,21 @@ export class Reader {
     u.onend = () => this.speakChunks(chunks, k + 1, token)
     u.onerror = (e) => {
       if (token !== this.token) return
-      // Cancelled by us: nothing to do. Anything else: skip what can't be said rather than stall.
-      if (e?.error === 'interrupted' || e?.error === 'canceled') return
+      // Our own cancels never get here (halt() moves the token on first). Cancelled by something
+      // else on the page (the Settings sample): stop here as paused, so the player tells the truth
+      // and resuming reads the sentence again. Anything else: skip what can't be said rather than stall.
+      if (e?.error === 'interrupted' || e?.error === 'canceled') return this.interrupted()
       this.speakChunks(chunks, k + 1, token)
     }
     this.current = u
     this.synth.speak(u)
+  }
+
+  private interrupted() {
+    this.token++
+    this.current = null
+    this.status = 'paused'
+    this.emit()
   }
 
   private advance(token: number) {

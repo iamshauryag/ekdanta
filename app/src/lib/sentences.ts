@@ -84,6 +84,84 @@ function wordBefore(text: string, dot: number): string {
   return text.slice(i, dot).replace(/^\.+/, '').toLowerCase()
 }
 
+/** Words that start sentences far more often than they follow an initial in a name. */
+const STARTERS = new Set([
+  'a',
+  'an',
+  'the',
+  'this',
+  'that',
+  'these',
+  'those',
+  'then',
+  'there',
+  'it',
+  'its',
+  'i',
+  'we',
+  'he',
+  'she',
+  'they',
+  'you',
+  'my',
+  'our',
+  'his',
+  'her',
+  'their',
+  'but',
+  'and',
+  'so',
+  'or',
+  'if',
+  'in',
+  'on',
+  'at',
+  'as',
+  'for',
+  'to',
+  'when',
+  'what',
+  'why',
+  'how',
+  'after',
+  'now',
+  'yet',
+  'no',
+  'not',
+])
+
+const WORD = /[\p{L}'’-]+/uy
+const wordAt = (text: string, at: number) => {
+  WORD.lastIndex = at
+  return WORD.exec(text)?.[0] ?? ''
+}
+/** The word that ends just before `at` (skipping spaces), as written. */
+function wordEndingAt(text: string, at: number): string {
+  let e = at
+  while (e > 0 && text[e - 1] === ' ') e--
+  let b = e
+  while (b > 0 && /[\p{L}'’.-]/u.test(text[b - 1])) b--
+  return text.slice(b, e)
+}
+
+/**
+ * Is the capital letter at `letter` (followed by a full stop, then a capitalised word at `next`)
+ * an initial in a name? Yes beside another initial ("J. K."), or between a capitalised name and a
+ * word that isn't a usual sentence opener ("John F. Kennedy"), unless the same word repeats as in
+ * a list ("Item A. Item B.").
+ */
+function isInitial(text: string, letter: number, next: number): boolean {
+  const after = wordAt(text, next)
+  // Another initial follows: "J. K."
+  if (/^\p{Lu}$/u.test(after) && text[next + 1] === '.') return true
+  const before = wordEndingAt(text, letter)
+  // Another initial comes before: "K." in "J. K. Rowling".
+  if (/^\p{Lu}\.$/u.test(before)) return true
+  // A name opening the text ("J. Smith arrived."), or after a capitalised word ("John F. Kennedy").
+  const nameLike = !before || /[.!?…]$/u.test(before) || /^\p{Lu}\p{Ll}/u.test(before)
+  return nameLike && !STARTERS.has(after.toLowerCase()) && after !== before
+}
+
 /** Does the punctuation run that ends at `end` (exclusive) close a sentence, given what comes next? */
 function endsSentence(text: string, start: number, end: number, next: number): boolean {
   const punct = text.slice(start, end)
@@ -97,8 +175,9 @@ function endsSentence(text: string, start: number, end: number, next: number): b
   if (!word) return true
   if (ALWAYS_JOIN.has(word)) return false
   if (NUMBERED.has(word) && /\p{N}/u.test(c)) return false
-  // An initial: "J. K. Rowling". A single capital letter before the stop.
-  if (/^\p{Lu}$/u.test(text[start - 1]) && (start < 2 || !/[\p{L}\p{N}]/u.test(text[start - 2])) && /\p{Lu}/u.test(c)) return false
+  // An initial: "J. K. Rowling", "John F. Kennedy". A lone capital letter before the stop is also
+  // how "plan A. Then…" and "vitamin C. It…" end, so it joins only when it looks like part of a name.
+  if (/^\p{Lu}$/u.test(text[start - 1]) && (start < 2 || !/[\p{L}\p{N}]/u.test(text[start - 2])) && /\p{Lu}/u.test(c) && isInitial(text, start - 1, next)) return false
   // Dotted abbreviations such as "U.S." or "a.m." end a sentence only when a capital follows, which it does here.
   return true
 }

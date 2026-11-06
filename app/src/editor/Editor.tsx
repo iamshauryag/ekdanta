@@ -108,7 +108,10 @@ export function Editor(props: Props) {
   const [find, setFind] = useState(false)
   const [link, setLink] = useState<{ href: string; x: number; y: number } | null>(null)
 
-  resolver.pageTitle = (target) => p().pages().find((pg) => pg.target === target || pg.target.split('/').pop() === target)?.title
+  resolver.pageTitle = (target) =>
+    p()
+      .pages()
+      .find((pg) => pg.target === target || pg.target.split('/').pop() === target)?.title
   resolver.assetUrl = (src) => p().assetUrl(src)
 
   // Made once per document: new options on every render would make the editor reconfigure itself,
@@ -362,7 +365,7 @@ export function Editor(props: Props) {
       <EditorContent editor={editor} />
       <LinkCard editor={editor} onEdit={(href, x, y) => setLink({ href, x, y })} openPage={(t) => p().openPage(t)} />
       {link && <LinkEditor editor={editor} at={link} onClose={() => setLink(null)} />}
-      <ReadAloudBar state={reading.state} reader={reading.reader.current} />
+      <ReadAloudBar state={reading.state} reader={reading.reader.current} online={reading.online} />
     </div>
   )
 }
@@ -495,7 +498,10 @@ function LinkEditor({ editor, at, onClose }: { editor: TiptapEditor; at: { href:
         const text = editor.state.doc.textBetween(from, to)
         const lead = text.length - text.trimStart().length
         const trail = text.length - text.trimEnd().length
-        chain.setTextSelection({ from: from + lead, to: to - trail }).setLink({ href: full }).run()
+        chain
+          .setTextSelection({ from: from + lead, to: to - trail })
+          .setLink({ href: full })
+          .run()
       }
     }
     onClose()
