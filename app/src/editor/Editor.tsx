@@ -12,6 +12,7 @@ import type { EdgeSlot } from '../lib/edge.ts'
 import { helpKey, helpOf, helpPlugin, noteCmdWorks, paragraphAt, textOf, type Help, type Level } from './help.ts'
 import { parseMarkdown, serializeMarkdown, type Source } from './markdown.ts'
 import { PageLinkMenu, SlashMenu, type PageRef } from './menus.ts'
+import { promptPlugin } from './prompts.ts'
 import { extensions, resolver } from './schema.ts'
 import { readAloudPlugin } from './readAloud.ts'
 import { ReadAloudBar, canReadAloud, readAloud, useReadAloud } from '../components/ReadAloudBar.tsx'
@@ -129,7 +130,7 @@ export function Editor(props: Props) {
           name: 'ekdanta',
           // Ahead of every other key handler: help first, then the writer's own shortcuts.
           priority: 1000,
-          addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), currentBlock, readAloudPlugin(), new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
+          addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), promptPlugin(), currentBlock, readAloudPlugin(), new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
         }),
         SlashMenu,
         PageLinkMenu.configure({ pages: () => p().pages() }),

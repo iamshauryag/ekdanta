@@ -42,9 +42,12 @@ export function joinFrontMatter(raw: string, meta: Meta, body: string) {
   return lines.length ? `---\n${lines.join('\n')}\n---\n\n${body}` : body
 }
 
-/** Quote a value only when plain YAML would misread it (a colon, a leading quote or symbol). */
+/**
+ * Quote a value only when plain YAML would misread it (a colon, a comment, a leading quote or symbol),
+ * or when reading it back would change it (a closing quote mark is stripped on the way in).
+ */
 function yamlValue(value: string) {
-  if (value === '' || !/(: |\s#|^[\s"'`!&*?|>%@{}[\],-]|\s$)/.test(value)) return value
+  if (value === '' || !/(: |\s#|^[\s"'`!&*?|>%@{}[\],#-]|["'\s]$)/.test(value)) return value
   return JSON.stringify(value)
 }
 

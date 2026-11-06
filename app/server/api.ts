@@ -12,6 +12,7 @@ import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
 import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
+import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
 import { local, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import {
@@ -189,6 +190,20 @@ const routes: Record<string, Handler> = {
     return material(doc, fragments, paragraph ?? '')
   },
   'GET /api/meta': async (_req, url) => splitFrontMatter(await readDoc(url.searchParams.get('path') ?? '')).meta,
+  // Ideas: ideas.md at the top of the vault, only ever appended to; stars are the app's own.
+  'GET /api/ideas': async () => listIdeas(),
+  'POST /api/ideas': async (req) => {
+    const { text } = await body<{ text: string }>(req)
+    return captureIdea(typeof text === 'string' ? text : '')
+  },
+  'POST /api/ideas/star': async (req) => {
+    const { text, starred } = await body<{ text: string; starred: boolean }>(req)
+    return starIdea(typeof text === 'string' ? text : '', !!starred)
+  },
+  'POST /api/ideas/start': async (req) => {
+    const { text, kind } = await body<{ text: string; kind: string }>(req)
+    return { path: await startIdea((await loadSettings()).kinds, typeof text === 'string' ? text : '', typeof kind === 'string' ? kind : '') }
+  },
 }
 
 /** Start the Claude sessions the current settings will use, if Claude is the one answering. */

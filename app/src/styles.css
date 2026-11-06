@@ -3380,3 +3380,170 @@ button.keymap-key:hover {
   border-radius: 6px;
   resize: vertical;
 }
+
+/* ---- ⋯ More on the rail --------------------------------------------------------------------- */
+.more-wrap {
+  position: relative;
+}
+.more-menu {
+  top: 0;
+  left: calc(100% + 8px);
+  right: auto;
+  min-width: 210px;
+}
+.more-menu button {
+  align-items: center;
+}
+
+/* ---- A template's prompts on the page -------------------------------------------------------- */
+.pm p.is-prompt {
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.pm p.is-prompt em,
+.pm p.is-prompt strong {
+  font-weight: inherit;
+}
+.pm p.is-prompt:hover {
+  color: var(--ink-2);
+}
+
+/* ---- Ideas: capture box and the list ------------------------------------------------------- */
+.capture {
+  position: fixed;
+  z-index: 55;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, calc(100vw - 32px));
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.capture-input {
+  display: block;
+  width: 100%;
+  padding: 14px 16px 10px;
+  font: 400 17px/1.4 var(--serif);
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+.capture-input::placeholder {
+  color: var(--ink-4);
+}
+.capture-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 10px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.capture-keys kbd {
+  margin: 0 3px 0 8px;
+}
+.capture-error,
+.ideas-error {
+  color: var(--del-ink);
+}
+.ideas-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 18px;
+}
+.ideas-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font: 400 15px var(--serif);
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+}
+.ideas-add input:focus {
+  outline: none;
+  border-color: var(--accent-line);
+}
+.ideas-empty {
+  margin-top: 8px;
+}
+.ideas-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.idea {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+.idea-star {
+  flex: none;
+  width: 22px;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--ink-4);
+}
+.idea-star:hover,
+.idea.is-starred .idea-star {
+  color: var(--accent);
+}
+.idea-body {
+  flex: 1;
+  min-width: 0;
+  font: 400 16px/1.5 var(--serif);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.idea-more {
+  margin-left: 6px;
+  font: 500 12px var(--sans);
+  color: var(--accent);
+}
+.idea-date {
+  margin-left: 8px;
+  font: 12px var(--sans);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.idea-act {
+  position: relative;
+  flex: none;
+  max-width: 40%;
+  padding-top: 2px;
+}
+.idea-start,
+.idea-started {
+  font-size: 12px;
+  color: var(--ink-3);
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.idea-start:hover:not(:disabled),
+.idea-started:hover {
+  color: var(--ink);
+  background: var(--chrome-2);
+}
+.idea-started {
+  display: flex;
+  max-width: 100%;
+  gap: 4px;
+}
+.idea-started span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--accent);
+}
+.idea-menu {
+  top: calc(100% + 2px);
+  right: 0;
+}

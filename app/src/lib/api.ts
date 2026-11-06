@@ -10,6 +10,8 @@ export interface FileEntry {
   mtime: number
   /** A brief is pinned to it. */
   brief?: boolean
+  /** The idea this piece was started from. */
+  fromIdea?: string
 }
 
 export interface Status {
@@ -92,6 +94,15 @@ export interface Thinking {
 }
 type Frag = { id: string; text: string }
 
+export interface IdeaRow {
+  text: string
+  /** As written after it in ideas.md: "6 Nov 2026". */
+  date?: string
+  starred: boolean
+  /** The newest piece started from it, while that piece exists. */
+  started?: { path: string; title: string }
+}
+
 async function json<T>(r: Response): Promise<T> {
   const data = await r.json()
   if (!r.ok) throw new Error((data as { error?: string }).error ?? r.statusText)
@@ -156,5 +167,9 @@ export const api = {
       .then((d) => d.text),
   edge: (req: { slot: EdgeSlot; text: string; kind: string; current?: string; avoid?: string[] }) =>
     fetch('/api/edge', send('POST', req)).then(json<{ kind: 'edge'; candidates: EdgeCandidate[] } | { kind: 'empty' | 'error'; message: string }>),
+  ideas: () => fetch('/api/ideas').then(json<{ exists: boolean; ideas: IdeaRow[] }>),
+  captureIdea: (text: string) => fetch('/api/ideas', send('POST', { text })).then(json<{ added: boolean; text: string; date: string }>),
+  starIdea: (text: string, starred: boolean) => fetch('/api/ideas/star', send('POST', { text, starred })).then(json<{ starred: boolean }>),
+  startIdea: (text: string, kind: string) => fetch('/api/ideas/start', send('POST', { text, kind })).then(json<{ path: string }>),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),
 }

@@ -4,6 +4,12 @@
 
 export const SPECIAL_FOLDERS = ['templates', 'journal', 'brain', 'sources', 'exports', '_inbox']
 
+/** Files at the top of the vault that hold material too: `ideas.md` is the writer's list of raw ideas. */
+export const SPECIAL_FILES = ['ideas.md']
+
+/** The file Capture idea appends to, at the top of the vault. */
+export const IDEAS_FILE = 'ideas.md'
+
 /** A vault-relative path in a standard form: forward slashes, no leading or trailing slash, lower case. */
 const norm = (p: string) =>
   p
@@ -12,14 +18,18 @@ const norm = (p: string) =>
     .replace(/^(\.\/)+|^\/+|\/+$/g, '')
     .toLowerCase()
 
+/** Is this one of the special files (ideas.md) at the top of the vault? Ignores case. */
+export const isSpecialFile = (path: string) => SPECIAL_FILES.includes(norm(path))
+
 /**
  * Is this path (a file or a folder) inside a special folder, or inside one of the writer's excluded
- * folders? Special folders count only at the top of the vault; an excluded folder can be nested
- * ("archive/2019"). Matching is by whole folder name and ignores case.
+ * folders, or one of the special files? Special folders and files count only at the top of the vault;
+ * an excluded folder can be nested ("archive/2019"). Matching is by whole folder name and ignores case.
  */
 export function isSpecialPath(path: string, excluded: readonly string[] = []): boolean {
   const p = norm(path)
   if (!p) return false
+  if (SPECIAL_FILES.includes(p)) return true
   const top = p.split('/')[0]
   if (SPECIAL_FOLDERS.includes(top)) return true
   return excluded.some((folder) => {

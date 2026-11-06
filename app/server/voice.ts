@@ -8,7 +8,7 @@ import { generate, parseJson, status } from './ai.ts'
 import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from './vault.ts'
 import { loadSettings } from './settings.ts'
 import { kindName } from '../src/lib/kinds.ts'
-import { isSpecialPath } from '../src/lib/special.ts'
+import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 
 const DIR = path.join(META_DIR, 'voice')
 /** Below this many exemplars, recent unstarred pieces top up the sources. */
@@ -46,7 +46,8 @@ const file = (platform: string) => {
  */
 function sourcesFor(files: FileEntry[], platform: string, excluded: string[]) {
   const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled')
-  const starred = mine.filter((f) => f.exemplar)
+  // The ideas list is a list, not a piece of writing: it never speaks for the writer's voice, starred or not.
+  const starred = mine.filter((f) => f.exemplar && !isSpecialFile(f.path))
   const others = mine.filter((f) => !f.exemplar && !isSpecialPath(f.path, excluded)).sort((a, b) => b.mtime - a.mtime)
   return [...starred, ...others.slice(0, Math.max(0, ENOUGH - starred.length))]
 }
