@@ -1,4 +1,5 @@
-// HTTP API for the app, mounted on Vite's dev server. Local only: it binds to localhost.
+// HTTP API for the app, mounted on Vite's dev server. It binds to localhost; tailnet hosts can reach it
+// through `tailscale serve`, so routes that run programs or write outside the vault are wrapped in local().
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
 import { status } from './ai.ts'
@@ -9,10 +10,33 @@ import { material, readThinking, recallChips, suggestClusters, suggestLinks, wri
 import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
+import { local, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
-import { VAULT, appendHistory, createDoc, discardIfEmpty, listFiles, listTrash, readAsset, saveAsset, moveToFolder, nameDoc, placeDoc, renameDoc, duplicateDoc, restoreDoc, trashDoc, readDoc, readHistory, splitFrontMatter, writeDoc } from './vault.ts'
+import {
+  VAULT,
+  appendHistory,
+  createDoc,
+  discardIfEmpty,
+  listFiles,
+  listTrash,
+  readAsset,
+  saveAsset,
+  moveToFolder,
+  nameDoc,
+  placeDoc,
+  renameDoc,
+  duplicateDoc,
+  restoreDoc,
+  trashDoc,
+  readDoc,
+  readHistory,
+  splitFrontMatter,
+  writeDoc,
+} from './vault.ts'
 
 type Handler = (req: IncomingMessage, url: URL) => Promise<unknown>
+
+export { local }
 
 async function body<T>(req: IncomingMessage): Promise<T> {
   let raw = ''
@@ -26,9 +50,13 @@ const routes: Record<string, Handler> = {
   'PUT /api/settings': async (req) => {
     const prev = { ...(await loadSettings()) }
     const next = await saveSettings(await body<Partial<Settings>>(req))
-    if (next.embedder !== prev.embedder) warmEmbedder().then(() => refresh()).catch(() => {})
+    if (next.embedder !== prev.embedder)
+      warmEmbedder()
+        .then(() => refresh())
+        .catch(() => {})
     if (next.claudeModel !== prev.claudeModel) warmClaude()
     if (next.claudeFastModel !== prev.claudeFastModel) warmClaude()
+    if (JSON.stringify(next.excludedFolders) !== JSON.stringify(prev.excludedFolders)) refresh().catch(() => {})
     return next
   },
   'GET /api/files': async () => listFiles(),
@@ -114,7 +142,7 @@ const routes: Record<string, Handler> = {
   'POST /api/meta': async (req) => {
     const { path, patch } = await body<{ path: string; patch: MetaPatch }>(req)
     const { meta, body: text, raw } = splitFull(await readDoc(path))
-    await writeDoc(path, joinFrontMatter(raw, applyPatch(meta, patch), text))
+    await writeDoc(path, joinFrontMatter(raw, applyPatch(meta, patch), text), { reason: 'meta' })
     return { ok: true }
   },
   'GET /api/voice': async () => summaries(),
@@ -195,7 +223,7 @@ export function ekdantaApi(): Plugin {
           res.setHeader('content-type', 'application/json')
           res.end(JSON.stringify(result))
         } catch (e) {
-          res.statusCode = 500
+          res.statusCode = statusOf(e)
           res.setHeader('content-type', 'application/json')
           res.end(JSON.stringify({ error: (e as Error).message }))
         }

@@ -16,8 +16,7 @@ import { Sidebar, type FileActions, type SidebarMode } from './components/Sideba
 import { Icon } from './components/Icon.tsx'
 import { helpMod } from './editor/help.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
-import { binding, matches, setOverrides, titled } from './lib/keys.ts'
-
+import { binding, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
 
 function usePref<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(() => {
@@ -362,7 +361,10 @@ export function App() {
       if (!d || !frags.length) return
       materialTimer.current = window.setTimeout(async () => {
         if (saveTimer.current !== undefined) await save() // coverage reads the saved draft
-        api.thinkingMaterial(d.path, frags, paragraph.current).then(setMaterial).catch(() => {})
+        api
+          .thinkingMaterial(d.path, frags, paragraph.current)
+          .then(setMaterial)
+          .catch(() => {})
       }, delay)
     },
     [thinking, save],
@@ -443,8 +445,7 @@ export function App() {
       changeThinking((t) => ({ ...t, side: { ...t.side, clusters: mergeClusters(t.side.clusters, clusters) } }))
     },
     ungroup: () => changeThinking((t) => ({ ...t, side: { ...t.side, clusters: [] } })),
-    renameGroup: (id: string, label: string) =>
-      changeThinking((t) => ({ ...t, side: { ...t.side, clusters: t.side.clusters?.map((c) => (c.id === id ? { ...c, label, mine: true } : c)) } })),
+    renameGroup: (id: string, label: string) => changeThinking((t) => ({ ...t, side: { ...t.side, clusters: t.side.clusters?.map((c) => (c.id === id ? { ...c, label, mine: true } : c)) } })),
   }
 
   const closeThinking = useCallback(() => {
@@ -461,46 +462,46 @@ export function App() {
     })
   }, [setPanelOpen, setPanelTab])
 
-  const record = useCallback(
-    (item: HistoryItem) => {
-      const d = docRef.current
-      if (!d) return
-      setHistory((h) => [...h, item])
-      api.appendHistory(d.path, item)
-    },
-    [],
-  )
+  const record = useCallback((item: HistoryItem) => {
+    const d = docRef.current
+    if (!d) return
+    setHistory((h) => [...h, item])
+    api.appendHistory(d.path, item)
+  }, [])
 
-  // Window-level shortcuts: Focus mode and the panel.
+  // Window-level shortcuts. Each app command is one line here; the first whose key matches runs.
   useEffect(() => {
+    const openTab = (tab: 'material' | 'outline' | 'history' | 'piece') => {
+      setPanelOpen(true)
+      setPanelTab(tab)
+    }
+    const appActions: Partial<Record<CommandId, () => void>> = {
+      focus: () => setFocus((f) => !f),
+      panel: () => setPanelOpen((o) => !o),
+      save: () => save(),
+      star: () => void (docRef.current && toggleExemplar(docRef.current.path)),
+      settings: () => setSettingsOpen((o) => !o),
+      newDraft: () => newDraft(),
+      // The Thinking Space closes itself with the same key.
+      thinking: () => {
+        if (docRef.current && !thinkingOpen) {
+          if (saveTimer.current !== undefined) save()
+          setThinkingOpen(true)
+        }
+      },
+      material: () => openTab('material'),
+      outline: () => openTab('outline'),
+      history: () => openTab('history'),
+      piece: () => openTab('piece'),
+    }
     const onKey = (e: KeyboardEvent) => {
-      const is = (id: string) => matches(e, binding(id))
-      const run = (fn: () => void) => {
-        e.preventDefault()
-        fn()
-      }
-      if (focus && e.key === 'Escape' && !document.querySelector('.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost')) setFocus(false)
-      else if (is('focus')) run(() => setFocus((f) => !f))
-      else if (is('panel')) run(() => setPanelOpen((o) => !o))
-      else if (is('save')) run(() => save())
-      else if (is('star')) run(() => docRef.current && toggleExemplar(docRef.current.path))
-      else if (is('settings')) run(() => setSettingsOpen((o) => !o))
-      else if (is('newDraft')) run(() => newDraft())
-      else if (is('thinking')) {
-        // The Thinking Space closes itself with the same key.
-        run(() => {
-          if (docRef.current && !thinkingOpen) {
-            if (saveTimer.current !== undefined) save()
-            setThinkingOpen(true)
-          }
-        })
-      } else {
-        const tab = (['material', 'outline', 'history', 'piece'] as const).find((t) => is(t))
-        if (tab)
-          run(() => {
-            setPanelOpen(true)
-            setPanelTab(tab)
-          })
+      if (focus && e.key === 'Escape' && !document.querySelector('.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost')) return setFocus(false)
+      for (const [id, action] of Object.entries(appActions)) {
+        if (action && matches(e, binding(id))) {
+          e.preventDefault()
+          action()
+          return
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -554,7 +555,12 @@ export function App() {
     if (!editor) return
     // The end of the heading's text.
     const node = editor.state.doc.nodeAt(h.pos)
-    editor.chain().focus().setTextSelection(h.pos + (node?.nodeSize ?? 2) - 1).scrollIntoView().run()
+    editor
+      .chain()
+      .focus()
+      .setTextSelection(h.pos + (node?.nodeSize ?? 2) - 1)
+      .scrollIntoView()
+      .run()
   }
 
   const editorProps = useMemo(
@@ -568,11 +574,7 @@ export function App() {
   )
 
   return (
-    <div
-      className={`app${focus ? ' is-focus' : ''}${panelOpen ? ' has-panel' : ''}${sidebarOpen ? ' has-sidebar' : ''}${
-        settings?.paragraphFocus === false ? ' no-para-focus' : ''
-      }`}
-    >
+    <div className={`app${focus ? ' is-focus' : ''}${panelOpen ? ' has-panel' : ''}${sidebarOpen ? ' has-sidebar' : ''}${settings?.paragraphFocus === false ? ' no-para-focus' : ''}`}>
       <header className="titlebar">
         <div className="crumb">
           {current?.folder ? <span className="muted">{current.folder} / </span> : null}
@@ -612,12 +614,25 @@ export function App() {
         </button>
       </nav>
 
-      {sidebarOpen && <Sidebar mode={sidebarMode} files={files} voices={voices} voiceView={voiceView} onVoice={openVoice} current={voiceView ? null : path} onOpen={openDoc} onCreate={newDraft} onStar={toggleExemplar} actions={fileActions} trash={trash} onRestore={restore} />}
+      {sidebarOpen && (
+        <Sidebar
+          mode={sidebarMode}
+          files={files}
+          voices={voices}
+          voiceView={voiceView}
+          onVoice={openVoice}
+          current={voiceView ? null : path}
+          onOpen={openDoc}
+          onCreate={newDraft}
+          onStar={toggleExemplar}
+          actions={fileActions}
+          trash={trash}
+          onRestore={restore}
+        />
+      )}
 
       <main className="page-area">
-        {voiceView && (
-          <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />
-        )}
+        {voiceView && <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />}
         {loaded && !voiceView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={setLivePreview} />}
         {loaded && !voiceView && (
           <div className="page">
@@ -719,8 +734,7 @@ export function App() {
 
       <footer className="statusbar">
         <span>
-          {platformLabel(platform)} · Ceiling {ceiling} ·{' '}
-          {format?.selectedWords ? `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words` : `${words.toLocaleString()} words`}
+          {platformLabel(platform)} · Ceiling {ceiling} · {format?.selectedWords ? `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words` : `${words.toLocaleString()} words`}
           {words >= 60 && ` · ${Math.max(1, Math.round(words / 230))} min read`}
         </span>
         <span className="muted">

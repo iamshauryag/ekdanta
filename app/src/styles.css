@@ -1657,6 +1657,13 @@ kbd {
   color: var(--ink-2);
   word-break: break-all;
 }
+.row-control .folders {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px 12px;
+  word-break: normal;
+}
 .seg-text button {
   width: auto;
   padding: 3px 10px;

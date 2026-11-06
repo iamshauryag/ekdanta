@@ -2,6 +2,16 @@
 // A piece's kind is its `platform` in front-matter. Each kind has a folder its pieces are filed in,
 // a voice profile, a typical length, and a line on how it should read that the help levels follow.
 // The list lives in the vault's settings; this module is shared by the app and the server.
+import { isSpecialPath } from './special.ts'
+
+/** How a kind's documents are laid out and counted, as defaults a document's own front matter overrides. */
+export interface KindDoc {
+  layout?: 'page'
+  style?: 'mla' | 'apa' | 'chicago' | 'none'
+  paper?: 'letter' | 'a4'
+  /** A length target: '1500', '1500-2000', '<=750', '5 pages'. */
+  target?: string
+}
 
 export interface Kind {
   /** What front-matter stores. Fixed once made, so renaming a kind never orphans its pieces. */
@@ -14,6 +24,9 @@ export interface Kind {
   guidance: string
   /** A typical length in words. */
   words: number
+  /** The template a new piece of this kind starts from: a vault path such as `templates/essay.md`. */
+  template?: string
+  doc?: KindDoc
 }
 
 export const DEFAULT_KINDS: Kind[] = [
@@ -43,8 +56,16 @@ export function newKind(name: string, taken: Kind[]): Kind | null {
   if (!base) return null
   let id = base
   for (let n = 2; taken.some((k) => k.id === id); n++) id = `${base}-${n}`
-  return { id, name, folder: plural(id), guidance: '', words: 800 }
+  return { id, name, folder: kindFolder(plural(id)), guidance: '', words: 800 }
 }
+
+/**
+ * The folder a new kind files into. Special folders (templates, journal, sources…) are left out of
+ * Recall and voice, so a new kind named "Template" or "Source" files into my-templates/ or my-sources/
+ * instead: its pieces are the writer's own and should count like any other. Only new kinds get this;
+ * a kind the writer already saved keeps its folder (see cleanKinds).
+ */
+const kindFolder = (folder: string) => (isSpecialPath(folder) ? `my-${folder}` : folder)
 
 /** Keep only well-formed kinds (settings come from a file the writer can edit). */
 export function cleanKinds(value: unknown): Kind[] | null {
@@ -53,21 +74,57 @@ export function cleanKinds(value: unknown): Kind[] | null {
   for (const k of value as Partial<Kind>[]) {
     if (!k || typeof k.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(k.id) || out.some((o) => o.id === k.id)) continue
     const name = typeof k.name === 'string' && k.name.trim() ? k.name.trim().slice(0, 40) : k.id
-    const folder = kindId(typeof k.folder === 'string' ? k.folder : '') || plural(k.id)
+    // A saved folder is the writer's: never rewritten, even a special one (its pieces already live there).
+    const folder = kindId(typeof k.folder === 'string' ? k.folder : '') || kindFolder(plural(k.id))
     const guidance = typeof k.guidance === 'string' ? k.guidance.trim().slice(0, 400) : ''
     const words = Math.max(1, Math.min(50000, Math.round(Number(k.words) || 800)))
-    out.push({ id: k.id, name, folder, guidance, words })
+    const kind: Kind = { id: k.id, name, folder, guidance, words }
+    const template = cleanTemplate(k.template)
+    if (template) kind.template = template
+    const doc = cleanKindDoc(k.doc)
+    if (doc) kind.doc = doc
+    out.push(kind)
   }
   return out.length ? out : null
 }
 
+/** A vault-relative Markdown path that stays inside the vault, or undefined. */
+function cleanTemplate(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const p = value.trim().replace(/\\/g, '/')
+  if (!p || p.length > 200 || !p.endsWith('.md') || p.startsWith('/') || /^[a-z]:/i.test(p)) return undefined
+  if (p.split('/').some((part) => !part || part === '.' || part === '..')) return undefined
+  return p
+}
+
+const STYLES = ['mla', 'apa', 'chicago', 'none'] as const
+const PAPERS = ['letter', 'a4'] as const
+
+/** Only the fields that are well formed; a bad one is dropped without losing the rest (or the kind). */
+function cleanKindDoc(value: unknown): KindDoc | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const d = value as Record<string, unknown>
+  const out: KindDoc = {}
+  if (d.layout === 'page') out.layout = 'page'
+  if (STYLES.includes(d.style as (typeof STYLES)[number])) out.style = d.style as KindDoc['style']
+  if (PAPERS.includes(d.paper as (typeof PAPERS)[number])) out.paper = d.paper as KindDoc['paper']
+  if (typeof d.target === 'string' && d.target.trim() && d.target.trim().length <= 40) out.target = d.target.trim()
+  return Object.keys(out).length ? out : undefined
+}
+
 export const findKind = (kinds: Kind[], id: string) => kinds.find((k) => k.id === id.toLowerCase())
 
-/** The kind a top-level folder holds: `emails` for email, say. Nested folders are the writer's own. */
+/**
+ * The kind a top-level folder holds: `emails` for email, say. Nested folders are the writer's own.
+ * A special folder (templates, journal…) holds a kind only when a kind names it as its folder: no guessing
+ * from the name, so templates/ never makes a "Template" kind's pieces.
+ */
 export const kindOfFolder = (kinds: Kind[], folder: string) => {
   if (!folder || folder.includes('/')) return undefined
   const f = folder.toLowerCase()
-  return kinds.find((k) => f === k.folder) ?? kinds.find((k) => f.startsWith(k.id))
+  const exact = kinds.find((k) => f === k.folder)
+  if (exact || isSpecialPath(f)) return exact
+  return kinds.find((k) => f.startsWith(k.id))
 }
 
 /** A kind's name, or a readable one for a kind the list doesn't have (a piece from elsewhere). */

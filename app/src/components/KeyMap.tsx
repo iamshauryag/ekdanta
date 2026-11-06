@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { COMMANDS, binding, defaultKey, eventToKey, formatKey, normalize, reserved, usedBy, type Command, type Group } from '../lib/keys.ts'
 import { helpMod } from '../editor/help.ts'
 
-const GROUPS: Group[] = ['Text', 'Blocks', 'Editing', 'App']
+const GROUPS: Group[] = ['Text', 'Blocks', 'Editing', 'Navigate', 'App']
 
 interface Pending {
   id: string

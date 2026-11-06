@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test 'src/**/*.test.ts' 'server/**/*.test.ts'"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
