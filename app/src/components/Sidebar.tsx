@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { findKind, kindName, kinds, pieceName, plural } from '../lib/kinds.ts'
 import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
+import { briefLabel } from '../lib/brief.ts'
 import { helpMod } from '../editor/help.ts'
 
 export type SidebarMode = 'vault' | 'exemplars' | 'voice'
@@ -27,6 +28,10 @@ export interface FileActions {
   move: (path: string, folder: string) => void
   duplicate: (path: string) => void
   remove: (path: string) => void
+  /** Open the page with its brief's paste box (or its pinned brief, to edit). */
+  pinBrief: (path: string) => void
+  /** Whether the page has a brief pinned, as far as the app knows. */
+  hasBrief: (path: string) => boolean
 }
 
 /** Fewer than this and a voice profile has too little to go on. */
@@ -217,6 +222,9 @@ function FileRow({
           </button>
           <button role="menuitem" onClick={act(() => onStar(f.path))}>
             {f.exemplar ? 'Un-star' : 'Star as exemplar'}
+          </button>
+          <button role="menuitem" onClick={act(() => actions.pinBrief(f.path))}>
+            {briefLabel(f.platform, actions.hasBrief(f.path))}
           </button>
           <hr />
           <button role="menuitem" className="danger" onClick={act(() => actions.remove(f.path))}>

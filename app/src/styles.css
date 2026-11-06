@@ -2900,3 +2900,142 @@ button.keymap-key:hover {
 .keymap-reset:hover {
   color: var(--ink);
 }
+
+/* ---- Pinned brief (first card in the Piece tab) ------------------------------------------- */
+.brief-card {
+  background: var(--page);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  margin-bottom: 18px;
+}
+.brief-head {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--ink);
+  min-width: 0;
+}
+.brief-head.static {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.brief-head .chev {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(-90deg);
+  transition: transform 0.12s;
+  align-self: center;
+}
+.brief-card.is-open .brief-head .chev {
+  transform: none;
+}
+.brief-label {
+  flex: none;
+  font: 600 10.5px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.brief-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-2);
+}
+.brief-hint {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.brief-body {
+  padding: 0 12px 10px 28px;
+}
+.brief-md {
+  font: 14px/1.5 var(--serif);
+  color: var(--ink);
+  max-height: 46vh;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.brief-md h2,
+.brief-md h3,
+.brief-md h4,
+.brief-md h5,
+.brief-md h6 {
+  font: 600 10.5px var(--sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  margin: 14px 0 6px;
+}
+.brief-md > :first-child {
+  margin-top: 0;
+}
+.brief-md p,
+.brief-md ul,
+.brief-md ol {
+  margin: 0 0 8px;
+}
+.brief-md ul,
+.brief-md ol {
+  padding-left: 18px;
+}
+.brief-md blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line-2);
+  color: var(--ink-2);
+}
+.brief-note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.brief-note.is-error {
+  color: var(--del-ink);
+}
+.brief-actions {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.brief-actions .muted {
+  color: var(--ink-3);
+}
+.brief-card.is-editing {
+  padding-bottom: 10px;
+}
+.brief-card.is-editing .brief-note,
+.brief-card.is-editing .brief-actions {
+  padding: 0 10px;
+}
+.brief-input {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 0 10px;
+  font: 13.5px/1.45 var(--sans);
+  color: var(--ink);
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 7px 9px;
+  resize: vertical;
+  min-height: 90px;
+  max-height: 50vh;
+  outline: none;
+}
+.brief-input:focus {
+  border-color: var(--accent-line);
+}

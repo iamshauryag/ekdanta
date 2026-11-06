@@ -10,6 +10,7 @@ import { material, readThinking, recallChips, suggestClusters, suggestLinks, wri
 import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
+import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { local, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import {
@@ -59,7 +60,7 @@ const routes: Record<string, Handler> = {
     if (JSON.stringify(next.excludedFolders) !== JSON.stringify(prev.excludedFolders)) refresh().catch(() => {})
     return next
   },
-  'GET /api/files': async () => listFiles(),
+  'GET /api/files': async () => markBriefs(await listFiles()),
   'GET /api/file': async (_req, url) => ({ content: await readDoc(url.searchParams.get('path') ?? '') }),
   'PUT /api/file': async (req) => {
     const { path, content } = await body<{ path: string; content: string }>(req)
@@ -121,6 +122,12 @@ const routes: Record<string, Handler> = {
     return { discarded: await discardIfEmpty(path) }
   },
   'POST /api/help': async (req) => runHelp(await body<HelpRequest>(req)),
+  // The brief pinned beside a document (kept in .ekdanta, never in the document). An empty one unpins.
+  'GET /api/brief': async (_req, url) => ({ text: await readBrief(url.searchParams.get('doc') ?? '') }),
+  'PUT /api/brief': async (req) => {
+    const { doc, text } = await body<{ doc: string; text: string }>(req)
+    return { text: await writeBrief(doc, text) }
+  },
   // Background check for the Recall dot: is there anything strong for this paragraph?
   'POST /api/recall-probe': async (req) => {
     const { text, doc } = await body<{ text: string; doc: string }>(req)
