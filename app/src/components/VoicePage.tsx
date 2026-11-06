@@ -10,7 +10,6 @@ import { api, type VoiceSummary } from '../lib/api.ts'
 import { joinFrontMatter, splitFrontMatter } from '../lib/frontmatter.ts'
 import { helpMod } from '../editor/help.ts'
 import { Markdown } from '../lib/markdown.tsx'
-import { formatKeys } from '../editor/format.ts'
 
 interface Props {
   platform: string
@@ -207,7 +206,6 @@ function ProfileEditor({ initial, onChange }: { initial: string; onChange: (body
         doc: initial,
         extensions: [
           history(),
-          formatKeys(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(classHighlighter),

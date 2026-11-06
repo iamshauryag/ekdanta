@@ -20,11 +20,12 @@ Ekdanta stores its settings, index and help history in `.ekdanta/` inside the va
 
 ## Writing and the vault
 
-Ekdanta writes plain Markdown but reads like a finished page, as in Obsidian's Live Preview: headings, lists, checkboxes, quotes, links, highlights and images show formatted, and the Markdown behind them stays out of sight (links show theirs while the caret is in them). The Markdown button at the end of the toolbar shows the source instead.
+You write on a formatted page, as in Google Docs or Notion: bold is bold, a heading is a heading, a to-do is a checkbox. Like those editors, Ekdanta keeps the page as a structured document, with formatting as part of the text rather than characters in it, so no edit can leave stray `**` behind. Files stay plain Markdown: a page is read from its file when it opens and written back when it changes. Every block you didn't touch is written back exactly as it was, and edited ones in standard Markdown, so the vault still opens in Obsidian or anywhere else. The Markdown button at the end of the toolbar shows a page's Markdown, to read or edit as written.
 
 - **Toolbar**, laid out like Google Docs': undo and redo, text style, bold, italic, underline, strikethrough, highlight, inline code, link, bulleted, numbered and checklists, indent, Insert (divider, table, image, page link, date), clear formatting, and find and replace.
 - **Type /** at the start of a line (or after a space) for any block, as in Notion: `/h1`, `/todo`, `/quote`, `/table`… Markdown typed directly works too: `# `, `- `, `1. `, `[] `, `> `, `---`.
-- **Type [[** to link to another page. ⌘-click a link to open it, or put the caret in it for Open, Edit, Copy and Remove. A link to a page that doesn't exist yet creates it.
+- **Type [[** to link to another page. ⌘-click a link to open it, or click it for Open, Edit, Copy and Remove. A link to a page that doesn't exist yet creates it.
+- **Tables** insert from the "/" menu or Insert; with the caret in one, the toolbar adds and removes rows and columns.
 - **Select text** for a small bar with the inline styles.
 - **Paste** keeps formatting from Google Docs and web pages, a URL pasted over selected words links them, and ⌘⇧V pastes plain text. Paste or drop an image and it is saved in `attachments/` in the vault.
 - **Outline** (⌃⌥2) lists the page's headings; click one to go there. The status bar shows the selection's word count and reading time.

@@ -1,7 +1,8 @@
-// The help ladder inside CodeMirror. Suggestions live in a StateField and are drawn as
-// decorations, so the writer's text is never touched until they accept something.
-import { Annotation, StateEffect, StateField, type EditorState, type Range } from '@codemirror/state'
-import { Decoration, EditorView, WidgetType, type DecorationSet } from '@codemirror/view'
+// The help ladder on the page. Suggestions live in plugin state and are drawn as decorations, so the
+// writer's text is never touched until they accept something.
+import type { Node as PMNode } from '@tiptap/pm/model'
+import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state'
+import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
 import { diffWordsWithSpace } from 'diff'
 
 export type Level = 1 | 2 | 3 | 4 | 5
@@ -18,6 +19,7 @@ export type Hunk =
   | { kind: 'eq'; text: string }
   | { kind: 'chg'; del: string; ins: string; state: 'pending' | 'accepted' | 'rejected' }
 
+// Positions are document positions. `at` is where a card goes: just after the block the help is about.
 export type Help =
   | { kind: 'loading'; level: Level; from: number; to: number; at: number; slow?: boolean }
   | { kind: 'notice'; level?: Level; from: number; to: number; at: number; text: string; tone?: 'error' }
@@ -40,48 +42,72 @@ export type Help =
       sideBySide: boolean
     }
 
-export const setHelp = StateEffect.define<Help | null>()
-/** Marks transactions made by the help system itself (accepting, inserting). */
-export const helpOwn = Annotation.define<boolean>()
+interface HelpState {
+  help: Help | null
+  /** Where the Recall dot sits, if anywhere. */
+  dot: number | null
+}
 
-export const helpField = StateField.define<Help | null>({
-  create: () => null,
-  update(help, tr) {
-    for (const e of tr.effects) if (e.is(setHelp)) return e.value
-    if (!help) return help
-    if (tr.docChanged) {
-      // Typing wins: any edit dismisses the suggestion. A Nudge covers nothing, so it stays.
-      if (help.kind === 'nudge') {
-        return { ...help, from: tr.changes.mapPos(help.from, -1), to: tr.changes.mapPos(help.to, 1), at: tr.changes.mapPos(help.at, 1) }
-      }
-      if (help.kind === 'bar') return { ...help, from: tr.changes.mapPos(help.from, -1), to: tr.changes.mapPos(help.to, 1) }
-      return null
-    }
-    if (tr.selection && (help.kind === 'ghost' || help.kind === 'word')) {
-      // Moving away from a word list or ghost text dismisses it.
-      const head = tr.state.selection.main.head
-      if (help.kind === 'ghost' && head !== help.at) return null
-      if (help.kind === 'word' && (head < help.from || head > help.to)) return null
-    }
-    return help
-  },
-  provide: (f) => EditorView.decorations.from(f, (help) => (help ? buildDecorations(help) : Decoration.none)),
-})
+/** A change to help, sent as transaction metadata. A transaction that sets `help` is help's own. */
+export interface HelpMeta {
+  help?: Help | null
+  dot?: number | null
+}
 
-// ---- Recall dot: the one passive signal ----------------------------------------------------
+export const helpKey = new PluginKey<HelpState>('help')
 
-export const setRecallDot = StateEffect.define<number | null>()
-export const recallDotField = StateField.define<number | null>({
-  create: () => null,
-  update(pos, tr) {
-    for (const e of tr.effects) if (e.is(setRecallDot)) return e.value
-    return pos === null ? null : tr.changes.mapPos(pos, -1)
-  },
-  provide: (f) =>
-    EditorView.decorations.from(f, (pos) =>
-      pos === null ? Decoration.none : Decoration.set([Decoration.widget({ widget: new DotWidget(), side: -1 }).range(pos)]),
-    ),
-})
+export const helpOf = (state: EditorState) => helpKey.getState(state)?.help ?? null
+export const dotOf = (state: EditorState) => helpKey.getState(state)?.dot ?? null
+export const setHelp = (tr: Transaction, help: Help | null) => tr.setMeta(helpKey, { help } satisfies HelpMeta)
+
+function mapHelp(help: Help, tr: Transaction): Help | null {
+  const m = (pos: number, assoc = 1) => tr.mapping.map(pos, assoc)
+  // Typing wins: any edit dismisses the suggestion. A Nudge covers nothing, so it stays.
+  if (help.kind === 'nudge') return { ...help, from: m(help.from, -1), to: m(help.to), at: m(help.at) }
+  if (help.kind === 'bar') return { ...help, from: m(help.from, -1), to: m(help.to) }
+  return null
+}
+
+export function helpPlugin() {
+  return new Plugin<HelpState>({
+    key: helpKey,
+    state: {
+      init: () => ({ help: null, dot: null }),
+      apply(tr, value, _old, state) {
+        const meta = tr.getMeta(helpKey) as HelpMeta | undefined
+        let { help, dot } = value
+        if (meta && 'help' in meta) help = meta.help ?? null
+        else if (help && tr.docChanged) help = mapHelp(help, tr)
+        else if (help && tr.selectionSet && (help.kind === 'ghost' || help.kind === 'word')) {
+          // Moving away from a word list or ghost text dismisses it.
+          const head = state.selection.head
+          if (help.kind === 'ghost' && head !== help.at) help = null
+          else if (help.kind === 'word' && (head < help.from || head > help.to)) help = null
+        }
+        if (meta && 'dot' in meta) dot = meta.dot ?? null
+        else if (dot !== null && tr.docChanged) dot = tr.mapping.map(dot, -1)
+        return { help, dot }
+      },
+    },
+    props: {
+      decorations(state) {
+        const s = helpKey.getState(state)
+        if (!s) return null
+        const d: Decoration[] = []
+        if (s.help) buildDecorations(state.doc, s.help, d)
+        if (s.dot !== null && s.dot <= state.doc.content.size) d.push(Decoration.widget(s.dot, dotWidget, { side: -1, key: 'dot', ...inert }))
+        return d.length ? DecorationSet.create(state.doc, d) : null
+      },
+    },
+    // The instruction bar is drawn once and kept; only its busy state changes.
+    view: () => ({
+      update(view) {
+        const h = helpOf(view.state)
+        view.dom.parentElement?.querySelector('.hl-bar')?.classList.toggle('is-busy', h?.kind === 'bar' && h.busy)
+      },
+    }),
+  })
+}
 
 // ---- Hooks the widgets call back into (set by the controller) ------------------------------
 
@@ -97,6 +123,8 @@ export interface WidgetHooks {
   rejectAll(): void
   recallAtDot(): void
   stepHunk(delta: number): void
+  focusEditor(): void
+  current(): Help | null
 }
 
 let hooks: WidgetHooks | null = null
@@ -104,7 +132,7 @@ export function setWidgetHooks(h: WidgetHooks) {
   hooks = h
 }
 
-// ---- Decorations ----------------------------------------------------------------------------
+// ---- Labels -------------------------------------------------------------------------------
 
 const LEVEL_NAMES: Record<Level, string> = { 1: 'Recall', 2: 'Nudge', 3: 'Word', 4: 'Sentence', 5: 'Passage' }
 /**
@@ -131,73 +159,88 @@ export function noteCmdWorks() {
 }
 export const levelLabel = (l: Level) => `${helpMod}${l} · ${LEVEL_NAMES[l]}`
 
-function buildDecorations(help: Help): DecorationSet {
-  const d: Range<Decoration>[] = []
-  const scope = (from: number, to: number) => {
-    if (to > from) d.push(Decoration.mark({ class: 'cm-scope' }).range(from, to))
+// ---- Decorations ----------------------------------------------------------------------------
+
+// Help widgets are controls, not text: the editor leaves their clicks and selection alone.
+const inert = { stopEvent: () => true, ignoreSelection: true }
+
+function buildDecorations(doc: PMNode, help: Help, d: Decoration[]) {
+  const size = doc.content.size
+  const clamp = (p: number) => Math.max(0, Math.min(size, p))
+  const scope = (from: number, to: number, cls = 'cm-scope') => {
+    if (to > from) d.push(Decoration.inline(clamp(from), clamp(to), { class: cls }))
   }
-  const block = (at: number, widget: WidgetType, side = 1) => d.push(Decoration.widget({ widget, block: true, side }).range(at))
+  // Drawn plain: a suggestion beside bold text isn't bold unless accepting it would make it so.
+  const card = (at: number, key: string, make: () => HTMLElement, side = 1) => d.push(Decoration.widget(clamp(at), make, { side, key, marks: [], ...inert }))
 
   switch (help.kind) {
     case 'loading':
       scope(help.from, help.to)
-      block(help.at, new LineWidget(`${levelLabel(help.level)}`, help.slow ? 'Still working · Esc to cancel' : '', 'loading'))
+      card(help.at, `loading-${help.level}-${help.slow}`, () => lineWidget(levelLabel(help.level), help.slow ? 'Still working · Esc to cancel' : '', 'loading'))
       break
     case 'notice':
       if (help.level) scope(help.from, help.to)
-      block(help.at, new LineWidget(help.level ? levelLabel(help.level) : '', help.text, help.tone === 'error' ? 'error' : 'notice'))
+      card(help.at, `notice-${help.text}`, () => lineWidget(help.level ? levelLabel(help.level) : '', help.text, help.tone === 'error' ? 'error' : 'notice'))
       break
     case 'recall':
       scope(help.from, help.to)
-      block(help.at, new RecallWidget(help))
+      card(help.at, `recall-${help.page}-${help.sel}-${help.results.length}`, () => recallWidget(help))
       break
     case 'nudge':
       scope(help.from, help.to)
       // In the margin when there's room beside the column; otherwise a quiet line under the paragraph.
-      if (help.inMargin) d.push(Decoration.widget({ widget: new NudgeWidget(help.text, true), side: -1 }).range(help.from))
-      else block(help.at, new NudgeWidget(help.text, false))
+      if (help.inMargin) card(help.from, `nudge-m-${help.text}`, () => nudgeWidget(help.text, true), -1)
+      else card(help.at, `nudge-${help.text}`, () => nudgeWidget(help.text, false))
       break
     case 'word':
-      if (help.to > help.from) d.push(Decoration.mark({ class: 'cm-scope cm-scope-word' }).range(help.from, help.to))
-      block(help.at, new WordWidget(help))
+      scope(help.from, help.to, 'cm-scope cm-scope-word')
+      card(help.at, `word-${help.options.join('|')}-${help.sel}`, () => wordWidget(help))
       break
     case 'ghost':
-      d.push(Decoration.widget({ widget: new GhostWidget(help.text), side: 1 }).range(help.at))
-      block(help.to, new LineWidget(levelLabel(4), `Tab accept · ⌥→ one word · ${helpMod}4 next · Esc`, 'hint'))
+      card(help.at, `ghost-${help.text}`, () => el('span', 'hl-ghost', help.text), 1)
+      card(help.to, 'ghost-hint', () => lineWidget(levelLabel(4), `Tab accept · ⌥→ one word · ${helpMod}4 next · Esc`, 'hint'))
       break
     case 'bar':
       scope(help.from, help.to)
-      block(help.from, new BarWidget(help.busy), -1)
+      card(help.from, 'bar', () => barWidget(), -1)
       break
-    case 'diff':
-      if (help.bar) block(help.from, new BarWidget(false), -1)
+    case 'diff': {
+      if (help.bar) card(help.from, 'bar', () => barWidget(), -1)
+      const map = textMap(doc, help.from, help.to)
       if (help.sideBySide) {
-        d.push(Decoration.replace({ widget: new SideBySideWidget(help), block: true }).range(help.from, help.to))
+        // The passage is shown as two columns instead of in place.
+        doc.nodesBetween(help.from, help.to, (node, pos) => {
+          if (!node.isTextblock) return true
+          d.push(Decoration.node(pos, pos + node.nodeSize, { class: 'hl-hidden' }))
+          return false
+        })
+        card(help.at, `sbs-${help.hunks.length}`, () => sideBySideWidget(help))
       } else {
-        let pos = help.from
+        let offset = 0
         help.hunks.forEach((h, i) => {
           if (h.kind === 'eq') {
-            pos += h.text.length
+            offset += h.text.length
             return
           }
-          const end = pos + h.del.length
-          const focused = i === help.focus ? ' is-focus' : ''
+          const from = map.pos(offset)
+          const to = map.pos(offset + h.del.length)
+          const focused = i === help.focus
           if (h.state === 'accepted') {
-            if (h.del) d.push(Decoration.replace({ widget: new InsWidget(h.ins, 'accepted', i) }).range(pos, end))
-            else d.push(Decoration.widget({ widget: new InsWidget(h.ins, 'accepted', i), side: 1 }).range(pos))
-          } else if (h.state === 'rejected') {
-            // Shown as the original text: nothing to draw.
-          } else {
-            if (h.del) d.push(Decoration.mark({ class: 'cm-del' + focused, attributes: { 'data-hunk': String(i) } }).range(pos, end))
-            if (h.ins) d.push(Decoration.widget({ widget: new InsWidget(h.ins, 'pending' + focused, i), side: 1 }).range(end))
+            if (to > from) d.push(Decoration.inline(from, to, { class: 'hl-hidden-text' }))
+            card(to, `ins-${i}-a`, () => insWidget(h.ins, 'accepted', i, false), 1)
+          } else if (h.state === 'pending') {
+            if (to > from) d.push(Decoration.inline(from, to, { class: 'cm-del' + (focused ? ' is-focus' : ''), 'data-hunk': String(i) }))
+            if (h.ins) card(to, `ins-${i}-${focused}`, () => insWidget(h.ins, 'pending', i, focused), 1)
           }
-          pos = end
+          offset += h.del.length
         })
       }
-      block(help.at, new ControlsWidget(help))
+      const changes = help.hunks.filter((h) => h.kind === 'chg')
+      const decided = changes.filter((h) => h.kind === 'chg' && h.state !== 'pending').length
+      card(help.at, `controls-${decided}-${help.focus}`, () => controlsWidget(help))
       break
+    }
   }
-  return Decoration.set(d, true)
 }
 
 // ---- Widgets --------------------------------------------------------------------------------
@@ -211,69 +254,48 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   return e
 }
 
-function kbd(text: string) {
-  return el('kbd', undefined, text)
+const kbd = (text: string) => el('kbd', undefined, text)
+const press = (fn: () => void) => (e: MouseEvent) => {
+  e.preventDefault()
+  fn()
 }
 
-class LineWidget extends WidgetType {
-  constructor(readonly label: string, readonly text: string, readonly tone: 'loading' | 'notice' | 'error' | 'hint') {
-    super()
-  }
-  eq(o: LineWidget) {
-    return o.label === this.label && o.text === this.text && o.tone === this.tone
-  }
-  toDOM() {
-    const wrap = el('div', `hl-line hl-${this.tone}`)
-    if (this.label) wrap.append(el('span', 'hl-label', this.label))
-    if (this.tone === 'error') wrap.append(el('span', 'hl-glyph', '!'))
-    if (this.text) wrap.append(el('span', 'hl-text', this.text))
-    if (this.tone === 'loading') wrap.append(el('div', 'hl-progress'))
-    return wrap
-  }
+function lineWidget(label: string, text: string, tone: 'loading' | 'notice' | 'error' | 'hint') {
+  const wrap = el('div', `hl-line hl-${tone}`)
+  if (label) wrap.append(el('span', 'hl-label', label))
+  if (tone === 'error') wrap.append(el('span', 'hl-glyph', '!'))
+  if (text) wrap.append(el('span', 'hl-text', text))
+  if (tone === 'loading') wrap.append(el('div', 'hl-progress'))
+  return wrap
 }
 
-class RecallWidget extends WidgetType {
-  constructor(readonly help: Extract<Help, { kind: 'recall' }>) {
-    super()
-  }
-  eq(o: RecallWidget) {
-    return o.help.results === this.help.results && o.help.sel === this.help.sel && o.help.page === this.help.page
-  }
-  toDOM() {
-    const { results, page, sel } = this.help
-    const card = el('div', 'hl-card hl-recall')
-    const head = el('div', 'hl-card-head')
-    head.append(el('span', 'hl-label', levelLabel(1)), el('span', 'hl-meta', `${results.length} of your sources`))
-    card.append(head)
-    results.slice(page * 3, page * 3 + 3).forEach((r, k) => {
-      const i = page * 3 + k
-      const row = el('div', 'hl-result' + (i === sel ? ' is-sel' : ''))
-      row.append(el('div', 'hl-excerpt', `“${excerpt(r.text)}”`))
-      const chip = el('button', 'chip', `↳ ${r.folder ? r.folder + ' / ' : ''}${r.title}`)
-      chip.title = 'Open the source'
-      chip.onclick = (e) => {
-        e.preventDefault()
-        hooks?.openSource(r.doc)
-      }
-      row.append(chip)
-      row.onmousedown = (e) => {
-        if ((e.target as HTMLElement).closest('.chip')) return
-        e.preventDefault()
-        hooks?.insertRecall(i)
-      }
-      card.append(row)
-    })
-    const foot = el('div', 'hl-card-foot')
-    const left = el('span')
-    left.append(kbd('⌘↵'), ' insert quote · ', kbd('↑↓'), ' choose · ', kbd('Esc'))
-    const more = el('span', undefined, results.length > (page + 1) * 3 ? `${helpMod}1 more` : '')
-    foot.append(left, more)
-    card.append(foot)
-    return card
-  }
-  ignoreEvent() {
-    return true
-  }
+function recallWidget(help: Extract<Help, { kind: 'recall' }>) {
+  const { results, page, sel } = help
+  const card = el('div', 'hl-card hl-recall')
+  const head = el('div', 'hl-card-head')
+  head.append(el('span', 'hl-label', levelLabel(1)), el('span', 'hl-meta', `${results.length} of your sources`))
+  card.append(head)
+  results.slice(page * 3, page * 3 + 3).forEach((r, k) => {
+    const i = page * 3 + k
+    const row = el('div', 'hl-result' + (i === sel ? ' is-sel' : ''))
+    row.append(el('div', 'hl-excerpt', `“${excerpt(r.text)}”`))
+    const chip = el('button', 'chip', `↳ ${r.folder ? r.folder + ' / ' : ''}${r.title}`)
+    chip.title = 'Open the source'
+    chip.onmousedown = press(() => hooks?.openSource(r.doc))
+    row.append(chip)
+    row.onmousedown = (e) => {
+      if ((e.target as HTMLElement).closest('.chip')) return
+      e.preventDefault()
+      hooks?.insertRecall(i)
+    }
+    card.append(row)
+  })
+  const foot = el('div', 'hl-card-foot')
+  const left = el('span')
+  left.append(kbd('⌘↵'), ' insert quote · ', kbd('↑↓'), ' choose · ', kbd('Esc'))
+  foot.append(left, el('span', undefined, results.length > (page + 1) * 3 ? `${helpMod}1 more` : ''))
+  card.append(foot)
+  return card
 }
 
 function excerpt(t: string) {
@@ -281,269 +303,217 @@ function excerpt(t: string) {
   return s.length > 240 ? s.slice(0, 237).replace(/\s+\S*$/, '') + '…' : s
 }
 
-class NudgeWidget extends WidgetType {
-  constructor(readonly text: string, readonly inMargin: boolean) {
-    super()
-  }
-  eq(o: NudgeWidget) {
-    return o.text === this.text && o.inMargin === this.inMargin
-  }
-  toDOM() {
-    const anchor = el(this.inMargin ? 'span' : 'div', this.inMargin ? 'hl-nudge-anchor' : 'hl-nudge-below')
-    const note = el('span', 'hl-nudge')
-    note.append(el('span', 'hl-label', levelLabel(2)), el('span', 'hl-question', this.text))
-    const acts = el('span', 'hl-actions')
-    const resolve = el('button', 'hl-link', 'Resolve')
-    resolve.onmousedown = (e) => {
-      e.preventDefault()
-      hooks?.resolveNudge()
-    }
-    acts.append(resolve, ` ⌘↵ · ${helpMod}2 another · Esc`)
-    note.append(acts)
-    anchor.append(note)
-    return anchor
-  }
-  ignoreEvent() {
-    return true
-  }
+function nudgeWidget(text: string, inMargin: boolean) {
+  const anchor = el(inMargin ? 'span' : 'div', inMargin ? 'hl-nudge-anchor' : 'hl-nudge-below')
+  const note = el('span', 'hl-nudge')
+  note.append(el('span', 'hl-label', levelLabel(2)), el('span', 'hl-question', text))
+  const acts = el('span', 'hl-actions')
+  const resolve = el('button', 'hl-link', 'Resolve')
+  resolve.onmousedown = press(() => hooks?.resolveNudge())
+  acts.append(resolve, ` ⌘↵ · ${helpMod}2 another · Esc`)
+  note.append(acts)
+  anchor.append(note)
+  return anchor
 }
 
-class WordWidget extends WidgetType {
-  constructor(readonly help: Extract<Help, { kind: 'word' }>) {
-    super()
-  }
-  eq(o: WordWidget) {
-    return o.help.options === this.help.options && o.help.sel === this.help.sel && o.help.from === this.help.from
-  }
-  toDOM(view: EditorView) {
-    const wrap = el('div', 'hl-word-wrap')
-    const list = el('div', 'hl-card hl-word')
-    const head = el('div', 'hl-card-head')
-    head.append(el('span', 'hl-label', levelLabel(3)), el('span', 'hl-meta', this.help.mode === 'next' ? 'next word' : 'replace'))
-    list.append(head)
-    this.help.options.forEach((o, i) => {
-      const row = el('div', 'hl-option' + (i === this.help.sel ? ' is-sel' : ''))
-      row.append(el('span', undefined, o), el('span', 'hl-key', i === this.help.sel ? '↵' : String(i + 1)))
-      row.onmousedown = (e) => {
-        e.preventDefault()
-        hooks?.pickWord(i)
-      }
-      list.append(row)
-    })
-    const foot = el('div', 'hl-card-foot')
-    const hints = el('span')
-    hints.append(kbd('↑↓'), ' choose · ', kbd('↵'), ' pick · ', kbd('Esc'))
-    foot.append(hints, el('span', undefined, `${helpMod}3 more`))
-    list.append(foot)
-    wrap.append(list)
-    // Line the list up under the word once layout is known, never past the column's edge.
-    const from = this.help.from
-    view.requestMeasure({
-      read: (v) => {
-        const word = v.coordsAtPos(from, 1)
-        const content = v.contentDOM.getBoundingClientRect()
-        return { left: word ? word.left - content.left : 0, width: v.contentDOM.clientWidth }
-      },
-      write: ({ left, width }) => {
-        const max = Math.max(0, width - list.offsetWidth)
-        list.style.marginLeft = `${Math.round(Math.min(Math.max(0, left - 10), max))}px`
-      },
-    })
-    return wrap
-  }
-  ignoreEvent() {
-    return true
-  }
+function wordWidget(help: Extract<Help, { kind: 'word' }>) {
+  const wrap = el('div', 'hl-word-wrap')
+  const list = el('div', 'hl-card hl-word')
+  const head = el('div', 'hl-card-head')
+  head.append(el('span', 'hl-label', levelLabel(3)), el('span', 'hl-meta', help.mode === 'next' ? 'next word' : 'replace'))
+  list.append(head)
+  help.options.forEach((o, i) => {
+    const row = el('div', 'hl-option' + (i === help.sel ? ' is-sel' : ''))
+    row.append(el('span', undefined, o), el('span', 'hl-key', i === help.sel ? '↵' : String(i + 1)))
+    row.onmousedown = press(() => hooks?.pickWord(i))
+    list.append(row)
+  })
+  const foot = el('div', 'hl-card-foot')
+  const hints = el('span')
+  hints.append(kbd('↑↓'), ' choose · ', kbd('↵'), ' pick · ', kbd('Esc'))
+  foot.append(hints, el('span', undefined, `${helpMod}3 more`))
+  list.append(foot)
+  wrap.append(list)
+  // Line the list up under the word once it's on the page, never past the column's edge.
+  requestAnimationFrame(() => {
+    const word = document.querySelector('.cm-scope-word')?.getBoundingClientRect()
+    const column = wrap.parentElement?.getBoundingClientRect()
+    if (!word || !column) return
+    const max = Math.max(0, column.width - list.offsetWidth)
+    list.style.marginLeft = `${Math.round(Math.min(Math.max(0, word.left - column.left - 10), max))}px`
+  })
+  return wrap
 }
 
-class GhostWidget extends WidgetType {
-  constructor(readonly text: string) {
-    super()
-  }
-  eq(o: GhostWidget) {
-    return o.text === this.text
-  }
-  toDOM() {
-    return el('span', 'hl-ghost', this.text)
-  }
-}
-
-class BarWidget extends WidgetType {
-  constructor(readonly busy: boolean) {
-    super()
-  }
-  // Keep one DOM node for the bar's whole life so the field keeps its focus and text.
-  eq() {
-    return true
-  }
-  updateDOM(dom: HTMLElement) {
-    dom.classList.toggle('is-busy', this.busy)
-    return true
-  }
-  toDOM(view: EditorView) {
-    const bar = el('div', 'hl-bar' + (this.busy ? ' is-busy' : ''))
-    const help = view.state.field(helpField)
-    bar.append(el('span', 'hl-label', levelLabel(help?.level === 4 ? 4 : 5)))
-    const input = el('input', 'hl-input')
-    input.placeholder = 'How should this change?'
-    input.value = help?.kind === 'diff' ? help.instruction : lastInstruction
-    input.onkeydown = (e) => {
-      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
-        e.preventDefault()
-        if (input.value.trim()) {
-          lastInstruction = input.value.trim()
-          hooks?.runInstruction(input.value.trim())
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        hooks?.dismiss()
-        view.focus()
-      } else if (e.key === 'Tab' && view.state.field(helpField)?.kind === 'diff') {
-        e.preventDefault()
-        view.focus()
-        hooks?.stepHunk(e.shiftKey ? -1 : 1)
-      } else if (e.key === 'ArrowUp' && !input.value) {
-        input.value = lastInstruction
-      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'Enter' || e.key === 'Backspace') && view.state.field(helpField)?.kind === 'diff') {
-        e.preventDefault()
-        if (e.key === 'Enter') hooks?.acceptAll()
-        else hooks?.rejectAll()
-        view.focus()
-      }
-      e.stopPropagation()
-    }
-    const hint = el('span', 'hl-meta', help?.kind === 'diff' ? '↵ refine · Esc' : '↵ run · Esc')
-    bar.append(input, hint, el('div', 'hl-progress'))
-    if (help?.kind === 'bar') requestAnimationFrame(() => input.focus())
-    return bar
-  }
-  ignoreEvent() {
-    return true
-  }
-}
 let lastInstruction = ''
 
-class InsWidget extends WidgetType {
-  constructor(readonly text: string, readonly state: string, readonly index: number) {
-    super()
-  }
-  eq(o: InsWidget) {
-    return o.text === this.text && o.state === this.state
-  }
-  toDOM() {
-    const span = el('span', `cm-ins is-${this.state.split(' ')[0]}${this.state.includes('is-focus') ? ' is-focus' : ''}`, this.text)
-    if (this.state.includes('is-focus')) {
-      const marks = el('span', 'hl-marks')
-      const yes = el('button', 'hl-yes', '✓')
-      const no = el('button', 'hl-no', '✕')
-      yes.onmousedown = (e) => {
-        e.preventDefault()
-        hooks?.decideHunk(this.index, 'accepted')
+function barWidget() {
+  const help = hooks?.current()
+  const bar = el('div', 'hl-bar' + (help?.kind === 'bar' && help.busy ? ' is-busy' : ''))
+  bar.append(el('span', 'hl-label', levelLabel(help && 'level' in help && help.level === 4 ? 4 : 5)))
+  const input = el('input', 'hl-input')
+  input.placeholder = 'How should this change?'
+  input.value = help?.kind === 'diff' ? help.instruction : lastInstruction
+  input.onkeydown = (e) => {
+    const h = hooks?.current()
+    if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault()
+      if (input.value.trim()) {
+        lastInstruction = input.value.trim()
+        hooks?.runInstruction(input.value.trim())
       }
-      no.onmousedown = (e) => {
-        e.preventDefault()
-        hooks?.decideHunk(this.index, 'rejected')
-      }
-      marks.append(yes, no)
-      span.append(marks)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      hooks?.dismiss()
+      hooks?.focusEditor()
+    } else if (e.key === 'Tab' && h?.kind === 'diff') {
+      e.preventDefault()
+      hooks?.focusEditor()
+      hooks?.stepHunk(e.shiftKey ? -1 : 1)
+    } else if (e.key === 'ArrowUp' && !input.value) {
+      input.value = lastInstruction
+    } else if ((e.metaKey || e.ctrlKey) && (e.key === 'Enter' || e.key === 'Backspace') && h?.kind === 'diff') {
+      e.preventDefault()
+      if (e.key === 'Enter') hooks?.acceptAll()
+      else hooks?.rejectAll()
+      hooks?.focusEditor()
     }
-    return span
+    e.stopPropagation()
   }
-  ignoreEvent() {
-    return true
-  }
+  bar.append(input, el('span', 'hl-meta', help?.kind === 'diff' ? '↵ refine · Esc' : '↵ run · Esc'), el('div', 'hl-progress'))
+  if (help?.kind === 'bar') requestAnimationFrame(() => input.focus())
+  return bar
 }
 
-class SideBySideWidget extends WidgetType {
-  constructor(readonly help: Extract<Help, { kind: 'diff' }>) {
-    super()
+function insWidget(text: string, state: 'pending' | 'accepted', index: number, focused: boolean) {
+  const span = el('span', `cm-ins is-${state}${focused ? ' is-focus' : ''}`, text)
+  if (focused) {
+    const marks = el('span', 'hl-marks')
+    const yes = el('button', 'hl-yes', '✓')
+    const no = el('button', 'hl-no', '✕')
+    yes.onmousedown = press(() => hooks?.decideHunk(index, 'accepted'))
+    no.onmousedown = press(() => hooks?.decideHunk(index, 'rejected'))
+    marks.append(yes, no)
+    span.append(marks)
   }
-  eq(o: SideBySideWidget) {
-    return o.help.hunks === this.help.hunks
-  }
-  toDOM() {
-    const grid = el('div', 'hl-sbs')
-    const left = el('div', 'hl-sbs-col')
-    const right = el('div', 'hl-sbs-col')
-    left.append(el('div', 'hl-colhead', 'Original'))
-    right.append(el('div', 'hl-colhead', 'Suggestion'))
-    const lt = el('div', 'hl-sbs-text is-original')
-    const rt = el('div', 'hl-sbs-text')
-    for (const h of this.help.hunks) {
-      if (h.kind === 'eq') {
-        lt.append(h.text)
-        rt.append(h.text)
-      } else {
-        if (h.del) lt.append(el('del', undefined, h.del))
-        if (h.ins) rt.append(el('ins', undefined, h.ins))
-      }
-    }
-    left.append(lt)
-    right.append(rt)
-    grid.append(left, right)
-    return grid
-  }
-  ignoreEvent() {
-    return true
-  }
+  return span
 }
 
-class ControlsWidget extends WidgetType {
-  constructor(readonly help: Extract<Help, { kind: 'diff' }>) {
-    super()
-  }
-  eq(o: ControlsWidget) {
-    return o.help.hunks === this.help.hunks && o.help.focus === this.help.focus
-  }
-  toDOM() {
-    const changes = this.help.hunks.filter((h) => h.kind === 'chg')
-    const decided = changes.filter((h) => h.kind === 'chg' && h.state !== 'pending').length
-    const row = el('div', 'hl-controls')
-    const acc = el('button', 'hl-link is-strong')
-    acc.append(kbd('⌘↵'), ' Accept all')
-    acc.onmousedown = (e) => {
-      e.preventDefault()
-      hooks?.acceptAll()
-    }
-    const rej = el('button', 'hl-link')
-    rej.append(kbd('⌘⌫'), ' Reject all')
-    rej.onmousedown = (e) => {
-      e.preventDefault()
-      hooks?.rejectAll()
-    }
-    const count = decided ? `${decided} of ${changes.length} decided` : `${changes.length} change${changes.length === 1 ? '' : 's'}`
-    row.append(acc, el('span', 'hl-sep', '·'), rej, el('span', 'hl-sep', '·'), el('span', undefined, count))
-    if (!this.help.sideBySide) {
-      const step = el('span')
-      step.append(el('span', 'hl-sep', '·'), kbd('Tab'), ' step through · ', kbd('↵'), ' accept · ', kbd('⌫'), ' reject')
-      row.append(step)
+function sideBySideWidget(help: Extract<Help, { kind: 'diff' }>) {
+  const grid = el('div', 'hl-sbs')
+  const left = el('div', 'hl-sbs-col')
+  const right = el('div', 'hl-sbs-col')
+  left.append(el('div', 'hl-colhead', 'Original'))
+  right.append(el('div', 'hl-colhead', 'Suggestion'))
+  const lt = el('div', 'hl-sbs-text is-original')
+  const rt = el('div', 'hl-sbs-text')
+  for (const h of help.hunks) {
+    if (h.kind === 'eq') {
+      lt.append(h.text)
+      rt.append(h.text)
     } else {
-      row.append(el('span', 'hl-sep', '·'), el('span', 'hl-meta', 'Most of this passage changed, so it’s shown side by side.'))
+      if (h.del) lt.append(el('del', undefined, h.del))
+      if (h.ins) rt.append(el('ins', undefined, h.ins))
     }
-    return row
   }
-  ignoreEvent() {
-    return true
-  }
+  left.append(lt)
+  right.append(rt)
+  grid.append(left, right)
+  return grid
 }
 
-class DotWidget extends WidgetType {
-  eq() {
-    return true
+function controlsWidget(help: Extract<Help, { kind: 'diff' }>) {
+  const changes = help.hunks.filter((h) => h.kind === 'chg')
+  const decided = changes.filter((h) => h.kind === 'chg' && h.state !== 'pending').length
+  const row = el('div', 'hl-controls')
+  const acc = el('button', 'hl-link is-strong')
+  acc.append(kbd('⌘↵'), ' Accept all')
+  acc.onmousedown = press(() => hooks?.acceptAll())
+  const rej = el('button', 'hl-link')
+  rej.append(kbd('⌘⌫'), ' Reject all')
+  rej.onmousedown = press(() => hooks?.rejectAll())
+  const count = decided ? `${decided} of ${changes.length} decided` : `${changes.length} change${changes.length === 1 ? '' : 's'}`
+  row.append(acc, el('span', 'hl-sep', '·'), rej, el('span', 'hl-sep', '·'), el('span', undefined, count))
+  if (!help.sideBySide) {
+    const step = el('span')
+    step.append(el('span', 'hl-sep', '·'), kbd('Tab'), ' step through · ', kbd('↵'), ' accept · ', kbd('⌫'), ' reject')
+    row.append(step)
+  } else {
+    row.append(el('span', 'hl-sep', '·'), el('span', 'hl-meta', 'Most of this passage changed, so it’s shown side by side.'))
   }
-  toDOM() {
-    const dot = el('span', 'hl-dot')
-    dot.title = `Recall has something from your notes (${helpMod}1)`
-    dot.onmousedown = (e) => {
-      e.preventDefault()
-      hooks?.recallAtDot()
-    }
-    return dot
-  }
-  ignoreEvent() {
-    return true
-  }
+  return row
 }
+
+function dotWidget() {
+  const dot = el('span', 'hl-dot')
+  dot.title = `Recall has something from your notes (${helpMod}1)`
+  dot.onmousedown = press(() => hooks?.recallAtDot())
+  return dot
+}
+
+// ---- Text and positions ---------------------------------------------------------------------
+
+/** How an inline leaf reads as text: a page link as its title, a line break as a newline. */
+export function leafText(node: PMNode) {
+  if (node.type.name === 'hardBreak') return '\n'
+  if (node.type.name === 'pageLink') return node.attrs.label || node.attrs.target
+  if (node.type.name === 'rawInline') return node.attrs.text
+  return ''
+}
+
+/** The plain text between two positions, paragraphs separated by a blank line. */
+export const textOf = (doc: PMNode, from: number, to: number) => doc.textBetween(from, to, '\n\n', leafText)
+
+/**
+ * The plain text of a range, with the document position of every character in it, so a diff
+ * computed on text can be drawn and applied in the document.
+ */
+export function textMap(doc: PMNode, from: number, to: number) {
+  let text = ''
+  const offs: number[] = []
+  let prevEnd = -1
+  doc.nodesBetween(from, to, (node, pos) => {
+    if (node.isTextblock) {
+      const start = Math.max(from, pos + 1)
+      if (prevEnd >= 0) {
+        // A paragraph break reads as a blank line: from the end of one block to the start of the next.
+        text += '\n\n'
+        offs.push(prevEnd, start)
+      }
+      prevEnd = Math.min(to, pos + node.nodeSize - 1)
+      return true
+    }
+    if (node.isText) {
+      const s = Math.max(from, pos)
+      const e = Math.min(to, pos + node.nodeSize)
+      for (let p = s; p < e; p++) {
+        text += node.text![p - pos]
+        offs.push(p)
+      }
+      return false
+    }
+    if (node.isInline) {
+      const t = leafText(node)
+      for (let k = 0; k < t.length; k++) offs.push(pos)
+      text += t
+      return false
+    }
+    return true
+  })
+  return { text, pos: (offset: number) => (offset < offs.length ? offs[offset] : to) }
+}
+
+/** The textblock (paragraph, heading, list item text) around a position. */
+export function paragraphAt(state: EditorState, pos: number) {
+  const $pos = state.doc.resolve(Math.max(0, Math.min(state.doc.content.size, pos)))
+  for (let d = $pos.depth; d > 0; d--) {
+    if ($pos.node(d).isTextblock) return { from: $pos.start(d), to: $pos.end(d), after: $pos.after(d) }
+  }
+  return { from: pos, to: pos, after: pos }
+}
+
+/** Where a card for help about a position goes: straight after its block. */
+export const blockEnd = (state: EditorState, pos: number) => paragraphAt(state, pos).after
 
 // ---- Diff helpers ---------------------------------------------------------------------------
 
@@ -591,40 +561,12 @@ function commonTrailingSpace(a: string, b: string) {
   return n ? a.slice(a.length - n) : ''
 }
 
-/** The text that results from the decisions so far; pending changes resolve to `pending`. */
-export function resolveHunks(hunks: Hunk[], pending: 'accepted' | 'rejected') {
-  return hunks
-    .map((h) => (h.kind === 'eq' ? h.text : (h.state === 'pending' ? pending : h.state) === 'accepted' ? h.ins : h.del))
-    .join('')
-}
-
 export function changedRatio(original: string, hunks: Hunk[]) {
   const changedWords = hunks
     .filter((h): h is Hunk & { kind: 'chg' } => h.kind === 'chg')
     .reduce((n, h) => n + h.del.split(/\s+/).filter(Boolean).length, 0)
   const total = original.split(/\s+/).filter(Boolean).length || 1
   return changedWords / total
-}
-
-// ---- Scope helpers --------------------------------------------------------------------------
-
-/** The paragraph around `pos`: contiguous non-blank lines. */
-export function paragraphAt(state: EditorState, pos: number) {
-  const doc = state.doc
-  let first = doc.lineAt(pos)
-  let last = first
-  if (!first.text.trim()) return { from: first.from, to: first.to }
-  while (first.number > 1) {
-    const prev = doc.line(first.number - 1)
-    if (!prev.text.trim()) break
-    first = prev
-  }
-  while (last.number < doc.lines) {
-    const next = doc.line(last.number + 1)
-    if (!next.text.trim()) break
-    last = next
-  }
-  return { from: first.from, to: last.to }
 }
 
 export function sentenceAround(text: string, offset: number) {
@@ -635,3 +577,5 @@ export function sentenceAround(text: string, offset: number) {
   const end = endRel < 0 ? text.length : offset + endRel + 1
   return text.slice(start, end).trim()
 }
+
+export type { EditorView }

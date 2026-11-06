@@ -809,10 +809,10 @@ kbd {
 .app.is-focus .page {
   padding-top: 12vh;
 }
-.app.is-focus .cm-line {
+.app.is-focus .pm > * {
   transition: opacity 0.15s;
 }
-.app.is-focus:not(.no-para-focus) .cm-line:not(.cm-current-para) {
+.app.is-focus:not(.no-para-focus) .pm > :not(.is-current) {
   opacity: 0.45;
 }
 .focus-hint {
@@ -835,7 +835,245 @@ kbd {
   }
 }
 
-/* ---- The editor -------------------------------------------------------------------------- */
+/* ---- The editor ------------------------------------------------------------------------------ */
+/* The page: a structured document, styled to read like the finished piece. */
+.editor {
+  position: relative;
+}
+.editor .pm {
+  outline: none;
+  font: 18.5px/1.6 var(--serif);
+  color: var(--ink);
+  caret-color: var(--accent);
+  min-height: 40vh;
+}
+.pm > * + * {
+  margin-top: 0.85em;
+}
+.pm p {
+  margin: 0;
+}
+.pm ::selection {
+  background: var(--accent-soft);
+}
+.pm h1,
+.pm h2,
+.pm h3,
+.pm h4,
+.pm h5,
+.pm h6 {
+  font-family: var(--serif);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  margin: 1.2em 0 0;
+  line-height: 1.3;
+}
+.pm > h1:first-child,
+.pm > h2:first-child,
+.pm > h3:first-child {
+  margin-top: 0;
+}
+.pm h1 {
+  font-size: 1.6em;
+}
+.pm h2 {
+  font-size: 1.32em;
+}
+.pm h3 {
+  font-size: 1.12em;
+}
+.pm h4,
+.pm h5,
+.pm h6 {
+  font-size: 1em;
+}
+.pm strong {
+  font-weight: 650;
+}
+.pm s {
+  text-decoration-color: var(--ink-3);
+}
+.pm u {
+  text-underline-offset: 3px;
+}
+.pm mark {
+  background: var(--hl);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.pm code {
+  font: 0.84em var(--mono);
+  background: var(--chrome-2);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.pm pre {
+  font: 14px/1.55 var(--mono);
+  background: var(--chrome);
+  border-radius: 6px;
+  padding: 10px 14px;
+  white-space: pre-wrap;
+}
+.pm pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.pm a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-line);
+  text-underline-offset: 3px;
+  cursor: text;
+}
+.pm blockquote {
+  margin-left: 0;
+  margin-right: 0;
+  padding-left: 16px;
+  border-left: 3px solid var(--line-2);
+  color: var(--ink-2);
+}
+.pm blockquote > * + * {
+  margin-top: 0.5em;
+}
+.pm ul,
+.pm ol {
+  margin-bottom: 0;
+  padding-left: 1.6em;
+}
+.pm li > * + * {
+  margin-top: 0.25em;
+}
+.pm li + li {
+  margin-top: 0.15em;
+}
+.pm li p {
+  margin: 0;
+}
+.pm ul li::marker,
+.pm ol li::marker {
+  color: var(--ink-3);
+}
+/* To-do lists, as in Notion: a checkbox you can tick, and the done ones quietly struck through. */
+.pm ul[data-type='taskList'] {
+  list-style: none;
+  padding-left: 0.2em;
+}
+.pm ul[data-type='taskList'] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+}
+.pm ul[data-type='taskList'] li > label {
+  flex: none;
+  user-select: none;
+  margin-top: 0.32em;
+}
+.pm ul[data-type='taskList'] li > label input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.pm ul[data-type='taskList'] li > div {
+  flex: 1;
+  min-width: 0;
+}
+.pm ul[data-type='taskList'] li[data-checked='true'] > div {
+  color: var(--ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-4);
+}
+.pm hr {
+  border: 0;
+  border-top: 1px solid var(--line-2);
+  margin: 1.4em 0;
+}
+.pm hr.ProseMirror-selectednode {
+  border-top-color: var(--accent);
+}
+.pm img {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  border-radius: 6px;
+  margin: 0.3em 0;
+}
+.pm img.ProseMirror-selectednode {
+  outline: 2px solid var(--accent-line);
+}
+.pm table {
+  border-collapse: collapse;
+  width: 100%;
+  font: 15.5px/1.45 var(--sans);
+  table-layout: fixed;
+}
+.pm th,
+.pm td {
+  border: 1px solid var(--line-2);
+  padding: 6px 10px;
+  vertical-align: top;
+  position: relative;
+}
+.pm th {
+  background: var(--chrome);
+  font-weight: 600;
+  text-align: left;
+}
+.pm .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--accent-soft);
+  pointer-events: none;
+}
+.pm .tableWrapper {
+  overflow-x: auto;
+}
+/* [[Page links]], whole like a single character. */
+.pm .pm-pagelink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-line);
+  text-underline-offset: 3px;
+  border-radius: 3px;
+}
+.pm .pm-pagelink.is-missing {
+  color: var(--ink-3);
+  text-decoration-style: dashed;
+}
+.pm .pm-pagelink.ProseMirror-selectednode {
+  background: var(--accent-soft);
+}
+.pm .pm-raw,
+.pm .pm-raw-inline {
+  font: 13px var(--mono);
+  color: var(--ink-3);
+  background: var(--chrome);
+  border: 1px dashed var(--line-2);
+  border-radius: 4px;
+}
+.pm .pm-raw {
+  padding: 6px 10px;
+}
+.pm .pm-raw-inline {
+  padding: 0 4px;
+}
+/* The hint on an empty line, as in Notion. */
+.pm .is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--ink-4);
+}
+.pm .ProseMirror-gapcursor::after {
+  border-top-color: var(--accent);
+}
+
+/* The Markdown view (and the voice profile's editor) stay CodeMirror. */
 .editor .cm-editor {
   background: transparent;
   color: var(--ink);
@@ -848,6 +1086,9 @@ kbd {
   font-family: var(--serif);
   font-size: 18.5px;
   line-height: 1.6;
+}
+.source-editor .cm-scroller {
+  font: 15px/1.65 var(--mono);
 }
 .editor .cm-content {
   padding: 0;
@@ -863,13 +1104,9 @@ kbd {
 .editor .cm-focused .cm-selectionBackground {
   background: var(--accent-soft) !important;
 }
-.editor .cm-placeholder {
-  color: var(--ink-3);
-}
-/* Markdown, lightly: headings read as headings, syntax stays quiet. */
-.editor .cm-line .tok-heading,
-.editor .cm-line .tok-heading1 {
-  font-weight: 500;
+.editor .tok-heading,
+.editor .tok-strong {
+  font-weight: 600;
 }
 .editor .tok-meta,
 .editor .tok-processingInstruction {
@@ -878,33 +1115,15 @@ kbd {
 .editor .tok-emphasis {
   font-style: italic;
 }
-.editor .tok-strong {
-  font-weight: 600;
-}
 .editor .tok-link,
 .editor .tok-url {
   color: var(--accent);
 }
-.editor .tok-quote,
-.editor .tok-quote * {
+.editor .tok-quote {
   color: var(--ink-2);
-}
-.editor .tok-strikethrough {
-  text-decoration: line-through;
-  text-decoration-color: var(--ink-3);
-}
-.editor .tok-monospace {
-  font: 0.86em var(--mono);
 }
 
 /* The bar over a selection */
-/* CodeMirror gives these its own light popup look; they follow the app's theme instead. */
-.editor .cm-editor .cm-tooltip.fmt-bar,
-.editor .cm-editor .cm-tooltip.link-card {
-  color: var(--ink);
-  background: var(--pop) !important;
-  border: 1px solid var(--line-2) !important;
-}
 .fmt-bar {
   display: flex;
   padding: 3px;
@@ -936,12 +1155,12 @@ kbd {
 .fmt-bar .is-s {
   text-decoration: line-through;
 }
-/* Out of the way while a selection is being dragged out. */
-.cm-editor:has(.cm-content:active) .fmt-bar {
-  visibility: hidden;
-}
 
 /* ---- Help ladder (see HELP-LADDER.md) ------------------------------------------------------ */
+.hl-hidden,
+.hl-hidden-text {
+  display: none;
+}
 .cm-scope {
   background: var(--scope);
   border-radius: 2px;
@@ -2152,176 +2371,18 @@ kbd {
   font-size: 12px;
 }
 
-/* ---- Live Preview -------------------------------------------------------------------------- */
-.editor .cm-lp-h {
-  font-weight: 600;
-  letter-spacing: -0.005em;
-}
-.editor .cm-lp-h1 {
-  font-size: 1.6em;
-  line-height: 1.3;
-  padding-top: 0.6em !important;
-}
-.editor .cm-lp-h2 {
-  font-size: 1.32em;
-  line-height: 1.35;
-  padding-top: 0.5em !important;
-}
-.editor .cm-lp-h3 {
-  font-size: 1.12em;
-  padding-top: 0.35em !important;
-}
-.editor .cm-lp-h4,
-.editor .cm-lp-h5,
-.editor .cm-lp-h6 {
-  font-size: 1em;
-}
-.editor .cm-lp-h .tok-heading,
-.editor .cm-lp-h [class*='tok-heading'] {
-  font-weight: inherit;
-}
-.editor .cm-lp-quote {
-  border-left: 3px solid var(--line-2);
-  padding-left: 16px !important;
-  color: var(--ink-2);
-}
-.editor .cm-lp-quote .tok-quote {
-  font-style: normal;
-}
-.editor .cm-live .cm-lp-li {
-  padding-left: calc(var(--depth, 0) * 1.6em + 1.6em) !important;
-  text-indent: -1.6em;
-}
-.editor .cm-lp-marker {
-  display: inline-block;
-  width: 1.6em;
-  text-indent: 0;
-  color: var(--ink-3);
-}
-.editor .cm-lp-bullet {
-  text-align: center;
-  padding-right: 0.3em;
-}
-.editor .cm-lp-number {
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  padding-right: 0.45em;
-}
-.editor .cm-lp-task input {
-  width: 15px;
-  height: 15px;
-  margin: 0 0.45em 0 0.1em;
-  vertical-align: -1px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-.editor .cm-lp-done {
-  color: var(--ink-3);
-  text-decoration: line-through;
-  text-decoration-color: var(--ink-4);
-}
-.editor .cm-lp-hr {
-  display: inline-block;
-  width: 100%;
-  height: 1px;
-  vertical-align: middle;
-  background: var(--line-2);
-}
-.editor .cm-lp-code {
-  font: 14px/1.55 var(--mono);
-  background: var(--chrome);
-  padding: 0 14px !important;
-}
-.editor .cm-lp-code.is-first {
-  border-radius: 6px 6px 0 0;
-  padding-top: 6px !important;
-  color: var(--ink-3);
-}
-.editor .cm-lp-code.is-last {
-  border-radius: 0 0 6px 6px;
-  padding-bottom: 6px !important;
-  color: var(--ink-3);
-}
-.editor .cm-lp-code-inline {
-  font: 0.84em var(--mono);
-  background: var(--chrome-2);
-  border-radius: 4px;
-  padding: 1px 4px;
-}
-.editor .cm-lp-hl {
-  background: var(--hl);
-  border-radius: 2px;
-}
-.editor .cm-lp-strong {
-  font-weight: 600;
-}
-.editor .cm-lp-em {
-  font-style: italic;
-}
-.editor .cm-lp-strike {
-  text-decoration: line-through;
-  text-decoration-color: var(--ink-3);
-}
-.editor .cm-lp-u {
-  text-decoration: underline;
-  text-underline-offset: 3px;
-}
-.editor .cm-lp-link,
-.editor .cm-lp-wikilink {
-  color: var(--accent);
-  text-decoration: underline;
-  text-decoration-color: var(--accent-line);
-  text-underline-offset: 3px;
-  cursor: text;
-}
-.editor .cm-lp-link .tok-link,
-.editor .cm-lp-link .tok-url {
-  color: inherit;
-}
-.editor .cm-lp-wikilink.is-missing {
-  color: var(--ink-3);
-  text-decoration-style: dashed;
-}
-.editor .cm-content:has(:hover) .cm-lp-link:hover,
-.editor .cm-lp-wikilink:hover {
-  text-decoration-color: currentColor;
-}
-.editor .cm-lp-table {
-  font: 14.5px/1.6 var(--mono);
-  color: var(--ink-2);
-  white-space: pre;
-}
-.editor .cm-lp-image {
-  display: inline-block;
-  max-width: 100%;
-  margin: 6px 0;
-}
-.editor .cm-lp-image img {
-  display: block;
-  max-width: 100%;
-  max-height: 520px;
-  border-radius: 6px;
-}
-.editor .cm-lp-image.is-broken {
-  font: 13px var(--sans);
-  color: var(--ink-3);
-  padding: 8px 10px;
-  border: 1px dashed var(--line-2);
-  border-radius: 6px;
-}
-.editor .cm-selectionMatch {
-  background: var(--accent-soft);
-}
-
-/* ---- The card under a link (as in Google Docs) -------------------------------------------- */
-.link-card {
-  color: var(--ink);
+/* ---- The card under a link (as in Google Docs), and the box for its address ------------------- */
+.link-card,
+.link-editor {
+  position: fixed;
+  z-index: 45;
   display: flex;
   align-items: center;
   gap: 2px;
   max-width: 440px;
   padding: 4px 4px 4px 10px;
   font: 13px var(--sans);
+  color: var(--ink);
   background: var(--pop);
   border: 1px solid var(--line-2);
   border-radius: 8px;
@@ -2336,90 +2397,95 @@ kbd {
   white-space: nowrap;
   color: var(--accent);
 }
-.link-card button {
+.link-card button,
+.link-editor button {
   flex: none;
   padding: 4px 8px;
   border-radius: 5px;
   color: var(--ink-2);
   font-weight: 500;
 }
-.link-card button:hover {
+.link-card button:hover,
+.link-editor button:hover {
   background: var(--chrome-2);
   color: var(--ink);
 }
+.link-editor input {
+  width: 280px;
+  padding: 5px 4px;
+  font: 13px var(--sans);
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
 
 /* ---- The "/" menu and [[page]] suggestions --------------------------------------------------- */
-.editor .cm-editor .cm-tooltip.cm-tooltip-autocomplete {
-  color: var(--ink);
-  border: 1px solid var(--line-2) !important;
-  border-radius: 9px;
-  background: var(--pop) !important;
-  box-shadow: var(--shadow);
-  padding: 4px;
-  overflow: hidden;
-}
-.cm-tooltip.cm-tooltip-autocomplete > ul {
-  font: 13.5px var(--sans) !important;
+.pm-menu {
+  position: absolute;
+  z-index: 50;
+  min-width: 250px;
   max-height: 340px;
-  min-width: 240px;
-}
-.cm-tooltip.cm-tooltip-autocomplete > ul > li {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  padding: 6px 10px;
-  border-radius: 6px;
+  overflow-y: auto;
+  padding: 4px;
+  font: 13.5px var(--sans);
   color: var(--ink);
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
 }
-.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
-  background: var(--accent-soft);
-  color: var(--ink);
-}
-.cm-tooltip.cm-tooltip-autocomplete .cm-completionDetail {
-  margin-left: auto;
-  font: 11.5px var(--sans);
-  font-style: normal;
-  color: var(--ink-3);
-}
-.cm-tooltip.cm-tooltip-autocomplete .cm-completionMatchedText {
-  text-decoration: none;
-  font-weight: 600;
-}
-.cm-tooltip.cm-tooltip-autocomplete completion-section {
-  display: block;
+.pm-menu-section {
   padding: 8px 10px 4px;
   font: 600 10.5px var(--sans);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-3);
-  border: 0;
+}
+.pm-menu-item {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-align: left;
+  color: var(--ink);
+}
+.pm-menu-item.is-sel {
+  background: var(--accent-soft);
+}
+.pm-menu-detail {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.pm-menu-empty {
+  padding: 8px 10px;
+  color: var(--ink-3);
 }
 
 /* ---- Find and replace ------------------------------------------------------------------------ */
-.editor .cm-panels {
-  background: var(--chrome);
-  color: var(--ink);
-  border-radius: 9px;
+.find-bar {
   position: sticky;
-}
-.editor .cm-panels-top {
-  border: 1px solid var(--line-2);
-  margin-bottom: 14px;
-}
-.editor .cm-search {
+  top: 52px;
+  z-index: 15;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 8px 32px 8px 10px;
+  margin: 0 0 16px;
+  padding: 8px 10px;
   font: 12.5px var(--sans);
+  background: var(--chrome);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
 }
-.editor .cm-search br {
-  flex-basis: 100%;
-  content: '';
-}
-.editor .cm-search .cm-textfield {
-  padding: 4px 8px;
+.find-bar input {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 5px 8px;
   font: 13px var(--sans);
   color: var(--ink);
   background: var(--page);
@@ -2427,40 +2493,47 @@ kbd {
   border-radius: 6px;
   outline: none;
 }
-.editor .cm-search .cm-textfield:focus {
+.find-bar input:focus {
   border-color: var(--accent-line);
 }
-.editor .cm-search .cm-button {
-  padding: 3px 9px;
+.find-bar button {
+  padding: 4px 9px;
   font: 500 12px var(--sans);
   color: var(--ink-2);
   background: var(--page);
-  background-image: none;
   border: 1px solid var(--line-2);
   border-radius: 6px;
 }
-.editor .cm-search .cm-button:hover {
+.find-bar button:hover:not(:disabled) {
   color: var(--ink);
 }
-.editor .cm-search label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--ink-2);
+.find-bar button:disabled {
+  opacity: 0.4;
 }
-.editor .cm-search button[name='close'] {
-  position: absolute;
-  top: 6px;
-  right: 8px;
-  font-size: 18px;
+.find-bar button.is-on {
+  color: var(--accent);
+  border-color: var(--accent-line);
+}
+.find-bar .find-close {
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+}
+.find-count {
+  min-width: 64px;
   color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
 }
-.editor .cm-searchMatch {
+.pm .pm-match {
   background: var(--hl);
   border-radius: 2px;
 }
-.editor .cm-searchMatch-selected {
+.pm .pm-match.is-current {
   background: var(--accent-line);
+}
+.tb-table {
+  display: inline-flex;
+  gap: 1px;
 }
 
 /* ---- Outline --------------------------------------------------------------------------------- */

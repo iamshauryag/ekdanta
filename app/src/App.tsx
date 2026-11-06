@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { EditorView } from '@codemirror/view'
-import { Editor, type EditorFormat } from './editor/Editor.tsx'
-import type { PageRef } from './editor/complete.ts'
+import type { Editor as TiptapEditor } from '@tiptap/core'
+import { Editor, type EditorFormat, type Heading } from './editor/Editor.tsx'
+import type { PageRef } from './editor/menus.ts'
+import { SourceEditor } from './editor/Source.tsx'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
 import { api, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Trashed, type VoiceSummary } from './lib/api.ts'
@@ -15,7 +16,6 @@ import { Icon } from './components/Icon.tsx'
 import { helpMod } from './editor/help.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, matches, setOverrides, titled } from './lib/keys.ts'
-import { tidyMarks } from './editor/marks.ts'
 
 const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
 
@@ -62,7 +62,7 @@ export function App() {
   const [panelTab, setPanelTab] = usePref<PanelTab>('panelTab', 'piece')
   const [focus, setFocus] = useState(false)
   const [livePreview, setLivePreview] = usePref('livePreview', true)
-  const [editorView, setEditorView] = useState<EditorView | null>(null)
+  const [editor, setEditor] = useState<TiptapEditor | null>(null)
   const [format, setFormat] = useState<EditorFormat | null>(null)
   const [outline, setOutline] = useState<Heading[]>([])
   const [settings, setSettings] = useState<SettingsT | null>(null)
@@ -150,7 +150,6 @@ export function App() {
       const { meta, body, raw } = splitFrontMatter(content)
       docRef.current = { path, meta, body, rawMeta: raw }
       setLoaded({ ...docRef.current, key: path })
-      setOutline(headingsOf(body))
       setSaved('saved')
     })
     api.history(path).then((h) => !cancelled && setHistory(h as HistoryItem[]))
@@ -169,14 +168,13 @@ export function App() {
     if (!d) return
     setSaved('saving')
     // The page forgives `**bold **` while it's being typed; the file always gets valid Markdown.
-    await api.write(d.path, joinFrontMatter(d.rawMeta, d.meta, tidyMarks(d.body)))
+    await api.write(d.path, joinFrontMatter(d.rawMeta, d.meta, d.body))
     setSaved('saved')
   }, [])
 
   const onChange = useCallback(
     (text: string) => {
       if (docRef.current) docRef.current.body = text
-      setOutline((o) => sameOutline(o, headingsOf(text)))
       setSaved('unsaved')
       window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(save, 800)
@@ -551,11 +549,10 @@ export function App() {
 
   /** Put the caret on a heading from the Outline. */
   const goToHeading = (h: Heading) => {
-    const view = editorView
-    if (!view) return
-    const pos = Math.min(h.pos, view.state.doc.length)
-    view.dispatch({ selection: { anchor: view.state.doc.lineAt(pos).to }, scrollIntoView: true })
-    view.focus()
+    if (!editor) return
+    // The end of the heading's text.
+    const node = editor.state.doc.nodeAt(h.pos)
+    editor.chain().focus().setTextSelection(h.pos + (node?.nodeSize ?? 2) - 1).scrollIntoView().run()
   }
 
   const editorProps = useMemo(
@@ -618,7 +615,7 @@ export function App() {
         {voiceView && (
           <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />
         )}
-        {loaded && !voiceView && !focus && <Toolbar view={editorView} format={format} livePreview={livePreview} onLivePreview={setLivePreview} />}
+        {loaded && !voiceView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={setLivePreview} />}
         {loaded && !voiceView && (
           <div className="page">
             <div className="doc-meta">
@@ -639,25 +636,30 @@ export function App() {
             </div>
             <TitleField key={'title:' + loaded.key} value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)} autoFocus={isNew} onCommit={setTitle} />
             {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
-            <Editor
-              key={loaded.key}
-              docKey={loaded.key}
-              autoFocus={!isNew}
-              initial={loaded.body}
-              onChange={onChange}
-              {...editorProps}
-              record={record}
-              openDoc={openDoc}
-              onWordCount={setWords}
-              onParagraph={onParagraph}
-              livePreview={livePreview}
-              pages={() => pagesRef.current}
-              openPage={openPage}
-              saveImage={saveImage}
-              assetUrl={assetUrl}
-              onView={setEditorView}
-              onFormat={setFormat}
-            />
+            {livePreview ? (
+              <Editor
+                // Back from the Markdown view, the page is read afresh from what was written there.
+                key={loaded.key}
+                docKey={loaded.key}
+                autoFocus={!isNew}
+                initial={docRef.current?.body ?? loaded.body}
+                onChange={onChange}
+                {...editorProps}
+                record={record}
+                openDoc={openDoc}
+                onWordCount={setWords}
+                onParagraph={onParagraph}
+                pages={() => pagesRef.current}
+                openPage={openPage}
+                saveImage={saveImage}
+                assetUrl={assetUrl}
+                onEditor={setEditor}
+                onFormat={setFormat}
+                onOutline={setOutline}
+              />
+            ) : (
+              <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} />
+            )}
           </div>
         )}
         {focus && <div className="focus-hint">esc or ⌘. to exit focus</div>}
@@ -726,27 +728,6 @@ export function App() {
   )
 }
 
-export interface Heading {
-  level: number
-  text: string
-  pos: number
-}
-
-/** The headings in a document, for the Outline (fenced code skipped). */
-function headingsOf(body: string): Heading[] {
-  const out: Heading[] = []
-  let pos = 0
-  let fenced = false
-  for (const line of body.split('\n')) {
-    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced
-    const m = !fenced && line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/)
-    if (m) out.push({ level: m[1].length, text: m[2].replace(/[*_`~=]|<\/?u>/g, ''), pos })
-    pos += line.length + 1
-  }
-  return out
-}
-const sameOutline = (a: Heading[], b: Heading[]) => (a.length === b.length && a.every((h, i) => h.text === b[i].text && h.level === b[i].level && h.pos === b[i].pos) ? a : b)
-
 const platformLabel = (p: string) => (p === 'linkedin' ? 'LinkedIn' : p[0].toUpperCase() + p.slice(1))
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */
@@ -787,8 +768,9 @@ function TitleField({ value, autoFocus, onCommit }: { value: string; autoFocus: 
   )
 }
 
+/** From the title down into the text (the page, or the Markdown view). */
 function focusText() {
-  document.querySelector<HTMLElement>('.cm-content')?.focus()
+  document.querySelector<HTMLElement>('.editor .pm, .editor .cm-content')?.focus()
 }
 
 /** On a new document: which platform it's for. The folder's usual one is already chosen. */

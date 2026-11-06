@@ -1,21 +1,25 @@
 // Turns a help keystroke into a request, and the response into a suggestion on the page.
-import type { EditorView } from '@codemirror/view'
+import type { Node as PMNode } from '@tiptap/pm/model'
+import { TextSelection, type Transaction } from '@tiptap/pm/state'
+import type { EditorView } from '@tiptap/pm/view'
 import {
+  blockEnd,
   changedRatio,
   computeHunks,
-  helpField,
-  helpOwn,
+  dotOf,
+  helpKey,
+  helpMod,
+  helpOf,
   paragraphAt,
-  recallDotField,
-  resolveHunks,
   sentenceAround,
   setHelp,
-  setRecallDot,
   setWidgetHooks,
+  textMap,
+  textOf,
   type Help,
+  type HelpMeta,
   type Level,
   type RecallResult,
-  helpMod,
 } from './help.ts'
 
 export interface HistoryItem {
@@ -53,6 +57,40 @@ const EMPTY_MESSAGES: Record<Level, string> = {
   5: 'No change suggested',
 }
 
+/**
+ * Insert plain text at a position, inheriting the formatting there: a blank line starts a new
+ * paragraph and a single newline is a line break, as the model's own text would read.
+ */
+function insertPlain(tr: Transaction, from: number, to: number, text: string) {
+  const schema = tr.doc.type.schema
+  // Replaced text keeps its own formatting. New text between two runs gets only what both share,
+  // so a word added after bold text isn't bold unless the text after it is too.
+  const $from = tr.doc.resolve(from)
+  const marks =
+    to > from
+      ? (tr.doc.resolve(from + 1).marks() ?? [])
+      : $from.marks().filter((m) => (tr.doc.resolve(Math.min(to, tr.doc.content.size)).nodeAfter?.marks ?? []).some((n) => n.eq(m)))
+  if (to > from) tr.delete(from, to)
+  let pos = from
+  text.split(/\n{2,}/).forEach((para, i) => {
+    if (i > 0) {
+      tr.split(pos)
+      pos += 2
+    }
+    para.split('\n').forEach((line, j) => {
+      if (j > 0) {
+        tr.insert(pos, schema.nodes.hardBreak.create())
+        pos += 1
+      }
+      if (line) {
+        tr.insert(pos, schema.text(line, marks))
+        pos += line.length
+      }
+    })
+  })
+  return pos
+}
+
 export class HelpController {
   private seq = 0
   private ceilingPrompt: { level: Level; at: number } | null = null
@@ -61,7 +99,10 @@ export class HelpController {
   private dotTimer: number | undefined
   private dotPara = -1
 
-  constructor(private view: EditorView, private opts: ControllerOptions) {
+  constructor(
+    private view: EditorView,
+    private opts: ControllerOptions,
+  ) {
     setWidgetHooks({
       runInstruction: (t) => this.runInstruction(t),
       dismiss: () => this.dismiss(),
@@ -73,21 +114,27 @@ export class HelpController {
       acceptAll: () => this.finishDiff('accepted'),
       rejectAll: () => this.finishDiff('rejected'),
       stepHunk: (d) => this.stepHunk(d),
+      focusEditor: () => this.view.focus(),
+      current: () => this.help,
       recallAtDot: () => {
-        const pos = this.view.state.field(recallDotField)
-        if (pos !== null) this.view.dispatch({ selection: { anchor: pos } })
+        const pos = dotOf(this.view.state)
+        if (pos !== null) this.view.dispatch(this.view.state.tr.setSelection(TextSelection.create(this.view.state.doc, pos)))
         this.request(1)
       },
     })
   }
 
   get help(): Help | null {
-    return this.view.state.field(helpField)
+    return helpOf(this.view.state)
+  }
+
+  private get doc(): PMNode {
+    return this.view.state.doc
   }
 
   private set(help: Help | null) {
     window.clearTimeout(this.slowTimer)
-    this.view.dispatch({ effects: setHelp.of(help) })
+    this.view.dispatch(setHelp(this.view.state.tr, help))
   }
 
   private record(item: Omit<HistoryItem, 'at'>) {
@@ -109,7 +156,7 @@ export class HelpController {
 
   request(level: Level) {
     const { state } = this.view
-    const sel = state.selection.main
+    const sel = state.selection
     const current = this.help
 
     // The ceiling never silently downgrades or exceeds: it asks.
@@ -125,7 +172,7 @@ export class HelpController {
           this.opts.ceiling() === 0
             ? 'Help is off · change the ceiling in the Piece panel'
             : `Ceiling is ${this.opts.ceiling()} · press ${helpMod}${level} again to allow once`
-        this.set({ kind: 'notice', from: para.from, to: para.to, at: para.to, text })
+        this.set({ kind: 'notice', from: para.from, to: para.to, at: para.after, text })
         return
       }
     }
@@ -136,50 +183,46 @@ export class HelpController {
         this.set({ ...current, page: current.page + 1, sel: (current.page + 1) * 3 })
         return
       }
-      if (current.kind === 'word') return current.mode === 'next'
+      if (current.kind === 'word')
+        return current.mode === 'next'
           ? this.fetchNextWord(current.from, [...current.seen, ...current.options])
           : this.fetchWord(current.from, current.to, current.at, [...current.seen, ...current.options])
       if (current.kind === 'ghost') return this.fetchGhost(current.at, [...current.seen, current.text])
       if (current.kind === 'nudge') return this.fetchNudge(current.from, current.to, current.history)
     }
 
-    if (level === 1) {
-      const r = sel.empty ? paragraphAt(state, sel.head) : sel
-      return this.fetchRecall(r.from, r.to)
-    }
-    if (level === 2) {
-      const r = sel.empty ? paragraphAt(state, sel.head) : sel
-      return this.fetchNudge(r.from, r.to, [])
-    }
+    const para = paragraphAt(state, sel.head)
+    if (level === 1) return sel.empty ? this.fetchRecall(para.from, para.to) : this.fetchRecall(sel.from, sel.to)
+    if (level === 2) return sel.empty ? this.fetchNudge(para.from, para.to, []) : this.fetchNudge(sel.from, sel.to, [])
     if (level === 3) {
       // Nothing selected: what could the next word be? A selection: what could replace it?
       if (sel.empty) return this.fetchNextWord(sel.head, [])
-      const { from, to } = sel
-      const text = state.sliceDoc(from, to)
+      const text = textOf(this.doc, sel.from, sel.to)
       if (text.split(/\s+/).filter(Boolean).length > 4 || text.includes('\n')) {
-        return this.notice(3, to, `${helpMod}3 works on a word or short phrase`)
+        return this.notice(3, sel.to, `${helpMod}3 works on a word or short phrase`)
       }
-      return this.fetchWord(from, to, state.doc.lineAt(to).to, [])
+      return this.fetchWord(sel.from, sel.to, blockEnd(state, sel.to), [])
     }
     if (level === 4) {
       if (sel.empty) return this.fetchGhost(sel.head, [])
-      const text = state.sliceDoc(sel.from, sel.to)
+      const text = textOf(this.doc, sel.from, sel.to)
       const sentences = text.trim().split(/(?<=[.!?])\s+/).filter(Boolean)
       if (sentences.length > 1) return this.openBar(5, sel.from, sel.to)
       // A word or phrase selected: rewrite the whole sentence around it.
-      const para = paragraphAt(state, sel.from)
-      const paraText = state.sliceDoc(para.from, para.to)
-      const sentence = sentenceAround(paraText, sel.from - para.from)
-      const start = para.from + paraText.indexOf(sentence)
-      return this.fetchRewrite(4, start, start + sentence.length, '')
+      const p = paragraphAt(state, sel.from)
+      const map = textMap(this.doc, p.from, p.to)
+      let offset = 0
+      while (offset < map.text.length && map.pos(offset) < sel.from) offset++
+      const sentence = sentenceAround(map.text, offset)
+      const start = map.text.indexOf(sentence)
+      return this.fetchRewrite(4, map.pos(start), map.pos(start + sentence.length), '')
     }
-    const r = sel.empty ? paragraphAt(state, sel.head) : sel
-    return this.openBar(5, r.from, r.to)
+    return sel.empty ? this.openBar(5, para.from, para.to) : this.openBar(5, sel.from, sel.to)
   }
 
   /** Is there room to the right of the text column for a margin note? */
   private marginRoom() {
-    const content = this.view.contentDOM.getBoundingClientRect()
+    const content = this.view.dom.getBoundingClientRect()
     const area = this.view.dom.closest('.page-area')?.getBoundingClientRect()
     return area ? area.right - content.right >= 270 : false
   }
@@ -189,13 +232,12 @@ export class HelpController {
   }
 
   private notice(level: Level, at: number, text: string, tone?: 'error') {
-    const line = this.view.state.doc.lineAt(at)
-    this.set({ kind: 'notice', level, from: at, to: at, at: line.to, text, tone })
+    this.set({ kind: 'notice', level, from: at, to: at, at: blockEnd(this.view.state, at), text, tone })
   }
 
   private context(from: number, to: number) {
-    const doc = this.view.state.doc
-    return { before: doc.sliceString(Math.max(0, from - 3000), from), after: doc.sliceString(to, Math.min(doc.length, to + 1500)) }
+    const size = this.doc.content.size
+    return { before: textOf(this.doc, 0, from).slice(-3000), after: textOf(this.doc, to, size).slice(0, 1500) }
   }
 
   private async call(level: Level, from: number, to: number, at: number, body: Record<string, unknown>): Promise<Resp | null> {
@@ -203,7 +245,7 @@ export class HelpController {
     this.set({ kind: 'loading', level, from, to, at })
     this.slowTimer = window.setTimeout(() => {
       const h = this.help
-      if (id === this.seq && h?.kind === 'loading') this.view.dispatch({ effects: setHelp.of({ ...h, slow: true }) })
+      if (id === this.seq && h?.kind === 'loading') this.view.dispatch(setHelp(this.view.state.tr, { ...h, slow: true }))
     }, 8000)
     const allowed = this.allowOnce === level
     try {
@@ -233,9 +275,9 @@ export class HelpController {
   }
 
   private async fetchRecall(from: number, to: number) {
-    const scope = this.view.state.sliceDoc(from, to)
+    const scope = textOf(this.doc, from, to)
     if (!scope.trim()) return this.notice(1, from, 'Put the cursor in a paragraph to recall related material')
-    const at = this.view.state.doc.lineAt(to).to
+    const at = blockEnd(this.view.state, to)
     const res = await this.call(1, from, to, at, { scope })
     if (res?.kind !== 'recall') return
     if (!res.results.length) {
@@ -247,22 +289,24 @@ export class HelpController {
   }
 
   private async fetchNudge(from: number, to: number, history: string[]) {
-    const scope = this.view.state.sliceDoc(from, to)
+    const scope = textOf(this.doc, from, to)
     if (!scope.trim()) return this.notice(2, from, 'Put the cursor in a paragraph to get a nudge')
-    const res = await this.call(2, from, to, this.view.state.doc.lineAt(to).to, { scope, ...this.context(from, to), avoid: history })
+    const at = blockEnd(this.view.state, to)
+    const res = await this.call(2, from, to, at, { scope, ...this.context(from, to), avoid: history })
     if (res?.kind !== 'nudge') return
-    const at = this.view.state.doc.lineAt(to).to
-    this.set({ kind: 'nudge', level: 2, from, to, at, text: res.text, history: [...history, res.text], inMargin: this.marginRoom() })
+    this.set({ kind: 'nudge', level: 2, from, to, at: blockEnd(this.view.state, to), text: res.text, history: [...history, res.text], inMargin: this.marginRoom() })
     this.record({ level: 2, from, outcome: 'shown', detail: res.text })
   }
 
   private async fetchWord(from: number, to: number, at: number, seen: string[]) {
     const { state } = this.view
     const para = paragraphAt(state, from)
-    const paraText = state.sliceDoc(para.from, para.to)
+    const map = textMap(this.doc, para.from, para.to)
+    let offset = 0
+    while (offset < map.text.length && map.pos(offset) < from) offset++
     const res = await this.call(3, from, to, at, {
-      scope: state.sliceDoc(from, to),
-      sentence: sentenceAround(paraText, from - para.from),
+      scope: textOf(this.doc, from, to),
+      sentence: sentenceAround(map.text, offset),
       avoid: seen,
     })
     if (res?.kind !== 'word') return
@@ -270,23 +314,23 @@ export class HelpController {
   }
 
   private async fetchNextWord(pos: number, seen: string[]) {
-    const doc = this.view.state.doc
-    const scope = doc.sliceString(Math.max(0, pos - 1500), pos)
+    const size = this.doc.content.size
+    const scope = textOf(this.doc, 0, pos).slice(-1500)
     if (!scope.trim()) return this.notice(3, pos, 'Write a few words first, or select a word to replace')
-    const at = doc.lineAt(pos).to
-    const res = await this.call(3, pos, pos, at, { scope, after: doc.sliceString(pos, Math.min(doc.length, pos + 300)), next: true, avoid: seen })
+    const at = blockEnd(this.view.state, pos)
+    const res = await this.call(3, pos, pos, at, { scope, after: textOf(this.doc, pos, size).slice(0, 300), next: true, avoid: seen })
     if (res?.kind !== 'word') return
     this.set({ kind: 'word', level: 3, mode: 'next', from: pos, to: pos, at, options: res.alternatives, sel: 0, seen })
   }
 
   private async fetchGhost(pos: number, seen: string[]) {
-    const doc = this.view.state.doc
-    const scope = doc.sliceString(Math.max(0, pos - 3000), pos)
+    const size = this.doc.content.size
+    const scope = textOf(this.doc, 0, pos).slice(-3000)
     if (!scope.trim()) return this.notice(4, pos, `Write a little first, then ${helpMod}4 can continue it`)
-    const line = doc.lineAt(pos)
-    const res = await this.call(4, pos, pos, line.to, { scope, after: doc.sliceString(pos, Math.min(doc.length, pos + 800)), avoid: seen })
+    const end = blockEnd(this.view.state, pos)
+    const res = await this.call(4, pos, pos, end, { scope, after: textOf(this.doc, pos, size).slice(0, 800), avoid: seen })
     if (res?.kind !== 'ghost') return
-    this.set({ kind: 'ghost', level: 4, from: pos, to: line.to, at: pos, text: res.text, seen })
+    this.set({ kind: 'ghost', level: 4, from: pos, to: blockEnd(this.view.state, pos), at: pos, text: res.text, seen })
   }
 
   private openBar(level: 4 | 5, from: number, to: number) {
@@ -298,15 +342,12 @@ export class HelpController {
     const h = this.help
     if (!h || (h.kind !== 'bar' && h.kind !== 'diff')) return
     // Refining always works from the original text, never from the last suggestion.
-    const from = h.from
-    const to = h.kind === 'diff' ? h.from + h.original.length : h.to
-    this.fetchRewrite(h.level, from, to, instruction)
+    this.fetchRewrite(h.level, h.from, h.to, instruction)
   }
 
   private async fetchRewrite(level: 4 | 5, from: number, to: number, instruction: string) {
-    const { state } = this.view
-    const original = state.sliceDoc(from, to)
-    const at = state.doc.lineAt(to).to
+    const original = textOf(this.doc, from, to)
+    const at = blockEnd(this.view.state, to)
     const id = this.seq + 1
     const keepBar = level === 5
     if (keepBar) this.set({ kind: 'bar', level, from, to, busy: true })
@@ -315,21 +356,8 @@ export class HelpController {
       : await this.call(level, from, to, at, { scope: original, instruction, rewrite: true, ...this.context(from, to) })
     if (res?.kind !== 'rewrite') return
     const hunks = computeHunks(original, res.text)
-    const firstChange = hunks.findIndex((x) => x.kind === 'chg')
-    if (firstChange < 0) return this.set({ kind: 'notice', level, from, to, at, text: EMPTY_MESSAGES[level] })
-    this.set({
-      kind: 'diff',
-      level,
-      from,
-      to,
-      at,
-      original,
-      hunks,
-      focus: -1,
-      instruction,
-      bar: keepBar,
-      sideBySide: changedRatio(original, hunks) > 0.6,
-    })
+    if (!hunks.some((x) => x.kind === 'chg')) return this.set({ kind: 'notice', level, from, to, at, text: EMPTY_MESSAGES[level] })
+    this.set({ kind: 'diff', level, from, to, at, original, hunks, focus: -1, instruction, bar: keepBar, sideBySide: changedRatio(original, hunks) > 0.6 })
     // Hand the keyboard back to the page so Tab, ↵ and ⌘↵ act on the changes.
     this.view.focus()
   }
@@ -337,6 +365,7 @@ export class HelpController {
   /** Like call(), but leaves the instruction bar on screen with its progress line. */
   private async callKeepingBar(level: Level, from: number, to: number, body: Record<string, unknown>, id: number): Promise<Resp | null> {
     this.seq = id
+    const at = blockEnd(this.view.state, to)
     try {
       const r = await fetch('/api/help', {
         method: 'POST',
@@ -348,53 +377,61 @@ export class HelpController {
       if (this.allowOnce === level) this.allowOnce = null
       if (data.error || data.kind === 'error') throw new Error(data.error ?? (data as { message: string }).message)
       if (data.kind === 'empty') {
-        this.set({ kind: 'notice', level, from, to, at: this.view.state.doc.lineAt(to).to, text: data.message })
+        this.set({ kind: 'notice', level, from, to, at, text: data.message })
         return null
       }
       return data
     } catch (e) {
       if (id !== this.seq) return null
-      this.set({ kind: 'notice', level, from, to, at: this.view.state.doc.lineAt(to).to, text: friendlyError((e as Error).message), tone: 'error' })
+      this.set({ kind: 'notice', level, from, to, at, text: friendlyError((e as Error).message), tone: 'error' })
       return null
     }
   }
 
   // ---- Acting on a suggestion ----------------------------------------------------------------
 
+  /** A transaction made by help itself, which also closes the suggestion. */
+  private own(tr: Transaction) {
+    return tr.setMeta(helpKey, { help: null } satisfies HelpMeta)
+  }
+
   private pickWord(i: number) {
     const h = this.help
     if (h?.kind !== 'word') return
     let word = h.options[i]
-    const original = this.view.state.sliceDoc(h.from, h.to)
+    const original = textOf(this.doc, h.from, h.to)
     if (h.mode === 'next') {
       // Join onto the text with exactly one space, unless the option is punctuation.
-      const prev = this.view.state.sliceDoc(Math.max(0, h.from - 1), h.from)
+      const prev = textOf(this.doc, Math.max(0, h.from - 1), h.from)
       if (prev && !/\s/.test(prev) && !/^[,.;:!?)'’"]/.test(word)) word = ' ' + word
-      const next = this.view.state.sliceDoc(h.from, h.from + 1)
+      const next = textOf(this.doc, h.from, Math.min(this.doc.content.size, h.from + 1))
       if (next && /\w/.test(next)) word += ' '
     }
-    this.view.dispatch({
-      changes: { from: h.from, to: h.to, insert: word },
-      selection: { anchor: h.from + word.length },
-      annotations: helpOwn.of(true),
-      effects: setHelp.of(null),
-    })
+    const tr = this.own(this.view.state.tr.insertText(word, h.from, h.to))
+    tr.setSelection(TextSelection.create(tr.doc, h.from + word.length))
+    this.view.dispatch(tr)
     this.record({ level: 3, from: h.from, outcome: 'accepted', detail: h.mode === 'next' ? `next word: ${word.trim()}` : `${original} → ${word}` })
-    this.flash(h.from, h.from + word.length)
+    this.flash(h.from)
   }
 
   private insertRecall(i: number) {
     const h = this.help
     if (h?.kind !== 'recall') return
     const r = h.results[i]
-    const quote = `\n\n> ${r.text.replace(/\s+/g, ' ').trim()}\n> — [[${r.doc.replace(/\.md$/, '')}|${r.title}]]\n\n`
-    const pos = h.to
-    this.view.dispatch({
-      changes: { from: pos, insert: quote },
-      selection: { anchor: pos + quote.length - 1 },
-      annotations: helpOwn.of(true),
-      effects: setHelp.of(null),
-    })
+    const schema = this.doc.type.schema
+    // The quote, then its source as a link to the page it came from.
+    const quote = schema.nodes.blockquote.create(
+      null,
+      schema.nodes.paragraph.create(null, [
+        schema.text(r.text.replace(/\s+/g, ' ').trim()),
+        schema.nodes.hardBreak.create(),
+        schema.text('— '),
+        schema.nodes.pageLink.create({ target: r.doc.replace(/\.md$/, ''), label: r.title }),
+      ]),
+    )
+    const tr = this.own(this.view.state.tr.insert(h.at, quote))
+    tr.setSelection(TextSelection.near(tr.doc.resolve(h.at + quote.nodeSize)))
+    this.view.dispatch(tr.scrollIntoView())
     this.record({ level: 1, from: h.from, outcome: 'inserted', sources: [{ doc: r.doc, title: r.title, folder: r.folder }] })
   }
 
@@ -411,12 +448,11 @@ export class HelpController {
     let text = h.text
     if (oneWord) text = text.match(/^\s*\S+/)?.[0] ?? text
     const rest = h.text.slice(text.length)
-    this.view.dispatch({
-      changes: { from: h.at, insert: text },
-      selection: { anchor: h.at + text.length },
-      annotations: helpOwn.of(true),
-      effects: setHelp.of(rest.trim() ? { ...h, from: h.at + text.length, at: h.at + text.length, to: h.to + text.length, text: rest } : null),
-    })
+    const tr = this.view.state.tr
+    const end = insertPlain(tr, h.at, h.at, text)
+    tr.setSelection(TextSelection.create(tr.doc, end))
+    const next: Help | null = rest.trim() ? { ...h, from: end, at: end, to: tr.mapping.map(h.to), text: rest } : null
+    this.view.dispatch(setHelp(tr, next))
     if (!rest.trim()) this.record({ level: 4, from: h.from, outcome: 'accepted', detail: h.text.trim() })
     return true
   }
@@ -424,15 +460,13 @@ export class HelpController {
   moveSelection(delta: number) {
     const h = this.help
     if (h?.kind === 'word') {
-      const sel = (h.sel + delta + h.options.length) % h.options.length
-      this.set({ ...h, sel })
+      this.set({ ...h, sel: (h.sel + delta + h.options.length) % h.options.length })
       return true
     }
     if (h?.kind === 'recall') {
       const pageStart = h.page * 3
       const pageLen = Math.min(3, h.results.length - pageStart)
-      const sel = pageStart + ((h.sel - pageStart + delta + pageLen) % pageLen)
-      this.set({ ...h, sel })
+      this.set({ ...h, sel: pageStart + ((h.sel - pageStart + delta + pageLen) % pageLen) })
       return true
     }
     return false
@@ -485,27 +519,35 @@ export class HelpController {
     this.commit(h, pending)
   }
 
+  /** Apply the accepted changes, word by word, keeping the formatting of everything around them. */
   private commit(h: Extract<Help, { kind: 'diff' }>, pending: 'accepted' | 'rejected') {
-    const text = resolveHunks(h.hunks, pending)
-    const changes = h.hunks.filter((x) => x.kind === 'chg') as Extract<(typeof h.hunks)[number], { kind: 'chg' }>[]
-    const accepted = changes.filter((x) => (x.state === 'pending' ? pending : x.state) === 'accepted').length
-    const outcome = accepted === 0 ? 'rejected' : accepted === changes.length ? 'accepted' : 'partly accepted'
-    this.view.dispatch({
-      changes: text === h.original ? undefined : { from: h.from, to: h.from + h.original.length, insert: text },
-      annotations: helpOwn.of(true),
-      effects: setHelp.of(null),
-    })
-    this.record({
-      level: h.level,
-      from: h.from,
-      outcome,
-      instruction: h.instruction || undefined,
-      detail: `${accepted} of ${changes.length} change${changes.length === 1 ? '' : 's'}`,
-    })
+    const map = textMap(this.doc, h.from, h.to)
+    const edits: { from: number; to: number; text: string }[] = []
+    let offset = 0
+    let accepted = 0
+    let total = 0
+    for (const x of h.hunks) {
+      if (x.kind === 'eq') {
+        offset += x.text.length
+        continue
+      }
+      total++
+      if ((x.state === 'pending' ? pending : x.state) === 'accepted') {
+        accepted++
+        edits.push({ from: map.pos(offset), to: map.pos(offset + x.del.length), text: x.ins })
+      }
+      offset += x.del.length
+    }
+    const tr = this.own(this.view.state.tr)
+    // From the end, so earlier positions stay valid.
+    for (const e of edits.reverse()) insertPlain(tr, e.from, e.to, e.text)
+    this.view.dispatch(tr)
+    const outcome = accepted === 0 ? 'rejected' : accepted === total ? 'accepted' : 'partly accepted'
+    this.record({ level: h.level, from: h.from, outcome, instruction: h.instruction || undefined, detail: `${accepted} of ${total} change${total === 1 ? '' : 's'}` })
     this.view.focus()
   }
 
-  private flash(from: number, to: number) {
+  private flash(from: number) {
     // A brief highlight on a replaced word, done with a temporary DOM class.
     requestAnimationFrame(() => {
       const start = this.view.domAtPos(from)
@@ -513,7 +555,6 @@ export class HelpController {
       node?.classList.add('hl-flash')
       window.setTimeout(() => node?.classList.remove('hl-flash'), 700)
     })
-    void to
   }
 
   // ---- The Recall dot ------------------------------------------------------------------------
@@ -521,14 +562,14 @@ export class HelpController {
   /** Call on every cursor move; probes the current paragraph once the writer pauses. */
   onCursor(enabled: boolean) {
     const { state } = this.view
-    const para = paragraphAt(state, state.selection.main.head)
+    const para = paragraphAt(state, state.selection.head)
     if (para.from === this.dotPara) return
     this.dotPara = para.from
     window.clearTimeout(this.dotTimer)
-    if (state.field(recallDotField) !== null) this.view.dispatch({ effects: setRecallDot.of(null) })
+    if (dotOf(state) !== null) this.view.dispatch(state.tr.setMeta(helpKey, { dot: null } satisfies HelpMeta))
     if (!enabled) return
     this.dotTimer = window.setTimeout(async () => {
-      const text = this.view.state.sliceDoc(para.from, para.to)
+      const text = textOf(this.doc, para.from, para.to)
       try {
         const r = await fetch('/api/recall-probe', {
           method: 'POST',
@@ -536,7 +577,7 @@ export class HelpController {
           body: JSON.stringify({ text, doc: this.opts.doc() }),
         })
         const { strong } = (await r.json()) as { strong: boolean }
-        if (strong && this.dotPara === para.from) this.view.dispatch({ effects: setRecallDot.of(para.from) })
+        if (strong && this.dotPara === para.from) this.view.dispatch(this.view.state.tr.setMeta(helpKey, { dot: para.from } satisfies HelpMeta))
       } catch {
         /* the dot is optional */
       }

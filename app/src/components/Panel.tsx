@@ -1,7 +1,7 @@
 import type { HistoryItem } from '../editor/controller.ts'
 import { useEffect, useState } from 'react'
 import type { Status, Thinking, VoiceSummary } from '../lib/api.ts'
-import type { Heading } from '../App.tsx'
+import type { Heading } from '../editor/Editor.tsx'
 import { Icon } from './Icon.tsx'
 import { binding, formatKey, titled } from '../lib/keys.ts'
 import { helpMod } from '../editor/help.ts'
