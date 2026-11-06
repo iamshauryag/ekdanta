@@ -2,7 +2,7 @@
 // shares them. Environment variables give the defaults. API keys are never stored here.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { META_DIR } from './vault.ts'
+import { META_DIR } from './paths.ts'
 import { cleanKinds, DEFAULT_KINDS, type Kind } from '../src/lib/kinds.ts'
 
 export type ProviderChoice = 'auto' | 'claude-cli' | 'anthropic-api' | 'ollama'
@@ -25,6 +25,8 @@ export interface Settings {
   keys: Record<string, string>
   /** Kinds of writing: the built-in ones, as the writer edited them, and any they added. */
   kinds: Kind[]
+  /** Folders (vault-relative) left out of Recall, voice profiles and filing, besides the special ones. */
+  excludedFolders: string[]
 }
 
 const env = process.env
@@ -41,6 +43,7 @@ export const DEFAULTS: Settings = {
   theme: 'system',
   keys: {},
   kinds: DEFAULT_KINDS,
+  excludedFolders: [],
 }
 
 const FILE = path.join(META_DIR, 'settings.json')
@@ -50,11 +53,28 @@ export async function loadSettings(): Promise<Settings> {
   if (current) return current
   try {
     const saved = JSON.parse(await fs.readFile(FILE, 'utf8')) as Partial<Settings>
-    current = { ...DEFAULTS, ...saved, kinds: cleanKinds(saved.kinds) ?? DEFAULTS.kinds }
+    current = { ...DEFAULTS, ...saved, kinds: cleanKinds(saved.kinds) ?? DEFAULTS.kinds, excludedFolders: cleanFolders(saved.excludedFolders) }
   } catch {
     current = { ...DEFAULTS }
   }
   return current
+}
+
+/** Vault-relative folder paths, tidied: forward slashes, no leading or trailing slash, no dot-folders or `..`, no repeats. */
+function cleanFolders(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const v of value) {
+    if (typeof v !== 'string') continue
+    const f = v
+      .replace(/\\/g, '/')
+      .replace(/\/{2,}/g, '/')
+      .replace(/^\/+|\/+$/g, '')
+      .trim()
+    if (!f || f.length > 200 || f.split('/').some((part) => !part.trim() || part.startsWith('.'))) continue
+    if (!out.some((o) => o.toLowerCase() === f.toLowerCase())) out.push(f)
+  }
+  return out
 }
 
 /** The settings already loaded (or the defaults), for code that can't wait. */
@@ -70,13 +90,14 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   }
   next.ceiling = Math.max(0, Math.min(5, Math.round(next.ceiling)))
   next.kinds = cleanKinds(next.kinds) ?? prev.kinds
+  next.excludedFolders = cleanFolders(next.excludedFolders)
   next.keys = Object.fromEntries(Object.entries(next.keys ?? {}).filter(([k, v]) => /^[\w.-]+$/.test(k) && typeof v === 'string' && v.length < 40))
   current = next
   await fs.mkdir(META_DIR, { recursive: true })
   // Only what differs from the defaults is written, so the file stays short and readable.
   const diff = Object.fromEntries(
     Object.entries(next).filter(([k, v]) =>
-      k === 'keys' ? Object.keys(v as object).length > 0 : k === 'kinds' ? JSON.stringify(v) !== JSON.stringify(DEFAULTS.kinds) : DEFAULTS[k as keyof Settings] !== v,
+      k === 'keys' || k === 'excludedFolders' ? Object.keys(v as object).length > 0 : k === 'kinds' ? JSON.stringify(v) !== JSON.stringify(DEFAULTS.kinds) : DEFAULTS[k as keyof Settings] !== v,
     ),
   )
   await fs.writeFile(FILE, JSON.stringify(diff, null, 2) + '\n', 'utf8')

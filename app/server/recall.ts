@@ -4,6 +4,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { embedder } from './embed.ts'
 import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from './vault.ts'
+import { loadSettings } from './settings.ts'
+import { isPromptParagraph, isSpecialPath } from '../src/lib/special.ts'
 
 interface Chunk {
   doc: string
@@ -16,7 +18,8 @@ interface Chunk {
 }
 
 // Bump when chunks gain a field, so an older index is rebuilt rather than half-filled.
-const INDEX_VERSION = 2
+// 3: templates' prompts and special folders are left out. Only a change to chunking should bump it again.
+const INDEX_VERSION = 3
 
 interface IndexFile {
   version?: number
@@ -29,12 +32,12 @@ const INDEX_PATH = path.join(META_DIR, 'index.json')
 let index: IndexFile | null = null
 let building: Promise<IndexFile> | null = null
 
-/** Paragraphs worth recalling: prose, not headings, lists of links or one-liners. */
+/** Paragraphs worth recalling: prose, not headings, lists of links, one-liners or a template's prompts. */
 export function paragraphs(body: string): string[] {
   return body
     .split(/\n\s*\n/)
     .map((p) => p.trim())
-    .filter((p) => p.length >= 60 && !p.startsWith('#') && !p.startsWith('```'))
+    .filter((p) => p.length >= 60 && !p.startsWith('#') && !p.startsWith('```') && !isPromptParagraph(p))
 }
 
 async function load(): Promise<IndexFile> {
@@ -63,9 +66,7 @@ async function indexFile(ix: IndexFile, f: FileEntry) {
   for (let i = 0; i < paras.length; i += 32) {
     const batch = paras.slice(i, i + 32)
     const vecs = await embedder().embed(batch, 'document')
-    batch.forEach((text, j) =>
-      ix.chunks.push({ doc: f.path, title: f.title, folder: f.folder, platform: f.platform, exemplar: f.exemplar, text, vec: vecs[j] }),
-    )
+    batch.forEach((text, j) => ix.chunks.push({ doc: f.path, title: f.title, folder: f.folder, platform: f.platform, exemplar: f.exemplar, text, vec: vecs[j] }))
   }
   ix.files[f.path] = f.mtime
 }
@@ -75,7 +76,10 @@ export function refresh(): Promise<IndexFile> {
   if (building) return building
   building = (async () => {
     const ix = await load()
-    const files = await listFiles()
+    // Templates, journals, sources and the writer's excluded folders aren't recalled; any already
+    // indexed (from before they were excluded) are pruned below like deleted files.
+    const { excludedFolders } = await loadSettings()
+    const files = (await listFiles()).filter((f) => !isSpecialPath(f.path, excludedFolders))
     const live = new Set(files.map((f) => f.path))
     let changed = false
     for (const p of Object.keys(ix.files)) {

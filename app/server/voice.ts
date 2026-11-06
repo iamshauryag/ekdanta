@@ -8,6 +8,7 @@ import { generate, parseJson, status } from './ai.ts'
 import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from './vault.ts'
 import { loadSettings } from './settings.ts'
 import { kindName } from '../src/lib/kinds.ts'
+import { isSpecialPath } from '../src/lib/special.ts'
 
 const DIR = path.join(META_DIR, 'voice')
 /** Below this many exemplars, recent unstarred pieces top up the sources. */
@@ -39,9 +40,9 @@ const file = (platform: string) => {
   return path.join(DIR, `${platform}.md`)
 }
 
-/** Exemplars first; if there are too few, the most recent unstarred pieces fill in. */
-function sourcesFor(files: FileEntry[], platform: string) {
-  const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled')
+/** Exemplars first; if there are too few, the most recent unstarred pieces fill in. Templates, journals and excluded folders never count. */
+function sourcesFor(files: FileEntry[], platform: string, excluded: string[]) {
+  const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled' && !isSpecialPath(f.path, excluded))
   const starred = mine.filter((f) => f.exemplar)
   const others = mine.filter((f) => !f.exemplar).sort((a, b) => b.mtime - a.mtime)
   return [...starred, ...others.slice(0, Math.max(0, ENOUGH - starred.length))]
@@ -63,12 +64,16 @@ export async function writeProfile(platform: string, content: string) {
 export async function summaries(): Promise<VoiceSummary[]> {
   const files = await listFiles()
   const out: VoiceSummary[] = []
-  for (const { id: platform } of (await loadSettings()).kinds) {
-    const sources = sourcesFor(files, platform)
+  const { kinds, excludedFolders } = await loadSettings()
+  for (const { id: platform } of kinds) {
+    const sources = sourcesFor(files, platform, excludedFolders)
     if (!sources.length) continue
     const profile = await readProfile(platform)
     const meta = profile ? splitFrontMatter(profile).meta : {}
-    const builtFrom = (meta.sources ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+    const builtFrom = (meta.sources ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
     const builtAt = meta.built ? Date.parse(meta.built) : 0
     const same = builtFrom.length === sources.length && sources.every((s) => builtFrom.includes(s.path))
     out.push({
@@ -92,8 +97,9 @@ interface Trait {
 /** Propose a new profile. Nothing is written: the writer reviews it as a diff first. */
 export async function buildProfile(platform: string): Promise<string> {
   const files = await listFiles()
-  const sources = sourcesFor(files, platform)
-  const name = kindName((await loadSettings()).kinds, platform)
+  const { kinds, excludedFolders } = await loadSettings()
+  const sources = sourcesFor(files, platform, excludedFolders)
+  const name = kindName(kinds, platform)
   if (!sources.length) throw new Error(`No ${name} pieces to learn from yet`)
   const texts: { path: string; text: string }[] = []
   let budget = SOURCE_CHARS
