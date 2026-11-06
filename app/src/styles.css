@@ -2306,18 +2306,58 @@ kbd {
   top: 0;
   z-index: 20;
   display: flex;
-  align-items: center;
-  gap: 1px;
-  flex-wrap: wrap;
-  row-gap: 2px;
-  min-height: 40px;
-  padding: 4px 12px;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 8px 0 12px;
   background: color-mix(in srgb, var(--page) 92%, transparent);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
 }
+/* One line that scrolls sideways; the edges fade where more tools are hidden. */
+.tb-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px;
+  --fade-l: 0px;
+  --fade-r: 0px;
+  mask-image: linear-gradient(to right, transparent, #000 var(--fade-l), #000 calc(100% - var(--fade-r)), transparent);
+}
+.tb-row.fade-left {
+  --fade-l: 32px;
+}
+.tb-row.fade-right {
+  --fade-r: 32px;
+}
+.tb-row::-webkit-scrollbar {
+  height: 4px;
+}
+.tb-row::-webkit-scrollbar-thumb {
+  border-width: 0 12px;
+}
+.toolbar.is-expanded .tb-row {
+  flex-wrap: wrap;
+  row-gap: 2px;
+  overflow: visible;
+}
 .toolbar .spacer {
   flex: 1;
+}
+.tb-expand {
+  margin-bottom: 4px;
+}
+.tb-expand .chevron {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.15s;
+}
+.tb-expand.is-on .chevron {
+  transform: rotate(180deg);
 }
 .tb-btn {
   flex: none;
@@ -2398,9 +2438,8 @@ kbd {
   position: relative;
 }
 .tb-menu {
+  position: fixed;
   z-index: 40;
-  top: calc(100% + 4px);
-  left: 0;
   right: auto;
 }
 .tb-menu .muted {
@@ -2626,7 +2665,13 @@ kbd {
   display: none;
 }
 
-/* ---- Scrollbars: thin, quiet, and only noticeable on hover ---------------------------------- */
+/* ---- Scrollbars: hidden at rest, shown while scrolling, then faded out (lib/scrollbars.ts) ----- */
+/* --sb is set inline on the element that scrolls; every other element resets it, so a scroller
+   nested inside a scrolling one stays hidden. (Pseudo-elements aren't matched by *, so the
+   thumb still inherits it from its own scroller.) */
+* {
+  --sb: 0;
+}
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -2636,18 +2681,19 @@ kbd {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--line-2);
+  background-color: color-mix(in srgb, var(--line-2) calc(var(--sb) * 100%), transparent);
   border: 3px solid transparent;
   border-radius: 10px;
   background-clip: padding-box;
 }
-::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
   background-color: var(--ink-4);
 }
 @supports not selector(::-webkit-scrollbar) {
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--line-2) transparent;
+    scrollbar-color: color-mix(in srgb, var(--line-2) calc(var(--sb) * 100%), transparent) transparent;
   }
 }
 
