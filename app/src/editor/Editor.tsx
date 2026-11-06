@@ -17,6 +17,7 @@ interface Props {
   record: (item: HistoryItem) => void
   openDoc: (path: string) => void
   onWordCount: (n: number) => void
+  autoFocus?: boolean
 }
 
 /** Which help level a keydown asks for: ⌥1–⌥5 everywhere, ⌘1–⌘5 where the browser allows it. */
@@ -152,7 +153,7 @@ export function Editor(props: Props) {
       openDoc: (path) => p().openDoc(path),
     })
     p().onWordCount(countWords(props.initial))
-    view.focus()
+    if (props.autoFocus !== false) view.focus()
     return () => view.destroy()
     // A new document gets a fresh editor (and a fresh undo history).
     // eslint-disable-next-line react-hooks/exhaustive-deps

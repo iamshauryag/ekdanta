@@ -237,15 +237,9 @@ kbd {
   font-weight: 500;
   box-shadow: inset 2px 0 0 var(--accent);
 }
-.new-doc {
-  width: calc(100% - 10px);
-  margin: 4px 0 4px 10px;
-  font: inherit;
-  color: var(--ink);
-  background: var(--page);
-  border: 1px solid var(--line-2);
-  border-radius: 6px;
-  padding: 5px 8px;
+.file.is-untitled {
+  font-style: italic;
+  color: var(--ink-3);
 }
 
 .page-area {
@@ -283,6 +277,38 @@ kbd {
   margin: 0 0 26px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
+}
+.doc-title:focus {
+  outline: none;
+}
+.doc-title:empty::before {
+  content: attr(data-placeholder);
+  color: var(--ink-4);
+}
+.platform-picker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: -14px 0 22px;
+  font-size: 12px;
+}
+.platform-picker .muted {
+  margin-right: 4px;
+}
+.platform-picker button {
+  padding: 3px 10px;
+  border-radius: 20px;
+  color: var(--ink-2);
+  border: 1px solid transparent;
+}
+.platform-picker button:hover {
+  color: var(--ink);
+  background: var(--chrome);
+}
+.platform-picker button.is-on {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
 }
 .app.is-focus .doc-title {
   opacity: 0.38;

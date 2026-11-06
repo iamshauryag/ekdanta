@@ -42,6 +42,7 @@ The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tab
 | ↑↓ ↵ | Choose and pick in Recall and Word |
 | Tab | Accept ghost text; in a diff, step through changes (↵ accept, ⌫ reject) |
 | ⌘↵ / ⌘⌫ | Accept all / reject all |
+| ⌥N | New draft, in the current folder (browsers keep ⌘N for a new window) |
 | ⌘. | Focus mode |
 | ⌘\ · ⌘⌥1–3 | Right panel · Material, History, Piece |
 

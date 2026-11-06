@@ -29,11 +29,20 @@ function usePref<T>(key: string, initial: T) {
   return [value, setValue] as const
 }
 
+interface Doc {
+  path: string
+  meta: Meta
+  body: string
+  rawMeta: string
+}
+
 export function App() {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [status, setStatus] = useState<Status | null>(null)
   const [path, setPath] = usePref<string | null>('lastDoc', null)
-  const [loaded, setLoaded] = useState<{ path: string; meta: Meta; body: string; rawMeta: string } | null>(null)
+  // What's on screen. `key` changes only when a different document opens, not when one is renamed.
+  const [loaded, setLoaded] = useState<(Doc & { key: string }) | null>(null)
+  const [fresh, setFresh] = useState<string | null>(null) // a new draft, whose title gets the caret
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [words, setWords] = useState(0)
   const [saved, setSaved] = useState<'saved' | 'saving' | 'unsaved'>('saved')
@@ -53,9 +62,10 @@ export function App() {
     return () => window.removeEventListener('ekdanta:helpmod', on)
   }, [])
 
-  const bodyRef = useRef('')
-  const metaRef = useRef<{ meta: Meta; rawMeta: string }>({ meta: {}, rawMeta: '' })
+  // The open document. Saves always read from here, so a save can never land in the wrong file.
+  const docRef = useRef<Doc | null>(null)
   const saveTimer = useRef<number | undefined>(undefined)
+  const renamed = useRef<string | null>(null)
 
   const refreshFiles = useCallback(() => api.files().then(setFiles), [])
   useEffect(() => {
@@ -71,13 +81,16 @@ export function App() {
 
   useEffect(() => {
     if (!path) return
+    if (renamed.current === path) {
+      renamed.current = null // same document under a new name: nothing to reload
+      return
+    }
     let cancelled = false
     api.read(path).then((content) => {
       if (cancelled) return
       const { meta, body, raw } = splitFrontMatter(content)
-      bodyRef.current = body
-      metaRef.current = { meta, rawMeta: raw }
-      setLoaded({ path, meta, body, rawMeta: raw })
+      docRef.current = { path, meta, body, rawMeta: raw }
+      setLoaded({ ...docRef.current, key: path })
       setSaved('saved')
     })
     api.history(path).then((h) => !cancelled && setHistory(h as HistoryItem[]))
@@ -87,16 +100,18 @@ export function App() {
   }, [path])
 
   const save = useCallback(async () => {
-    if (!loaded) return
     window.clearTimeout(saveTimer.current)
+    saveTimer.current = undefined
+    const d = docRef.current
+    if (!d) return
     setSaved('saving')
-    await api.write(loaded.path, joinFrontMatter(metaRef.current.rawMeta, metaRef.current.meta, bodyRef.current))
+    await api.write(d.path, joinFrontMatter(d.rawMeta, d.meta, d.body))
     setSaved('saved')
-  }, [loaded])
+  }, [])
 
   const onChange = useCallback(
     (text: string) => {
-      bodyRef.current = text
+      if (docRef.current) docRef.current.body = text
       setSaved('unsaved')
       window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(save, 800)
@@ -104,29 +119,70 @@ export function App() {
     [save],
   )
 
+  /** Switch documents: finish any pending save first, and drop a new draft that was left empty. */
+  const openDoc = useCallback(
+    async (next: string) => {
+      const d = docRef.current
+      if (d && d.path !== next) {
+        if (saveTimer.current !== undefined) await save()
+        if (!d.meta.title?.trim() && !d.body.trim()) {
+          const { discarded } = await api.discard(d.path)
+          if (discarded) await refreshFiles()
+        }
+      }
+      setFresh((f) => (f === next ? f : null))
+      setPath(next)
+    },
+    [save, refreshFiles, setPath],
+  )
+
+  const newDraft = useCallback(
+    async (folder?: string) => {
+      const target = folder ?? files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
+      const { path: rel } = await api.create(target)
+      await refreshFiles()
+      setFresh(rel)
+      await openDoc(rel)
+    },
+    [files, openDoc, refreshFiles],
+  )
+
   const setMeta = (patch: Meta) => {
-    metaRef.current = { ...metaRef.current, meta: { ...metaRef.current.meta, ...patch } }
-    setLoaded((l) => (l ? { ...l, meta: metaRef.current.meta } : l))
+    const d = docRef.current
+    if (!d) return
+    d.meta = { ...d.meta, ...patch }
+    setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
     save().then(refreshFiles)
+  }
+
+  /** A title written for the first time also names the file. */
+  const setTitle = async (title: string) => {
+    const d = docRef.current
+    if (!d) return
+    d.meta = { ...d.meta, title }
+    setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
+    await save()
+    const { path: next } = await api.name(d.path, title)
+    if (next !== d.path) {
+      const prev = d.path
+      d.path = next
+      renamed.current = next
+      setLoaded((l) => (l ? { ...l, path: next } : l))
+      setFresh((f) => (f === prev ? next : f))
+      setPath(next)
+    }
+    refreshFiles()
   }
 
   const record = useCallback(
     (item: HistoryItem) => {
-      if (!path) return
+      const d = docRef.current
+      if (!d) return
       setHistory((h) => [...h, item])
-      api.appendHistory(path, item)
+      api.appendHistory(d.path, item)
     },
-    [path],
+    [],
   )
-
-  const createDoc = async (folder: string, name: string) => {
-    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'untitled'
-    const rel = `${folder ? folder + '/' : ''}${slug}.md`
-    const platform = PLATFORMS.find((p) => folder.toLowerCase().startsWith(p)) ?? 'essay'
-    await api.write(rel, `---\ntitle: ${name.trim()}\nplatform: ${platform}\nstatus: draft\n---\n\n`)
-    await refreshFiles()
-    setPath(rel)
-  }
 
   // Window-level shortcuts: Focus mode and the panel.
   useEffect(() => {
@@ -147,20 +203,25 @@ export function App() {
       } else if (mod && e.key === 's') {
         e.preventDefault()
         save()
+      } else if (e.code === 'KeyN' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
+        // Browsers keep ⌘N for a new window, so ⌥N works too.
+        e.preventDefault()
+        newDraft()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [focus, save, setPanelOpen, setPanelTab])
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab])
 
   const current = files.find((f) => f.path === path)
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
-  const title = loaded?.meta.title ?? current?.title ?? ''
+  const title = loaded ? (loaded.meta.title ?? current?.title ?? '') : ''
+  const isNew = !!loaded && fresh === loaded.path
 
   const editorProps = useMemo(
     () => ({
-      doc: () => path ?? '',
-      platform: () => (metaRef.current.meta.platform ?? 'essay').toLowerCase(),
+      doc: () => docRef.current?.path ?? '',
+      platform: () => (docRef.current?.meta.platform ?? 'essay').toLowerCase(),
       ceiling: () => ceiling,
       recallDot: () => recallDot && !focus,
     }),
@@ -172,7 +233,7 @@ export function App() {
       <header className="titlebar">
         <div className="crumb">
           {current?.folder ? <span className="muted">{current.folder} / </span> : null}
-          <b>{title}</b>
+          <b>{title || 'Untitled'}</b>
         </div>
         <div className="titlebar-meta">
           <span className={`save-state is-${saved}`}>{saved === 'saved' ? 'Saved' : saved === 'saving' ? 'Saving…' : 'Edited'}</span>
@@ -189,13 +250,16 @@ export function App() {
         <button className={`rail-btn${sidebarOpen ? ' is-on' : ''}`} title="Vault" onClick={() => setSidebarOpen((o) => !o)}>
           <Icon name="folder" />
         </button>
+        <button className="rail-btn" title="New draft (⌥N)" onClick={() => newDraft()}>
+          <Icon name="compose" />
+        </button>
         <div className="rail-spacer" />
         <button className="rail-btn" title="Focus mode (⌘.)" onClick={() => setFocus(true)}>
           <Icon name="focus" />
         </button>
       </nav>
 
-      {sidebarOpen && <Sidebar files={files} current={path} onOpen={setPath} onCreate={createDoc} />}
+      {sidebarOpen && <Sidebar files={files} current={path} onOpen={openDoc} onCreate={newDraft} />}
 
       <main className="page-area">
         {loaded && (
@@ -205,7 +269,7 @@ export function App() {
                 <select value={platform} onChange={(e) => setMeta({ platform: e.target.value })} aria-label="Platform">
                   {PLATFORMS.map((p) => (
                     <option key={p} value={p}>
-                      {p === 'linkedin' ? 'LinkedIn' : p[0].toUpperCase() + p.slice(1)}
+                      {platformLabel(p)}
                     </option>
                   ))}
                 </select>
@@ -216,15 +280,17 @@ export function App() {
               <span className="muted">· {loaded.meta.status ?? 'draft'}</span>
               <span className="muted path">{loaded.path}</span>
             </div>
-            {title && <h1 className="doc-title">{title}</h1>}
+            <TitleField key={'title:' + loaded.key} value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)} autoFocus={isNew} onCommit={setTitle} />
+            {isNew && !words && <PlatformPicker value={platform} onPick={(p) => setMeta({ platform: p })} />}
             <Editor
-              key={loaded.path}
-              docKey={loaded.path}
+              key={loaded.key}
+              docKey={loaded.key}
+              autoFocus={!isNew}
               initial={loaded.body}
               onChange={onChange}
               {...editorProps}
               record={record}
-              openDoc={setPath}
+              openDoc={openDoc}
               onWordCount={setWords}
             />
           </div>
@@ -245,19 +311,77 @@ export function App() {
           recallDot={recallDot}
           onRecallDot={setRecallDot}
           status={status}
-          path={path}
+          path={loaded?.path ?? path}
           onClearHistory={() => setHistory([])}
         />
       )}
 
       <footer className="statusbar">
         <span>
-          {platform[0].toUpperCase() + platform.slice(1)} · Ceiling {ceiling} · {words.toLocaleString()} words
+          {platformLabel(platform)} · Ceiling {ceiling} · {words.toLocaleString()} words
         </span>
         <span className="muted">
           {mod}1 Recall · {mod}2 Nudge · {mod}3 Word · {mod}4 Sentence · {mod}5 Passage
         </span>
       </footer>
+    </div>
+  )
+}
+
+const platformLabel = (p: string) => (p === 'linkedin' ? 'LinkedIn' : p[0].toUpperCase() + p.slice(1))
+
+/** The document title, edited in place. Return or ↓ moves on to the text. */
+function TitleField({ value, autoFocus, onCommit }: { value: string; autoFocus: boolean; onCommit: (t: string) => void }) {
+  const ref = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (el && document.activeElement !== el && el.textContent !== value) el.textContent = value
+  }, [value])
+  useEffect(() => {
+    if (autoFocus) ref.current?.focus()
+  }, [autoFocus])
+  const commit = () => {
+    const t = (ref.current?.textContent ?? '').replace(/\s+/g, ' ').trim()
+    if (ref.current) ref.current.textContent = t
+    if (t !== value) onCommit(t)
+  }
+  return (
+    <h1
+      ref={ref}
+      className="doc-title"
+      contentEditable="plaintext-only"
+      suppressContentEditableWarning
+      role="textbox"
+      aria-label="Title"
+      data-placeholder="Untitled"
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
+          e.preventDefault()
+          focusText()
+        } else if (e.key === 'Escape') {
+          e.currentTarget.textContent = value
+          focusText()
+        }
+      }}
+    />
+  )
+}
+
+function focusText() {
+  document.querySelector<HTMLElement>('.cm-content')?.focus()
+}
+
+/** On a new document: which platform it's for. The folder's usual one is already chosen. */
+function PlatformPicker({ value, onPick }: { value: string; onPick: (p: string) => void }) {
+  return (
+    <div className="platform-picker" role="radiogroup" aria-label="Platform">
+      <span className="muted">For</span>
+      {PLATFORMS.map((p) => (
+        <button key={p} role="radio" aria-checked={p === value} tabIndex={-1} className={p === value ? 'is-on' : ''} onClick={() => onPick(p)}>
+          {platformLabel(p)}
+        </button>
+      ))}
     </div>
   )
 }

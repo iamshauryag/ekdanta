@@ -6,7 +6,7 @@ import { claudePool, closeClaudePools } from './claude-pool.ts'
 import { embedder, warmEmbedder } from './embed.ts'
 import { runHelp, type HelpRequest } from './help.ts'
 import { refresh, search, paragraphs } from './recall.ts'
-import { VAULT, appendHistory, listFiles, readDoc, readHistory, splitFrontMatter, writeDoc } from './vault.ts'
+import { VAULT, appendHistory, createDoc, discardIfEmpty, listFiles, nameDoc, readDoc, readHistory, splitFrontMatter, writeDoc } from './vault.ts'
 
 type Handler = (req: IncomingMessage, url: URL) => Promise<unknown>
 
@@ -25,6 +25,20 @@ const routes: Record<string, Handler> = {
     await writeDoc(path, content)
     refresh().catch(() => {}) // re-index in the background
     return { ok: true }
+  },
+  'POST /api/new': async (req) => {
+    const { folder, platform } = await body<{ folder?: string; platform?: string }>(req)
+    return { path: await createDoc(folder ?? '', platform) }
+  },
+  'POST /api/name': async (req) => {
+    const { path, title } = await body<{ path: string; title: string }>(req)
+    const next = await nameDoc(path, title)
+    if (next !== path) refresh().catch(() => {})
+    return { path: next }
+  },
+  'POST /api/discard': async (req) => {
+    const { path } = await body<{ path: string }>(req)
+    return { discarded: await discardIfEmpty(path) }
   },
   'POST /api/help': async (req) => runHelp(await body<HelpRequest>(req)),
   // Background check for the Recall dot: is there anything strong for this paragraph?

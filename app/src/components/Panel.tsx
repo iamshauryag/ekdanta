@@ -111,7 +111,7 @@ function Piece(p: Props) {
       <dl className="facts">
         <div>
           <dt>Platform</dt>
-          <dd>{p.platform[0].toUpperCase() + p.platform.slice(1)}</dd>
+          <dd>{p.platform === 'linkedin' ? 'LinkedIn' : p.platform[0].toUpperCase() + p.platform.slice(1)}</dd>
         </div>
         <div className="col">
           <dt>Length</dt>

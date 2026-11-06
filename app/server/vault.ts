@@ -35,7 +35,7 @@ export async function listFiles(): Promise<FileEntry[]> {
         out.push({
           path: rel,
           folder: rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '',
-          title: meta.title || firstHeading(body) || entry.name.replace(/\.md$/, ''),
+          title: meta.title || firstHeading(body) || (isUntitled(rel) ? 'Untitled' : entry.name.replace(/\.md$/, '')),
           platform: meta.platform,
           mtime: stat.mtimeMs,
         })
@@ -57,6 +57,68 @@ export async function writeDoc(rel: string, content: string) {
   await fs.writeFile(abs, content, 'utf8')
 }
 
+// New documents start as untitled.md and take their name from the title once it's written.
+const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
+
+export function isUntitled(rel: string) {
+  return /^untitled(-\d+)?\.md$/.test(path.posix.basename(rel))
+}
+
+export function slugify(title: string) {
+  return (
+    title
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/['’]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 60)
+      .replace(/-$/, '') || 'untitled'
+  )
+}
+
+/** `folder/name.md`, or `folder/name-2.md` and so on if that's taken. */
+async function freePath(folder: string, name: string) {
+  for (let n = 1; ; n++) {
+    const rel = `${folder ? folder + '/' : ''}${name}${n > 1 ? '-' + n : ''}.md`
+    try {
+      await fs.access(resolveInVault(rel))
+    } catch {
+      return rel
+    }
+  }
+}
+
+export async function createDoc(folder: string, platform?: string) {
+  folder = folder.replace(/^\/+|\/+$/g, '')
+  const guess = PLATFORMS.find((p) => folder.toLowerCase().split('/').pop()!.startsWith(p)) ?? 'essay'
+  const rel = await freePath(folder, 'untitled')
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  await writeDoc(rel, `---\ntitle: \nplatform: ${platform ?? guess}\nstatus: draft\ncreated: ${today}\n---\n\n`)
+  return rel
+}
+
+/** Give an untitled document a file name from its title. Named documents keep theirs, so links to them never break. */
+export async function nameDoc(rel: string, title: string) {
+  if (!isUntitled(rel) || !title.trim()) return rel
+  const folder = path.posix.dirname(rel) === '.' ? '' : path.posix.dirname(rel)
+  const next = await freePath(folder, slugify(title))
+  await fs.rename(resolveInVault(rel), resolveInVault(next))
+  await fs.rename(historyFile(rel), historyFile(next)).catch(() => {}) // no history yet is fine
+  return next
+}
+
+/** Remove a document only if it's an untitled one with nothing in it. */
+export async function discardIfEmpty(rel: string) {
+  if (!isUntitled(rel)) return false
+  const { meta, body } = splitFrontMatter(await readDoc(rel))
+  if (meta.title?.trim() || body.trim()) return false
+  await fs.unlink(resolveInVault(rel))
+  return true
+}
+
 /** Minimal YAML front-matter: flat `key: value` pairs, which is all Ekdanta writes. */
 export function splitFrontMatter(raw: string): { meta: Record<string, string>; body: string } {
   const m = raw.match(/^---\n([\s\S]*?)\n---\n?/)
@@ -64,7 +126,7 @@ export function splitFrontMatter(raw: string): { meta: Record<string, string>; b
   const meta: Record<string, string> = {}
   for (const line of m[1].split('\n')) {
     const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/)
-    if (kv) meta[kv[1]] = kv[2].replace(/^["']|["']$/g, '')
+    if (kv) meta[kv[1]] = unquote(kv[2])
   }
   return { meta, body: raw.slice(m[0].length) }
 }
@@ -93,4 +155,15 @@ export async function readHistory(doc: string): Promise<unknown[]> {
   } catch {
     return []
   }
+}
+
+function unquote(v: string) {
+  if (/^".*"$/.test(v)) {
+    try {
+      return JSON.parse(v) as string
+    } catch {
+      /* fall through */
+    }
+  }
+  return v.replace(/^["']|["']$/g, '')
 }
