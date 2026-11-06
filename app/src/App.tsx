@@ -3,6 +3,7 @@ import type { Editor as TiptapEditor } from '@tiptap/core'
 import { Editor, type EditorFormat, type Heading } from './editor/Editor.tsx'
 import type { PageRef } from './editor/menus.ts'
 import { SourceEditor } from './editor/Source.tsx'
+import { kindName, kinds, setKinds } from './lib/kinds.ts'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
 import { api, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Trashed, type VoiceSummary } from './lib/api.ts'
@@ -17,7 +18,6 @@ import { helpMod } from './editor/help.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, matches, setOverrides, titled } from './lib/keys.ts'
 
-const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
 
 function usePref<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(() => {
@@ -66,6 +66,8 @@ export function App() {
   const [format, setFormat] = useState<EditorFormat | null>(null)
   const [outline, setOutline] = useState<Heading[]>([])
   const [settings, setSettings] = useState<SettingsT | null>(null)
+  // Set during render, so everything below sees the current kinds of writing.
+  setKinds(settings?.kinds)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [voices, setVoices] = useState<VoiceSummary[]>([])
   const [voiceView, setVoiceView] = useState<string | null>(null) // a platform whose profile fills the page
@@ -621,8 +623,8 @@ export function App() {
           <div className="page">
             <div className="doc-meta">
               <label className="platform">
-                <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Platform">
-                  {(PLATFORMS.includes(platform) ? PLATFORMS : [...PLATFORMS, platform]).map((p) => (
+                <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Kind of writing">
+                  {(kinds().some((k) => k.id === platform) ? kinds().map((k) => k.id) : [...kinds().map((k) => k.id), platform]).map((p) => (
                     <option key={p} value={p}>
                       {platformLabel(p)}
                     </option>
@@ -729,7 +731,7 @@ export function App() {
   )
 }
 
-const platformLabel = (p: string) => (p === 'linkedin' ? 'LinkedIn' : p[0].toUpperCase() + p.slice(1))
+const platformLabel = (p: string) => kindName(kinds(), p)
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */
 function TitleField({ value, autoFocus, onCommit }: { value: string; autoFocus: boolean; onCommit: (t: string) => void }) {
@@ -774,13 +776,13 @@ function focusText() {
   document.querySelector<HTMLElement>('.editor .pm, .editor .cm-content')?.focus()
 }
 
-/** On a new document: which platform it's for. The folder's usual one is already chosen. */
+/** On a new document: which kind it is. The folder's usual one is already chosen. Picking keeps the cursor where it was (the title). */
 function PlatformPicker({ value, onPick }: { value: string; onPick: (p: string) => void }) {
   return (
-    <div className="platform-picker" role="radiogroup" aria-label="Platform">
+    <div className="platform-picker" role="radiogroup" aria-label="Kind of writing">
       <span className="muted">For</span>
-      {PLATFORMS.map((p) => (
-        <button key={p} role="radio" aria-checked={p === value} tabIndex={-1} className={p === value ? 'is-on' : ''} onClick={() => onPick(p)}>
+      {kinds().map(({ id: p }) => (
+        <button key={p} role="radio" aria-checked={p === value} tabIndex={-1} className={p === value ? 'is-on' : ''} onMouseDown={(e) => e.preventDefault()} onClick={() => onPick(p)}>
           {platformLabel(p)}
         </button>
       ))}

@@ -3,6 +3,8 @@
 import { generate, parseJson, status } from './ai.ts'
 import { search } from './recall.ts'
 import { voiceForPrompt } from './voice.ts'
+import { settingsNow } from './settings.ts'
+import { describeKind } from '../src/lib/kinds.ts'
 
 export interface HelpRequest {
   level: 1 | 2 | 3 | 4 | 5
@@ -25,17 +27,8 @@ export interface HelpRequest {
   avoid?: string[]
 }
 
-const PLATFORM_NORMS: Record<string, string> = {
-  essay: 'a personal essay: considered, concrete, unhurried',
-  linkedin: 'a LinkedIn post: short paragraphs, a strong first line, plain words, no hashtags or emoji unless the writer uses them',
-  email: 'an email: clear, courteous, gets to the point',
-  text: 'a text message: brief and natural',
-  blog: 'a blog post: conversational but substantial',
-}
-
-function norms(platform?: string) {
-  return PLATFORM_NORMS[(platform ?? 'essay').toLowerCase()] ?? PLATFORM_NORMS.essay
-}
+/** What the piece is and how it should read, from its kind. */
+const norms = (platform?: string) => describeKind(settingsNow().kinds, platform)
 
 const RESTRAINT = `You are Ekdanta, a writing collaborator built on restraint. The writer owns every word.
 Help only as much as you are asked, never more. Never add commentary, preambles, quotation marks around your answer, or explanations.`

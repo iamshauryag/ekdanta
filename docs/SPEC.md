@@ -33,7 +33,7 @@ The writer sets a default ceiling (for example "never above level 3 unless I ask
 |---|---|
 | Codebase | The writer's vault: all their writing as plain files on disk |
 | Codebase index and retrieval | An index of their writing and knowledge (books, highlights, quotes, notes, ideas) |
-| Coding style | A voice profile, learned per platform (essay, LinkedIn, email, text) |
+| Coding style | A voice profile, learned per kind of writing (essay, LinkedIn post, email, or any kind the writer adds) |
 | Tab completion | Short continuation — **only on request** (level 4) |
 | Cmd+K inline edit | Select → instruct → word-level diff → accept or reject |
 | Agent | Bounded tasks across files: "turn this essay into a LinkedIn post", "find every place I've used this idea" |

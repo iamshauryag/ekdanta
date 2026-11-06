@@ -6,17 +6,16 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { generate, parseJson, status } from './ai.ts'
 import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from './vault.ts'
+import { loadSettings } from './settings.ts'
+import { kindName } from '../src/lib/kinds.ts'
 
 const DIR = path.join(META_DIR, 'voice')
-export const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
 /** Below this many exemplars, recent unstarred pieces top up the sources. */
 const ENOUGH = 3
 const SOURCE_CHARS = 14_000
 
 const RULES_HEADING = '## Your rules'
 const RULES_NOTE = '<!-- Yours: rebuilding the profile never changes this section. -->'
-
-const NAMES: Record<string, string> = { essay: 'Essay', linkedin: 'LinkedIn', email: 'Email', text: 'Text', blog: 'Blog' }
 
 export interface Source {
   path: string
@@ -36,7 +35,7 @@ export interface VoiceSummary {
 
 const platformOf = (f: FileEntry) => (f.platform ?? 'essay').toLowerCase()
 const file = (platform: string) => {
-  if (!PLATFORMS.includes(platform)) throw new Error('Unknown platform')
+  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(platform)) throw new Error('Unknown platform')
   return path.join(DIR, `${platform}.md`)
 }
 
@@ -64,7 +63,7 @@ export async function writeProfile(platform: string, content: string) {
 export async function summaries(): Promise<VoiceSummary[]> {
   const files = await listFiles()
   const out: VoiceSummary[] = []
-  for (const platform of PLATFORMS) {
+  for (const { id: platform } of (await loadSettings()).kinds) {
     const sources = sourcesFor(files, platform)
     if (!sources.length) continue
     const profile = await readProfile(platform)
@@ -94,7 +93,8 @@ interface Trait {
 export async function buildProfile(platform: string): Promise<string> {
   const files = await listFiles()
   const sources = sourcesFor(files, platform)
-  if (!sources.length) throw new Error(`No ${NAMES[platform]} pieces to learn from yet`)
+  const name = kindName((await loadSettings()).kinds, platform)
+  if (!sources.length) throw new Error(`No ${name} pieces to learn from yet`)
   const texts: { path: string; text: string }[] = []
   let budget = SOURCE_CHARS
   for (const s of sources) {
@@ -111,7 +111,7 @@ export async function buildProfile(platform: string): Promise<string> {
   const existing = await readProfile(platform)
   const currentTraits = existing ? traitsOf(existing) : []
   const system = `You describe a writer's voice so that the writer can read it, agree or disagree, and edit it.
-From the pieces given, write 6 to 10 traits of how this writer writes ${NAMES[platform]} pieces. Each trait is ONE plain sentence, specific and checkable: sentence length and rhythm, how pieces open and close, punctuation habits, diction and register, how they use examples, what they tend to avoid.
+From the pieces given, write 6 to 10 traits of how this writer writes ${name} pieces. Each trait is ONE plain sentence, specific and checkable: sentence length and rhythm, how pieces open and close, punctuation habits, diction and register, how they use examples, what they tend to avoid.
 For each trait, give one short example copied EXACTLY from the pieces (at most 14 words, no ellipses) and the file it came from.
 Describe; don't praise. Don't invent anything the pieces don't show.${
     currentTraits.length

@@ -30,7 +30,9 @@ You write on a formatted page, as in Google Docs or Notion: bold is bold, a head
 - **Paste** keeps formatting from Google Docs and web pages, a URL pasted over selected words links them, and ⌘⇧V pastes plain text. Paste or drop an image and it is saved in `attachments/` in the vault.
 - **Outline** (⌃⌥2) lists the page's headings; click one to go there. The status bar shows the selection's word count and reading time.
 
-Each page in the sidebar has a ⋯ menu: **Rename** (double-click works too) renames the file and updates every `[[link]]` to it; **Move to…** files it in another folder, and moving it into a platform's folder makes it a piece for that platform; **Duplicate**; and **Delete**, which can be undone and keeps the page under **Recently deleted** (in `.ekdanta/trash/`) until you empty it. Changing a piece's platform moves it into that platform's folder, unless you filed it in a folder of your own.
+Each page in the sidebar has a ⋯ menu: **Rename** (double-click works too) renames the file and updates every `[[link]]` to it; **Move to…** files it in another folder, and moving it into a kind's folder makes it a piece of that kind; **Duplicate**; and **Delete**, which can be undone and keeps the page under **Recently deleted** (in `.ekdanta/trash/`) until you empty it. Changing a piece's kind moves it into that kind's folder, unless you filed it in a folder of your own.
+
+Every piece is a **kind** of writing: Essay, LinkedIn post, Email, Text message and Blog post to start with. Add your own in Settings → Kinds (a YT script, a letter, a speech). Each kind has its own folder, voice profile and typical length, plus a line on how it should read that the help levels follow ("spoken rhythm, a hook in the first ten seconds"). A piece's kind is stored as `platform:` in its front-matter, and the list in `.ekdanta/settings.json`, so a kind you remove and add again finds its pieces.
 
 ## Models
 
@@ -46,7 +48,7 @@ Settings (⌥,) can pin a provider, choose the Claude models, use the local mode
 
 ## Voice profiles
 
-Each platform gets a short, readable profile in `.ekdanta/voice/<platform>.md`, built from your ★ exemplars (topped up with recent pieces while there are fewer than three). Every trait quotes your own writing, and Ekdanta checks each quote against the source before keeping it. Edit the traits freely; anything under **Your rules** is yours and a rebuild never changes it. A rebuild is shown as a diff to accept or reject, and ⌘3–⌘5 follow the profile for the piece's platform. The profile opens as a formatted page; switch to Markdown to edit it.
+Each kind gets a short, readable profile in `.ekdanta/voice/<kind>.md`, built from your ★ exemplars (topped up with recent pieces while there are fewer than three). Every trait quotes your own writing, and Ekdanta checks each quote against the source before keeping it. Edit the traits freely; anything under **Your rules** is yours and a rebuild never changes it. A rebuild is shown as a diff to accept or reject, and ⌘3–⌘5 follow the profile for the piece's kind. The profile opens as a formatted page; switch to Markdown to edit it.
 
 ## Thinking Space
 

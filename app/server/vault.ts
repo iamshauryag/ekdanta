@@ -2,6 +2,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
+import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
 
 // `npm run dev` runs from app/, so the bundled sample vault is the default.
 export const VAULT = path.resolve(process.env.EKDANTA_VAULT ?? 'sample-vault')
@@ -61,7 +62,6 @@ export async function writeDoc(rel: string, content: string) {
 }
 
 // New documents start as untitled.md and take their name from the title once it's written.
-const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
 
 export function isUntitled(rel: string) {
   return /^untitled(-\d+)?\.md$/.test(path.posix.basename(rel))
@@ -93,9 +93,9 @@ async function freePath(folder: string, name: string) {
   }
 }
 
-export async function createDoc(folder: string, platform?: string) {
+export async function createDoc(kinds: Kind[], folder: string, platform?: string) {
   folder = folder.replace(/^\/+|\/+$/g, '')
-  const guess = PLATFORMS.find((p) => folder.toLowerCase().split('/').pop()!.startsWith(p)) ?? 'essay'
+  const guess = kindOfFolder(kinds, folder.split('/').pop()!)?.id ?? kinds[0]?.id ?? 'essay'
   const rel = await freePath(folder, 'untitled')
   await writeDoc(rel, `---\ntitle: \nplatform: ${platform ?? guess}\nstatus: draft\ncreated: ${today()}\n---\n\n`)
   return rel
@@ -117,25 +117,20 @@ async function moveDoc(rel: string, next: string) {
   return next
 }
 
-// Where each platform's pieces live when the vault has no folder for it yet.
-const PLATFORM_FOLDERS: Record<string, string> = { essay: 'essays', linkedin: 'linkedin', email: 'emails', text: 'texts', blog: 'blog' }
-
-/** A top-level folder holding one platform's pieces: `emails` for email, say. */
-const platformOf = (folder: string) => (folder.includes('/') ? undefined : PLATFORMS.find((p) => folder.toLowerCase().startsWith(p)))
-
 /**
  * After a platform change, move a document into that platform's folder. Only documents in
  * another platform's folder (or loose at the top of the vault) move; one the writer filed
  * somewhere of their own stays put.
  */
-export async function placeDoc(rel: string) {
+export async function placeDoc(kinds: Kind[], rel: string) {
   const { meta } = splitFrontMatter(await readDoc(rel))
-  const platform = meta.platform?.toLowerCase()
+  const kind = findKind(kinds, meta.platform ?? '')
   const folder = folderOf(rel)
-  if (!platform || !PLATFORMS.includes(platform) || platformOf(folder) === platform) return rel
-  if (folder && !platformOf(folder)) return rel
+  const holds = (f: string) => kindOfFolder(kinds, f)?.id
+  if (!kind || holds(folder) === kind.id) return rel
+  if (folder && !holds(folder)) return rel
   const dirs = (await fs.readdir(VAULT, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name)
-  const target = dirs.find((d) => platformOf(d) === platform) ?? PLATFORM_FOLDERS[platform]
+  const target = dirs.find((d) => holds(d) === kind.id) ?? kind.folder
   return moveDoc(rel, await freePath(target, path.posix.basename(rel, '.md')))
 }
 
@@ -182,13 +177,13 @@ async function relink(prev: string, next: string) {
 }
 
 /** Move a document to another folder. A platform's folder makes it a piece for that platform. */
-export async function moveToFolder(rel: string, folder: string) {
+export async function moveToFolder(kinds: Kind[], rel: string, folder: string) {
   folder = folder.replace(/^\/+|\/+$/g, '').trim()
   if (folder.split('/').some((part) => part.startsWith('.'))) throw new Error('Not a folder for documents')
   resolveInVault(folder || '.')
   if (folder === folderOf(rel)) return rel
   const next = await moveDoc(rel, await freePath(folder, path.posix.basename(rel, '.md')))
-  const platform = platformOf(folder)
+  const platform = kindOfFolder(kinds, folder)?.id
   if (platform) await patchDoc(next, { platform })
   return next
 }

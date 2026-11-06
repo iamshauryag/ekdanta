@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, type Settings as S, type Status } from '../lib/api.ts'
 import { helpMod } from '../editor/help.ts'
 import { KeyMap } from './KeyMap.tsx'
+import { Kinds } from './Kinds.tsx'
 
 interface Props {
   settings: S
@@ -14,6 +15,7 @@ const CLAUDE_MODELS = ['haiku', 'sonnet', 'opus']
 
 const TABS = [
   { id: 'writing', label: 'Writing' },
+  { id: 'kinds', label: 'Kinds' },
   { id: 'models', label: 'Models' },
   { id: 'vault', label: 'Vault' },
   { id: 'keys', label: 'Shortcuts' },
@@ -131,6 +133,13 @@ export function Settings({ settings: s, status, onChange, onClose }: Props) {
               <Row label="Appearance">
                 <Seg value={s.theme} options={['system', 'light', 'dark']} label={cap} onPick={(theme) => onChange({ theme })} />
               </Row>
+            </section>
+          )}
+
+          {tab === 'kinds' && (
+            <section>
+              <p className="sheet-note">What you write. Each kind files its pieces in its own folder, learns its own voice profile, and tells the help levels how the piece should read.</p>
+              <Kinds kinds={s.kinds} onChange={(kinds) => onChange({ kinds })} />
             </section>
           )}
 

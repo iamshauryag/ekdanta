@@ -1,4 +1,5 @@
 import type { HistoryItem } from '../editor/controller.ts'
+import { findKind, kindName, kinds } from '../lib/kinds.ts'
 import { useEffect, useState } from 'react'
 import type { Status, Thinking, VoiceSummary } from '../lib/api.ts'
 import type { Heading } from '../editor/Editor.tsx'
@@ -19,7 +20,6 @@ export interface Thoughts {
   renameGroup: (id: string, label: string) => void
 }
 
-const TYPICAL: Record<string, number> = { essay: 1200, linkedin: 200, email: 150, text: 40, blog: 900 }
 const LEVEL: Record<number, string> = { 1: 'Recall', 2: 'Nudge', 3: 'Word', 4: 'Sentence', 5: 'Passage' }
 
 interface Props {
@@ -341,7 +341,7 @@ function HistoryLog({ history }: { history: HistoryItem[] }) {
 }
 
 function Piece(p: Props) {
-  const typical = TYPICAL[p.platform] ?? 1000
+  const typical = findKind(kinds(), p.platform)?.words ?? 1000
   const s = p.status
   return (
     <>
@@ -350,8 +350,8 @@ function Piece(p: Props) {
       </div>
       <dl className="facts">
         <div>
-          <dt>Platform</dt>
-          <dd>{p.platform === 'linkedin' ? 'LinkedIn' : p.platform[0].toUpperCase() + p.platform.slice(1)}</dd>
+          <dt>Kind</dt>
+          <dd>{kindName(kinds(), p.platform)}</dd>
         </div>
         <div className="col">
           <dt>Length</dt>

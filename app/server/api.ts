@@ -41,7 +41,7 @@ const routes: Record<string, Handler> = {
   },
   'POST /api/new': async (req) => {
     const { folder, platform } = await body<{ folder?: string; platform?: string }>(req)
-    return { path: await createDoc(folder ?? '', platform) }
+    return { path: await createDoc((await loadSettings()).kinds, folder ?? '', platform) }
   },
   'POST /api/name': async (req) => {
     const { path, title } = await body<{ path: string; title: string }>(req)
@@ -51,7 +51,7 @@ const routes: Record<string, Handler> = {
   },
   'POST /api/place': async (req) => {
     const { path } = await body<{ path: string }>(req)
-    const next = await placeDoc(path)
+    const next = await placeDoc((await loadSettings()).kinds, path)
     if (next !== path) refresh().catch(() => {})
     return { path: next }
   },
@@ -63,7 +63,7 @@ const routes: Record<string, Handler> = {
   },
   'POST /api/move': async (req) => {
     const { path, folder } = await body<{ path: string; folder: string }>(req)
-    const next = await moveToFolder(path, folder)
+    const next = await moveToFolder((await loadSettings()).kinds, path, folder)
     refresh().catch(() => {})
     return { path: next }
   },

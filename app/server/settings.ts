@@ -3,6 +3,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { META_DIR } from './vault.ts'
+import { cleanKinds, DEFAULT_KINDS, type Kind } from '../src/lib/kinds.ts'
 
 export type ProviderChoice = 'auto' | 'claude-cli' | 'anthropic-api' | 'ollama'
 
@@ -22,6 +23,8 @@ export interface Settings {
   theme: 'system' | 'light' | 'dark'
   /** Shortcuts the writer changed: command id → key in CodeMirror's notation ('' to unbind). */
   keys: Record<string, string>
+  /** Kinds of writing: the built-in ones, as the writer edited them, and any they added. */
+  kinds: Kind[]
 }
 
 const env = process.env
@@ -37,6 +40,7 @@ export const DEFAULTS: Settings = {
   paragraphFocus: true,
   theme: 'system',
   keys: {},
+  kinds: DEFAULT_KINDS,
 }
 
 const FILE = path.join(META_DIR, 'settings.json')
@@ -45,7 +49,8 @@ let current: Settings | null = null
 export async function loadSettings(): Promise<Settings> {
   if (current) return current
   try {
-    current = { ...DEFAULTS, ...(JSON.parse(await fs.readFile(FILE, 'utf8')) as Partial<Settings>) }
+    const saved = JSON.parse(await fs.readFile(FILE, 'utf8')) as Partial<Settings>
+    current = { ...DEFAULTS, ...saved, kinds: cleanKinds(saved.kinds) ?? DEFAULTS.kinds }
   } catch {
     current = { ...DEFAULTS }
   }
@@ -64,12 +69,15 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
     if (key in patch && typeof patch[key] === typeof DEFAULTS[key]) (next as unknown as Record<string, unknown>)[key] = patch[key]
   }
   next.ceiling = Math.max(0, Math.min(5, Math.round(next.ceiling)))
+  next.kinds = cleanKinds(next.kinds) ?? prev.kinds
   next.keys = Object.fromEntries(Object.entries(next.keys ?? {}).filter(([k, v]) => /^[\w.-]+$/.test(k) && typeof v === 'string' && v.length < 40))
   current = next
   await fs.mkdir(META_DIR, { recursive: true })
   // Only what differs from the defaults is written, so the file stays short and readable.
   const diff = Object.fromEntries(
-    Object.entries(next).filter(([k, v]) => (k === 'keys' ? Object.keys(v as object).length > 0 : DEFAULTS[k as keyof Settings] !== v)),
+    Object.entries(next).filter(([k, v]) =>
+      k === 'keys' ? Object.keys(v as object).length > 0 : k === 'kinds' ? JSON.stringify(v) !== JSON.stringify(DEFAULTS.kinds) : DEFAULTS[k as keyof Settings] !== v,
+    ),
   )
   await fs.writeFile(FILE, JSON.stringify(diff, null, 2) + '\n', 'utf8')
   return next

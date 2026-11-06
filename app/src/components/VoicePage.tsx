@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { kindName, kinds } from '../lib/kinds.ts'
 import { diffLines } from 'diff'
 import { history, historyKeymap, defaultKeymap } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
@@ -18,7 +19,7 @@ interface Props {
   onChanged: () => void
 }
 
-export const platformLabel = (p: string) => (p === 'linkedin' ? 'LinkedIn' : p[0].toUpperCase() + p.slice(1))
+export const platformLabel = (p: string) => kindName(kinds(), p)
 
 /** One platform's voice profile: read it, edit it, rebuild it from the exemplars. */
 export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {

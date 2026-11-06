@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { findKind, kindName, kinds, pieceName, plural } from '../lib/kinds.ts'
 import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
 import { helpMod } from '../editor/help.ts'
@@ -28,7 +29,6 @@ export interface FileActions {
   remove: (path: string) => void
 }
 
-const PLATFORMS = ['essay', 'linkedin', 'email', 'text', 'blog']
 /** Fewer than this and a voice profile has too little to go on. */
 const ENOUGH = 3
 
@@ -89,7 +89,8 @@ function Exemplars({ files, current, onOpen, onStar, actions }: Props) {
   const folders = [...new Set(files.map((f) => f.folder))].sort()
   const platformOf = (f: FileEntry) => (f.platform ?? 'essay').toLowerCase()
   // The usual platforms first, then anything else the vault uses (notes, say).
-  const used = [...new Set([...PLATFORMS, ...files.map(platformOf)])].filter((pl) => files.some((f) => platformOf(f) === pl))
+  const ids = kinds().map((k) => k.id)
+  const used = [...new Set([...ids, ...files.map(platformOf)])].filter((pl) => files.some((f) => platformOf(f) === pl))
   return (
     <>
       <div className="section-label">Exemplars</div>
@@ -105,9 +106,9 @@ function Exemplars({ files, current, onOpen, onStar, actions }: Props) {
             {starred.map((f) => (
               <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} actions={actions} folders={folders} />
             ))}
-            {PLATFORMS.includes(pl) && starred.length < ENOUGH && (
+            {ids.includes(pl) && starred.length < ENOUGH && (
               <p className="sidebar-hint">
-                {starred.length === 0 ? 'None yet. ' : ''}Star {ENOUGH - starred.length} more {pieceName(pl, ENOUGH - starred.length)} for a reliable profile.
+                {starred.length === 0 ? 'None yet. ' : ''}Star {ENOUGH - starred.length} more {pieceName(kinds(), pl, ENOUGH - starred.length)} for a reliable profile.
               </p>
             )}
           </div>
@@ -121,7 +122,7 @@ function Voices({ voices, voiceView, onVoice }: Props) {
   return (
     <>
       <div className="section-label">Voice</div>
-      <p className="sidebar-note">How you write on each platform, learned from your exemplars. <span className="nowrap">{helpMod}3–{helpMod}5</span> follow it.</p>
+      <p className="sidebar-note">How you write each kind of piece, learned from your exemplars. <span className="nowrap">{helpMod}3–{helpMod}5</span> follow it.</p>
       {voices.map((v) => (
         <button key={v.platform} className={`voice-row${voiceView === v.platform ? ' is-current' : ''}`} onClick={() => onVoice(v.platform)}>
           <span>{platformLabel(v.platform)}</span>
@@ -256,15 +257,13 @@ function FileRow({
   )
 }
 
-const platformLabel = (p: string) => (p === 'linkedin' ? 'LinkedIn' : p === 'note' ? 'Notes' : p[0].toUpperCase() + p.slice(1))
-function pieceName(platform: string, n: number) {
-  const one = { essay: 'essay', linkedin: 'LinkedIn post', email: 'email', text: 'message', blog: 'blog post' }[platform] ?? 'piece'
-  return n === 1 ? one : one + 's'
-}
+// Grouped by kind, pieces read as a plural: "LinkedIn posts", "YT scripts".
+const platformLabel = (p: string) => (findKind(kinds(), p) ? plural(kindName(kinds(), p)) : p === 'note' ? 'Notes' : kindName(kinds(), p))
 
-const LABELS: Record<string, string> = { linkedin: 'LinkedIn' }
+/** A kind's own folder takes the kind's name; any other keeps its own. */
 function folderLabel(folder: string) {
   if (!folder) return 'Vault'
   const last = folder.split('/').pop()!
-  return LABELS[last.toLowerCase()] ?? last[0].toUpperCase() + last.slice(1)
+  const kind = !folder.includes('/') && kinds().find((k) => k.folder === last.toLowerCase())
+  return kind ? plural(kind.name) : last[0].toUpperCase() + last.slice(1)
 }

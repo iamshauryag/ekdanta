@@ -1,3 +1,4 @@
+import type { Kind } from './kinds.ts'
 // Thin client for the local server in server/api.ts.
 export interface FileEntry {
   path: string
@@ -40,6 +41,7 @@ export interface Settings {
   theme: 'system' | 'light' | 'dark'
   /** Shortcuts the writer changed: command id → key ('' to unbind). */
   keys: Record<string, string>
+  kinds: Kind[]
 }
 
 export interface VoiceSummary {
