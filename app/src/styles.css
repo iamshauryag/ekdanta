@@ -260,6 +260,72 @@ kbd {
   font-weight: 500;
   box-shadow: inset 2px 0 0 var(--accent);
 }
+.file-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.file-row .file {
+  padding-right: 26px;
+}
+.star {
+  position: absolute;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-4);
+  opacity: 0;
+}
+.star .icon {
+  width: 14px;
+  height: 14px;
+}
+.file-row:hover .star,
+.star:focus-visible,
+.star.is-on {
+  opacity: 1;
+}
+.star:hover {
+  color: var(--ink-2);
+}
+.star.is-on {
+  color: var(--accent);
+}
+.star.is-on .icon,
+.star-toggle.is-on .icon {
+  fill: currentColor;
+}
+.star-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+}
+.star-toggle .icon {
+  width: 15px;
+  height: 15px;
+}
+.star-toggle:hover,
+.star-toggle.is-on {
+  color: var(--accent);
+}
+.sidebar-note,
+.sidebar-hint {
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0 8px 12px;
+}
+.sidebar-hint {
+  margin: 2px 8px 0 18px;
+}
+.folder-name .count {
+  color: var(--ink-3);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 .file.is-untitled {
   font-style: italic;
   color: var(--ink-3);

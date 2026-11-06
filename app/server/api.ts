@@ -4,6 +4,7 @@ import type { Plugin } from 'vite'
 import { status } from './ai.ts'
 import { claudePool, closeClaudePools } from './claude-pool.ts'
 import { embedder, warmEmbedder } from './embed.ts'
+import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
 import { refresh, search, paragraphs } from './recall.ts'
@@ -66,6 +67,13 @@ const routes: Record<string, Handler> = {
   'POST /api/history': async (req) => {
     const { doc, item } = await body<{ doc: string; item: unknown }>(req)
     await appendHistory(doc, item)
+    return { ok: true }
+  },
+  // Front-matter changes to a document that isn't open in the editor (starring it from the Vault, say).
+  'POST /api/meta': async (req) => {
+    const { path, patch } = await body<{ path: string; patch: MetaPatch }>(req)
+    const { meta, body: text, raw } = splitFull(await readDoc(path))
+    await writeDoc(path, joinFrontMatter(raw, applyPatch(meta, patch), text))
     return { ok: true }
   },
   'GET /api/meta': async (_req, url) => splitFrontMatter(await readDoc(url.searchParams.get('path') ?? '')).meta,

@@ -43,10 +43,11 @@ The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tab
 | Tab | Accept ghost text; in a diff, step through changes (↵ accept, ⌫ reject) |
 | ⌘↵ / ⌘⌫ | Accept all / reject all |
 | ⌥N | New draft, in the current folder (browsers keep ⌘N for a new window) |
+| ⌥⇧8 | Star the open piece as an exemplar (it sounds like you), or un-star it |
 | ⌥, | Settings: help ceiling, models, appearance, the Recall index |
 | ⌘. | Focus mode |
 | ⌘\ · ⌘⌥1–3 | Right panel · Material, History, Piece |
 
 ## What's not here yet
 
-The Thinking Space, voice profiles and ★ exemplars, imports, and the Tauri desktop shell. See the [design documents](../design/) for where these are going.
+The Thinking Space, voice profiles, imports, and the Tauri desktop shell. See the [design documents](../design/) for where these are going.

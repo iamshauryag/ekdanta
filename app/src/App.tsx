@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Editor } from './editor/Editor.tsx'
 import type { HistoryItem } from './editor/controller.ts'
 import { api, type FileEntry, type Settings as SettingsT, type Status } from './lib/api.ts'
-import { joinFrontMatter, splitFrontMatter, type Meta } from './lib/frontmatter.ts'
+import { applyPatch, joinFrontMatter, splitFrontMatter, type Meta, type MetaPatch } from './lib/frontmatter.ts'
 import { Panel, type PanelTab } from './components/Panel.tsx'
 import { Settings } from './components/Settings.tsx'
-import { Sidebar } from './components/Sidebar.tsx'
+import { Sidebar, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
 import { helpMod } from './editor/help.ts'
 
@@ -49,6 +49,7 @@ export function App() {
   const [saved, setSaved] = useState<'saved' | 'saving' | 'unsaved'>('saved')
 
   const [sidebarOpen, setSidebarOpen] = usePref('sidebar', true)
+  const [sidebarMode, setSidebarMode] = usePref<SidebarMode>('sidebarMode', 'vault')
   const [panelOpen, setPanelOpen] = usePref('panel', true)
   const [panelTab, setPanelTab] = usePref<PanelTab>('panelTab', 'piece')
   const [focus, setFocus] = useState(false)
@@ -166,10 +167,10 @@ export function App() {
     [files, openDoc, refreshFiles],
   )
 
-  const setMeta = (patch: Meta) => {
+  const setMeta = (patch: MetaPatch) => {
     const d = docRef.current
     if (!d) return
-    d.meta = { ...d.meta, ...patch }
+    d.meta = applyPatch(d.meta, patch)
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
     save().then(refreshFiles)
   }
@@ -191,6 +192,25 @@ export function App() {
       setPath(next)
     }
     refreshFiles()
+  }
+
+  /** ★ a document as an exemplar of its platform, or un-star it. */
+  const toggleExemplar = async (rel: string) => {
+    const f = files.find((x) => x.path === rel)
+    if (!f) return
+    const patch = { exemplar: f.exemplar ? null : 'true' }
+    setFiles((fs) => fs.map((x) => (x.path === rel ? { ...x, exemplar: !x.exemplar } : x)))
+    // The open document saves through the editor, so its front-matter must change there too.
+    if (docRef.current?.path === rel) setMeta(patch)
+    else await api.patchMeta(rel, patch).then(refreshFiles)
+  }
+
+  const showSidebar = (mode: SidebarMode) => {
+    if (sidebarOpen && sidebarMode === mode) setSidebarOpen(false)
+    else {
+      setSidebarMode(mode)
+      setSidebarOpen(true)
+    }
   }
 
   const record = useCallback(
@@ -222,6 +242,9 @@ export function App() {
       } else if (mod && e.key === 's') {
         e.preventDefault()
         save()
+      } else if (e.code === 'Digit8' && e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
+        e.preventDefault()
+        if (docRef.current) toggleExemplar(docRef.current.path)
       } else if (e.code === 'Comma' && !e.shiftKey && (e.metaKey || e.ctrlKey) !== e.altKey) {
         e.preventDefault()
         setSettingsOpen((o) => !o)
@@ -233,7 +256,8 @@ export function App() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [focus, save, newDraft, setPanelOpen, setPanelTab])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab, files])
 
   const current = files.find((f) => f.path === path)
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
@@ -273,8 +297,11 @@ export function App() {
       </header>
 
       <nav className="rail" aria-label="Main">
-        <button className={`rail-btn${sidebarOpen ? ' is-on' : ''}`} title="Vault" onClick={() => setSidebarOpen((o) => !o)}>
+        <button className={`rail-btn${sidebarOpen && sidebarMode === 'vault' ? ' is-on' : ''}`} title="Vault" onClick={() => showSidebar('vault')}>
           <Icon name="folder" />
+        </button>
+        <button className={`rail-btn${sidebarOpen && sidebarMode === 'exemplars' ? ' is-on' : ''}`} title="Exemplars" onClick={() => showSidebar('exemplars')}>
+          <Icon name="star" />
         </button>
         <button className="rail-btn" title="New draft (⌥N)" onClick={() => newDraft()}>
           <Icon name="compose" />
@@ -288,7 +315,7 @@ export function App() {
         </button>
       </nav>
 
-      {sidebarOpen && <Sidebar files={files} current={path} onOpen={openDoc} onCreate={newDraft} />}
+      {sidebarOpen && <Sidebar mode={sidebarMode} files={files} current={path} onOpen={openDoc} onCreate={newDraft} onStar={toggleExemplar} />}
 
       <main className="page-area">
         {loaded && (
@@ -296,7 +323,7 @@ export function App() {
             <div className="doc-meta">
               <label className="platform">
                 <select value={platform} onChange={(e) => setMeta({ platform: e.target.value })} aria-label="Platform">
-                  {PLATFORMS.map((p) => (
+                  {(PLATFORMS.includes(platform) ? PLATFORMS : [...PLATFORMS, platform]).map((p) => (
                     <option key={p} value={p}>
                       {platformLabel(p)}
                     </option>
@@ -341,6 +368,8 @@ export function App() {
           onRecallDot={(recallDot) => changeSettings({ recallDot })}
           status={status}
           path={loaded?.path ?? path}
+          exemplar={!!current?.exemplar}
+          onExemplar={() => current && toggleExemplar(current.path)}
           onClearHistory={() => setHistory([])}
         />
       )}

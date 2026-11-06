@@ -13,8 +13,25 @@ export function splitFrontMatter(content: string): { meta: Meta; body: string; r
   return { meta, body: content.slice(m[0].length).replace(/^\n/, ''), raw: m[1] }
 }
 
+/** A change to front-matter: null removes the key. */
+export type MetaPatch = Record<string, string | null>
+
+export function applyPatch(meta: Meta, patch: MetaPatch): Meta {
+  const next = { ...meta }
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) delete next[k]
+    else next[k] = v
+  }
+  return next
+}
+
 export function joinFrontMatter(raw: string, meta: Meta, body: string) {
-  const lines = raw ? raw.split('\n') : []
+  let lines = raw ? raw.split('\n') : []
+  // Keys Ekdanta removed (say, an un-starred exemplar) go; anything it doesn't parse stays.
+  lines = lines.filter((l) => {
+    const key = l.match(/^([A-Za-z_][\w-]*):/)?.[1]
+    return !key || key in meta
+  })
   for (const [key, value] of Object.entries(meta)) {
     const i = lines.findIndex((l) => l.startsWith(key + ':'))
     const line = `${key}: ${yamlValue(value)}`

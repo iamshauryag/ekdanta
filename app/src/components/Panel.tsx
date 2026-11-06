@@ -21,6 +21,8 @@ interface Props {
   onRecallDot: (b: boolean) => void
   status: Status | null
   path: string | null
+  exemplar: boolean
+  onExemplar: () => void
   onClearHistory: () => void
 }
 
@@ -140,6 +142,15 @@ function Piece(p: Props) {
             <label className="toggle">
               <input type="checkbox" checked={p.recallDot} onChange={(e) => p.onRecallDot(e.target.checked)} /> Show when Recall has something
             </label>
+          </dd>
+        </div>
+        <div>
+          <dt>Exemplar</dt>
+          <dd>
+            <button className={`star-toggle${p.exemplar ? ' is-on' : ''}`} onClick={p.onExemplar} title={`${p.exemplar ? 'Un-star' : 'Star'} (⌥⇧8)`}>
+              <Icon name="star" />
+              {p.exemplar ? 'Sounds like you' : 'Mark as sounding like you'}
+            </button>
           </dd>
         </div>
         <div className="col">

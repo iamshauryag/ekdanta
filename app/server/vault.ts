@@ -11,6 +11,7 @@ export interface FileEntry {
   folder: string
   title: string
   platform?: string
+  exemplar: boolean
   mtime: number
 }
 
@@ -37,6 +38,7 @@ export async function listFiles(): Promise<FileEntry[]> {
           folder: rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '',
           title: meta.title || firstHeading(body) || (isUntitled(rel) ? 'Untitled' : entry.name.replace(/\.md$/, '')),
           platform: meta.platform,
+          exemplar: meta.exemplar === 'true',
           mtime: stat.mtimeMs,
         })
       }
