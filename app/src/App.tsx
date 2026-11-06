@@ -230,6 +230,12 @@ export function App() {
     save().then(refreshFiles)
   }
 
+  /** Change front matter of a given file: the open one through the editor's copy, any other on disk. */
+  const setMetaOf = async (rel: string, patch: MetaPatch) => {
+    if (docRef.current?.path === rel) setMeta(patch)
+    else await api.patchMeta(rel, patch).then(refreshFiles)
+  }
+
   /** A title written for the first time also names the file. */
   const setTitle = async (title: string) => {
     const d = docRef.current
@@ -343,8 +349,7 @@ export function App() {
     const patch = { exemplar: f.exemplar ? null : 'true' }
     setFiles((fs) => fs.map((x) => (x.path === rel ? { ...x, exemplar: !x.exemplar } : x)))
     // The open document saves through the editor, so its front-matter must change there too.
-    if (docRef.current?.path === rel) setMeta(patch)
-    else await api.patchMeta(rel, patch).then(refreshFiles)
+    await setMetaOf(rel, patch)
     refreshVoices() // the profile for this platform is now out of date
   }
 
@@ -759,13 +764,13 @@ export function App() {
               key={loaded.key}
               store={fileText}
               target={loaded.meta.target ?? ''}
-              words={words}
               selectedWords={format?.selectedWords ?? 0}
               ceiling={ceiling}
               mod={mod}
               paper={loaded.meta.paper === 'a4' ? 'a4' : 'letter'}
               page={pageFor}
-              onTarget={(target) => setMeta({ target })}
+              // Bound to this file: a limit saved as the sheet closes lands here even if another file is opening.
+              onTarget={(target) => setMetaOf(loaded.path, { target })}
             />
           ) : (
             `${words.toLocaleString()} words`

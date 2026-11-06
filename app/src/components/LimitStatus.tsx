@@ -1,6 +1,7 @@
 // The length count in the status bar, and the small sheet behind it where a writer sets a limit
-// (typed, or a preset like UCAS) and copies the piece for a form. With no limit it is the plain word
-// count it always was. Everything counted here is formText(): the same text "Copy for a form" copies.
+// (typed, or a preset like UCAS) and copies the piece for a form. Everything counted here, with or
+// without a limit, is formText(): the same text "Copy for a form" copies, so template prompts and
+// Markdown never count and setting a limit never changes the number.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { countChars, countWords, formText } from '../lib/count.ts'
 import { formatTarget, parseTarget, pagesFromWords, presetOf, PRESETS, progress, unitLabel, type Target } from '../lib/targets.ts'
@@ -28,8 +29,6 @@ interface Props {
   store: TextStore
   /** The target as written in front matter, or '' for none. */
   target: string
-  /** The editor's own word count, shown when there is no limit. */
-  words: number
   /** Words selected in the editor, or 0. */
   selectedWords: number
   /** The help ceiling: the ⌘5 hint only shows when Passage help is allowed. */
@@ -52,7 +51,7 @@ export function measure(text: string, t: Target, paper: 'letter' | 'a4') {
   return t.unit === 'pages' ? pagesFromWords(words, paper) : words
 }
 
-export function LimitStatus({ store, target, words, selectedWords, ceiling, mod, paper, page, onTarget }: Props) {
+export function LimitStatus({ store, target, selectedWords, ceiling, mod, paper, page, onTarget }: Props) {
   const content = useSyncExternalStore(store.subscribe, store.get)
   const [open, setOpen] = useState(false)
   const t = parseTarget(target)
@@ -67,12 +66,13 @@ export function LimitStatus({ store, target, words, selectedWords, ceiling, mod,
   }, [content])
   const pageRef = useRef(page)
   pageRef.current = page
-  const text = useMemo(() => (live ? formText(content.length < BIG ? content : settled, (x) => pageRef.current(x)) : ''), [live && JSON.stringify(live), content, settled])
-  const count = live ? measure(text, live, paper) : 0
+  const text = useMemo(() => formText(content.length < BIG ? content : settled, (x) => pageRef.current(x)), [content, settled])
+  const words = useMemo(() => countWords(text), [text])
+  const count = live ? (live.unit === 'words' ? words : measure(text, live, paper)) : 0
   const p = live ? progress(count, live) : null
 
   let label: string
-  if (selectedWords && (!live || live.unit !== 'characters')) label = `${n(selectedWords)} of ${n(live?.unit === 'words' ? count : words)} words`
+  if (selectedWords && (!live || live.unit !== 'characters')) label = `${n(selectedWords)} of ${n(words)} words`
   else if (!live) label = t === 'invalid' ? `${n(words)} words / ?` : `${n(words)} words`
   else if (live.unit === 'pages') label = `≈ ${n(count)} / ${formatTarget(live)} pages`
   else label = `${n(count)} / ${formatTarget(live)} ${unitLabel(live)}`
@@ -102,11 +102,22 @@ export function LimitStatus({ store, target, words, selectedWords, ceiling, mod,
   )
 }
 
+/** Write a typed limit unless it is unchanged or can't be read. An emptied field removes the limit. */
+function commitLimit(v: string, target: string, onTarget: Props['onTarget']) {
+  const next = v.trim()
+  if (next === target.trim()) return
+  if (next && parseTarget(next) === 'invalid') return
+  onTarget(next || null)
+}
+
 /** Set a limit, pick a preset, or copy the piece as a form gets it. */
 function LimitSheet({ target, store, page, onTarget, onClose }: { target: string; store: TextStore; page: Props['page']; onTarget: Props['onTarget']; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const input = useRef<HTMLInputElement>(null)
   const [draft, setDraft] = useState(target)
+  // The latest draft and limit, read when the sheet goes away, however it goes away.
+  const latest = useRef({ draft, target, onTarget })
+  latest.current = { draft, target, onTarget }
   const [copied, setCopied] = useState<{ ok: true; count: number } | { ok: false; text: string } | null>(null)
   useEffect(() => setDraft(target), [target])
   const preset = presetOf(target)
@@ -120,12 +131,25 @@ function LimitSheet({ target, store, page, onTarget, onClose }: { target: string
     if (over > 0) el.style.left = `${el.offsetLeft - over}px`
   }, [])
 
-  // Click outside or Escape closes; whatever was typed is kept if it reads as a limit.
+  // Click outside, clicking the count again or opening another piece closes the sheet, and whatever was
+  // typed is kept if it reads as a limit. The sheet is gone before the input could blur, so the save
+  // happens as it unmounts. Escape is the one way out that drops what was typed.
+  useEffect(
+    () => () => {
+      const { draft, target, onTarget } = latest.current
+      commitLimit(draft, target, onTarget)
+    },
+    [],
+  )
   useEffect(() => {
     const away = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node) && !(e.target as Element).closest?.('.lm-count')) onClose()
     }
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      latest.current.draft = latest.current.target
+      onClose()
+    }
     document.addEventListener('mousedown', away)
     document.addEventListener('keydown', esc)
     return () => {
@@ -134,12 +158,7 @@ function LimitSheet({ target, store, page, onTarget, onClose }: { target: string
     }
   }, [onClose])
 
-  const commit = (v: string) => {
-    const next = v.trim()
-    if (next === target.trim()) return
-    if (next && parseTarget(next) === 'invalid') return
-    onTarget(next || null)
-  }
+  const commit = (v: string) => commitLimit(v, latest.current.target, onTarget)
 
   const copy = async () => {
     const text = formText(store.get(), page)
@@ -168,7 +187,7 @@ function LimitSheet({ target, store, page, onTarget, onClose }: { target: string
           onBlur={(e) => commit(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') commit(e.currentTarget.value)
-            else if (e.key === 'Escape') setDraft(target)
+            else if (e.key === 'Escape') setDraft((latest.current.draft = target))
           }}
         />
       </label>
