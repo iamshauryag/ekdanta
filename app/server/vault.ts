@@ -1,12 +1,14 @@
 // Reading and writing the vault: a plain folder of Markdown files.
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
 import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
+import { isSpecialPath } from '../src/lib/special.ts'
+import { createFileCache, type FileStat } from './cache.ts'
+import { META_DIR, VAULT } from './paths.ts'
 
-// `npm run dev` runs from app/, so the bundled sample vault is the default.
-export const VAULT = path.resolve(process.env.EKDANTA_VAULT ?? 'sample-vault')
-export const META_DIR = path.join(VAULT, '.ekdanta')
+export { META_DIR, VAULT }
 
 export interface FileEntry {
   path: string // relative to the vault, with forward slashes
@@ -24,42 +26,131 @@ export function resolveInVault(rel: string): string {
   return abs
 }
 
-export async function listFiles(): Promise<FileEntry[]> {
-  const out: FileEntry[] = []
-  async function walk(dir: string) {
-    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith('.')) continue
-      const abs = path.join(dir, entry.name)
-      if (entry.isDirectory()) await walk(abs)
-      else if (entry.name.endsWith('.md')) {
-        const rel = path.relative(VAULT, abs).split(path.sep).join('/')
-        const [stat, raw] = await Promise.all([fs.stat(abs), fs.readFile(abs, 'utf8')])
-        const { meta, body } = splitFrontMatter(raw)
-        out.push({
-          path: rel,
-          folder: rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '',
-          title: meta.title || firstHeading(body) || (isUntitled(rel) ? 'Untitled' : entry.name.replace(/\.md$/, '')),
-          platform: meta.platform,
-          exemplar: meta.exemplar === 'true',
-          mtime: stat.mtimeMs,
-        })
-      }
-    }
+// The vault's files, read once and re-read only when they change (on disk or through Ekdanta).
+const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
+  const { meta, body } = splitFrontMatter(raw)
+  return {
+    path: rel,
+    folder: rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '',
+    title: meta.title || firstHeading(body) || (isUntitled(rel) ? 'Untitled' : path.posix.basename(rel, '.md')),
+    platform: meta.platform,
+    exemplar: meta.exemplar === 'true',
+    mtime: stat.mtime,
   }
-  await walk(VAULT)
-  return out.sort((a, b) => a.path.localeCompare(b.path))
-}
+})
+
+/** Every document in the vault, sorted by path. Only files changed since the last call are read. */
+export const listFiles = (): Promise<FileEntry[]> => cache.list()
+
+/** Every document's path, mtime and size, from stats alone: cheap enough to poll. */
+export const statAll = (): Promise<FileStat[]> => cache.statAll()
 
 export async function readDoc(rel: string) {
   return fs.readFile(resolveInVault(rel), 'utf8')
 }
 
-export async function writeDoc(rel: string, content: string) {
+// ---- Writing --------------------------------------------------------------------------------
+// Every write of a document goes through writeDoc: hooks run first (version history registers one),
+// then the file is replaced atomically, and a record of what Ekdanta wrote is kept so a change made
+// outside Ekdanta can be told apart from our own.
+
+export interface BeforeWrite {
+  path: string
+  /** What's on disk now, or null for a new file. */
+  oldContent: string | null
+  newContent: string
+  /** Why it's being written: 'save', 'meta', 'rename', 'relink', 'create', 'duplicate'. */
+  reason: string
+}
+type WriteHook = (w: BeforeWrite) => void | Promise<void>
+const writeHooks: WriteHook[] = []
+
+/** Run `hook` before every document write. A hook that throws is logged and never stops the save. */
+export function onBeforeWrite(hook: WriteHook) {
+  writeHooks.push(hook)
+  return () => {
+    const i = writeHooks.indexOf(hook)
+    if (i >= 0) writeHooks.splice(i, 1)
+  }
+}
+
+/** Replace a file in one step: write a temporary file beside it, then rename it over the original. */
+export async function atomicWrite(abs: string, data: string | Buffer) {
+  await fs.mkdir(path.dirname(abs), { recursive: true })
+  // A dot-file, so a listing never shows a half-written document.
+  const tmp = path.join(path.dirname(abs), `.${path.basename(abs)}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`)
+  try {
+    await fs.writeFile(tmp, data)
+    await fs.rename(tmp, abs)
+  } catch (e) {
+    await fs.unlink(tmp).catch(() => {})
+    throw e
+  }
+}
+
+export async function writeDoc(rel: string, content: string, opts: { reason?: string } = {}): Promise<{ mtime: number }> {
   const abs = resolveInVault(rel)
   if (!abs.endsWith('.md')) throw new Error('Only .md files can be written')
-  await fs.mkdir(path.dirname(abs), { recursive: true })
-  await fs.writeFile(abs, content, 'utf8')
+  if (writeHooks.length) {
+    const oldContent = await fs.readFile(abs, 'utf8').catch(() => null)
+    const w: BeforeWrite = { path: rel, oldContent, newContent: content, reason: opts.reason ?? 'save' }
+    for (const hook of writeHooks) {
+      try {
+        await hook(w)
+      } catch (e) {
+        console.error(`[ekdanta] a write hook failed for ${rel}; saving anyway:`, e)
+      }
+    }
+  }
+  await atomicWrite(abs, content)
+  cache.invalidate(rel)
+  const { mtimeMs: mtime } = await fs.stat(abs)
+  try {
+    await atomicWrite(writtenBody(rel), content)
+    await atomicWrite(writtenInfo(rel), JSON.stringify({ mtime, hash: hashOf(content) }))
+  } catch (e) {
+    console.error(`[ekdanta] couldn't record the write of ${rel}:`, e)
+  }
+  return { mtime }
 }
+
+export const hashOf = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
+
+/** A document's key for Ekdanta's per-document files: `essays/on-walking.md` → `essays__on-walking`. */
+export const docKey = (rel: string) => rel.replace(/\.md$/, '').replace(/\//g, '__')
+
+const WRITTEN = path.join(META_DIR, 'written')
+const writtenInfo = (rel: string) => path.join(WRITTEN, docKey(rel) + '.json')
+const writtenBody = (rel: string) => path.join(WRITTEN, docKey(rel) + '.md')
+
+/** What Ekdanta last wrote to a document (the whole file, front matter included), or null if it never has. */
+export async function lastWritten(rel: string): Promise<{ mtime: number; hash: string; body: string } | null> {
+  resolveInVault(rel)
+  try {
+    const info = JSON.parse(await fs.readFile(writtenInfo(rel), 'utf8')) as { mtime: number; hash: string }
+    const body = await fs.readFile(writtenBody(rel), 'utf8')
+    if (typeof info.mtime !== 'number' || typeof info.hash !== 'string') return null
+    return { mtime: info.mtime, hash: info.hash, body }
+  } catch {
+    return null
+  }
+}
+
+// ---- Sidecars ---------------------------------------------------------------------------------
+// Files Ekdanta keeps beside or about a document. They follow it through rename, move, trash and
+// restore. The name is also the file's name inside a trash folder, so it must stay stable.
+
+const sidecarList: { name: string; of: (rel: string) => string }[] = []
+
+/** Make a per-document file (or folder) follow its document. `of` maps a document's vault path to the file's absolute path. */
+export function registerSidecar(name: string, of: (rel: string) => string) {
+  if (!/^[\w.-]+$/.test(name) || name === 'doc.md' || name === 'info.json') throw new Error(`Bad sidecar name: ${name}`)
+  if (sidecarList.some((s) => s.name === name)) throw new Error(`Sidecar ${name} is already registered`)
+  sidecarList.push({ name, of })
+}
+
+/** A document's sidecars: [absolute path, name]. */
+const sidecarsOf = (rel: string) => sidecarList.map((s) => [s.of(rel), s.name] as const)
 
 // New documents start as untitled.md and take their name from the title once it's written.
 
@@ -97,7 +188,7 @@ export async function createDoc(kinds: Kind[], folder: string, platform?: string
   folder = folder.replace(/^\/+|\/+$/g, '')
   const guess = kindOfFolder(kinds, folder.split('/').pop()!)?.id ?? kinds[0]?.id ?? 'essay'
   const rel = await freePath(folder, 'untitled')
-  await writeDoc(rel, `---\ntitle: \nplatform: ${platform ?? guess}\nstatus: draft\ncreated: ${today()}\n---\n\n`)
+  await writeDoc(rel, `---\ntitle: \nplatform: ${platform ?? guess}\nstatus: draft\ncreated: ${today()}\n---\n\n`, { reason: 'create' })
   return rel
 }
 
@@ -107,15 +198,27 @@ export async function nameDoc(rel: string, title: string) {
   return moveDoc(rel, await freePath(folderOf(rel), slugify(title)))
 }
 
-/** Rename a document. Its history, Thinking Space and Ekdanta's notes on it move too (if there are any yet). */
+/** Rename a document. Its sidecars (history, Thinking Space, Ekdanta's notes on it) move too, if there are any yet. */
 async function moveDoc(rel: string, next: string) {
   await fs.mkdir(path.dirname(resolveInVault(next)), { recursive: true })
   await fs.rename(resolveInVault(rel), resolveInVault(next))
-  await fs.rename(historyFile(rel), historyFile(next)).catch(() => {})
-  await fs.rename(resolveInVault(canvasOf(rel)), resolveInVault(canvasOf(next))).catch(() => {})
-  await fs.rename(sideFile(rel), sideFile(next)).catch(() => {})
+  cache.invalidate(rel)
+  cache.invalidate(next)
+  const to = new Map(sidecarsOf(next).map(([abs, name]) => [name, abs]))
+  for (const [from, name] of sidecarsOf(rel)) {
+    const dest = to.get(name)!
+    if (!(await exists(from))) continue
+    await fs.mkdir(path.dirname(dest), { recursive: true })
+    await fs.rename(from, dest).catch((e) => console.error(`[ekdanta] couldn't move ${name} for ${rel}:`, e))
+  }
   return next
 }
+
+const exists = (abs: string) =>
+  fs.access(abs).then(
+    () => true,
+    () => false,
+  )
 
 /**
  * After a platform change, move a document into that platform's folder. Only documents in
@@ -127,6 +230,8 @@ export async function placeDoc(kinds: Kind[], rel: string) {
   const kind = findKind(kinds, meta.platform ?? '')
   const folder = folderOf(rel)
   const holds = (f: string) => kindOfFolder(kinds, f)?.id
+  // Templates, a journal, sources and the like stay where they are, whatever kind they name.
+  if (isSpecialPath(rel)) return rel
   if (!kind || holds(folder) === kind.id) return rel
   if (folder && !holds(folder)) return rel
   const dirs = (await fs.readdir(VAULT, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name)
@@ -140,16 +245,16 @@ const today = () => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-async function patchDoc(rel: string, patch: MetaPatch) {
+async function patchDoc(rel: string, patch: MetaPatch, reason = 'meta') {
   const { meta, body, raw } = splitFull(await readDoc(rel))
-  await writeDoc(rel, joinFrontMatter(raw, applyPatch(meta, patch), body))
+  await writeDoc(rel, joinFrontMatter(raw, applyPatch(meta, patch), body), { reason })
 }
 
 /** Rename a document: its title, its file, and every [[link]] to it in the vault. */
 export async function renameDoc(rel: string, title: string) {
   title = title.trim()
   if (!title) return rel
-  await patchDoc(rel, { title })
+  await patchDoc(rel, { title }, 'rename')
   const name = slugify(title)
   const from = path.posix.basename(rel, '.md')
   if (name === from) return rel
@@ -166,13 +271,18 @@ async function relink(prev: string, next: string) {
   const newFull = next.replace(/\.md$/, '')
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const re = new RegExp(`\\[\\[(${esc(oldFull)}|${esc(oldName)})(\\.md)?(#[^\\]|]*)?(\\|[^\\]]*)?\\]\\]`, 'g')
-  const files = (await listFiles()).map((f) => resolveInVault(f.path))
+  const fix = (text: string) => text.replace(re, (_m, target: string, ext = '', heading = '', alias = '') => `[[${target === oldFull ? newFull : newName}${ext}${heading}${alias}]]`)
+  for (const f of await listFiles()) {
+    const text = await readDoc(f.path)
+    const out = fix(text)
+    if (out !== text) await writeDoc(f.path, out, { reason: 'relink' })
+  }
   const voice = path.join(META_DIR, 'voice')
-  for (const f of await fs.readdir(voice).catch(() => [] as string[])) if (f.endsWith('.md')) files.push(path.join(voice, f))
-  for (const file of files) {
-    const text = await fs.readFile(file, 'utf8')
-    const out = text.replace(re, (_m, target: string, ext = '', heading = '', alias = '') => `[[${target === oldFull ? newFull : newName}${ext}${heading}${alias}]]`)
-    if (out !== text) await fs.writeFile(file, out, 'utf8')
+  for (const f of await fs.readdir(voice).catch(() => [] as string[])) {
+    if (!f.endsWith('.md')) continue
+    const text = await fs.readFile(path.join(voice, f), 'utf8')
+    const out = fix(text)
+    if (out !== text) await atomicWrite(path.join(voice, f), out)
   }
 }
 
@@ -184,7 +294,7 @@ export async function moveToFolder(kinds: Kind[], rel: string, folder: string) {
   if (folder === folderOf(rel)) return rel
   const next = await moveDoc(rel, await freePath(folder, path.posix.basename(rel, '.md')))
   const platform = kindOfFolder(kinds, folder)?.id
-  if (platform) await patchDoc(next, { platform })
+  if (platform) await patchDoc(next, { platform }, 'move')
   return next
 }
 
@@ -196,19 +306,14 @@ export async function duplicateDoc(rel: string) {
   // A copy isn't an exemplar or a published piece until the writer says so.
   const patch: MetaPatch = { title, created: today(), exemplar: null }
   if (meta.status) patch.status = 'draft'
-  await writeDoc(next, joinFrontMatter(raw, applyPatch(meta, patch), body))
+  await writeDoc(next, joinFrontMatter(raw, applyPatch(meta, patch), body), { reason: 'duplicate' })
   await fs.copyFile(resolveInVault(canvasOf(rel)), resolveInVault(canvasOf(next))).catch(() => {})
   return next
 }
 
 // Deleting moves a document into .ekdanta/trash/, with everything Ekdanta keeps about it, so it can come back.
 const TRASH = path.join(META_DIR, 'trash')
-const parts = (rel: string) => [
-  [resolveInVault(rel), 'doc.md'],
-  [resolveInVault(canvasOf(rel)), 'doc.canvas'],
-  [historyFile(rel), 'history.jsonl'],
-  [sideFile(rel), 'thinking.json'],
-]
+const parts = (rel: string) => [[resolveInVault(rel), 'doc.md'] as const, ...sidecarsOf(rel)]
 
 export interface Trashed {
   id: string
@@ -223,6 +328,7 @@ export async function trashDoc(rel: string): Promise<Trashed> {
   const dir = path.join(TRASH, id)
   await fs.mkdir(dir, { recursive: true })
   for (const [from, to] of parts(rel)) await fs.rename(from, path.join(dir, to)).catch(() => {})
+  cache.invalidate(rel)
   const item = { id, path: rel, title: meta.title || firstHeading(body) || path.posix.basename(rel, '.md'), deleted: new Date().toISOString() }
   await fs.writeFile(path.join(dir, 'info.json'), JSON.stringify(item), 'utf8')
   return item
@@ -248,9 +354,11 @@ export async function restoreDoc(id: string) {
   const rel = await freePath(folderOf(item.path), path.posix.basename(item.path, '.md'))
   await fs.mkdir(path.dirname(resolveInVault(rel)), { recursive: true })
   for (const [to, from] of parts(rel)) {
+    if (!(await exists(path.join(dir, from)))) continue
     await fs.mkdir(path.dirname(to), { recursive: true })
     await fs.rename(path.join(dir, from), to).catch(() => {})
   }
+  cache.invalidate(rel)
   await fs.rm(dir, { recursive: true, force: true })
   return rel
 }
@@ -266,7 +374,13 @@ export async function saveAsset(doc: string, name: string, base64: string) {
   let rel = ''
   for (let n = 1; ; n++) {
     rel = `attachments/${stem}${n > 1 ? '-' + n : ''}.${ext}`
-    if (!(await fs.access(resolveInVault(rel)).then(() => true, () => false))) break
+    if (
+      !(await fs.access(resolveInVault(rel)).then(
+        () => true,
+        () => false,
+      ))
+    )
+      break
   }
   await fs.mkdir(path.dirname(resolveInVault(rel)), { recursive: true })
   await fs.writeFile(resolveInVault(rel), Buffer.from(base64, 'base64'))
@@ -286,8 +400,11 @@ export async function discardIfEmpty(rel: string) {
   const { meta, body } = splitFrontMatter(await readDoc(rel))
   if (meta.title?.trim() || body.trim()) return false
   // Thinking already done for it counts as content.
-  if (await fs.access(resolveInVault(canvasOf(rel))).then(() => true, () => false)) return false
+  if (await exists(resolveInVault(canvasOf(rel)))) return false
   await fs.unlink(resolveInVault(rel))
+  cache.invalidate(rel)
+  // Its sidecars go too, so the next untitled.md doesn't inherit them.
+  for (const [abs] of sidecarsOf(rel)) await fs.rm(abs, { recursive: true, force: true }).catch(() => {})
   return true
 }
 
@@ -308,12 +425,19 @@ function firstHeading(body: string) {
 }
 
 const canvasOf = (rel: string) => rel.replace(/\.md$/, '.canvas')
-const sideFile = (rel: string) => path.join(META_DIR, 'thinking', rel.replace(/\.md$/, '').replace(/\//g, '__') + '.json')
+const sideFile = (rel: string) => path.join(META_DIR, 'thinking', docKey(rel) + '.json')
 
 // Help history: one JSON object per line, per document.
 function historyFile(doc: string) {
-  return path.join(META_DIR, 'history', doc.replace(/\.md$/, '').replace(/\//g, '__') + '.jsonl')
+  return path.join(META_DIR, 'history', docKey(doc) + '.jsonl')
 }
+
+// The built-in sidecars. The names match what older trash folders hold, so those still restore.
+registerSidecar('doc.canvas', (rel) => resolveInVault(canvasOf(rel)))
+registerSidecar('history.jsonl', historyFile)
+registerSidecar('thinking.json', sideFile)
+registerSidecar('written.json', writtenInfo)
+registerSidecar('written.md', writtenBody)
 
 export async function appendHistory(doc: string, item: unknown) {
   resolveInVault(doc)
@@ -326,7 +450,10 @@ export async function readHistory(doc: string): Promise<unknown[]> {
   resolveInVault(doc)
   try {
     const raw = await fs.readFile(historyFile(doc), 'utf8')
-    return raw.split('\n').filter(Boolean).map((l) => JSON.parse(l))
+    return raw
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l))
   } catch {
     return []
   }
