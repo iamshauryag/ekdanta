@@ -46,7 +46,7 @@
     --del-bg: rgba(200, 150, 120, 0.12);
     --shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.4);
     --scrim: rgba(0, 0, 0, 0.45);
-  --hl: rgba(205, 160, 40, 0.34);
+    --hl: rgba(205, 160, 40, 0.34);
     color-scheme: dark;
   }
 }
@@ -2287,7 +2287,9 @@ kbd {
 }
 .mat-frag.is-done .tick {
   border-color: var(--accent);
-  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 6.2l2 2 4-4.4' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 10px no-repeat;
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 6.2l2 2 4-4.4' fill='none' stroke='white' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 10px no-repeat;
 }
 .mat-frag .tick:hover {
   border-color: var(--accent);
@@ -3130,4 +3132,79 @@ button.keymap-key:hover {
   .read-bar {
     bottom: 16px;
   }
+}
+
+/* feature: edge-lines */
+.hl-edge {
+  max-width: 560px;
+  margin: 4px 0 18px;
+  padding: 6px;
+}
+.hl-edge .hl-card-foot {
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+  padding: 7px 8px 3px;
+}
+.hl-edge-option {
+  display: block;
+  padding: 6px 10px 7px;
+}
+.hl-edge-text {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  line-height: 1.35;
+}
+.hl-edge-from {
+  margin-top: 2px;
+  font: 11.5px/1.35 var(--sans);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hl-edge-option.is-sel .hl-edge-from {
+  color: inherit;
+  opacity: 0.7;
+}
+.hl-edge .hl-link {
+  font-size: 10.5px;
+}
+.edge-field dt {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.edge-field dd {
+  flex-basis: 100%;
+}
+.edge-suggest {
+  font-size: 11.5px;
+}
+.edge-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 7px;
+  font: 13px/1.4 var(--sans);
+  color: var(--ink);
+  background: transparent;
+}
+.edge-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.edge-count {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+}
+/* Tiptap sets widgets (contenteditable=false) to white-space: normal; a proposed break must still show. */
+.pm .cm-ins.has-break {
+  white-space: pre-wrap;
 }

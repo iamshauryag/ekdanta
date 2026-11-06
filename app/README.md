@@ -56,6 +56,10 @@ Each kind gets a short, readable profile in `.ekdanta/voice/<kind>.md`, built fr
 
 **Start drafting** (⌥T again) returns to the page, with the fragments in the Material panel: the group nearest the paragraph you're writing is open, fragments the draft already covers are ticked, and you can drag one onto the page. You can keep thinking there without opening the canvas: add, edit or remove thoughts, tick one off by hand, group them into themes and rename a theme. A thought that matches one of your notes shows it underneath. The canvas is saved as `<piece>.canvas` in [JSON Canvas](https://jsoncanvas.org) format, so it opens in Obsidian too.
 
+## Subject, title and opening line
+
+The line a piece is judged by is drawn from your own sentences, never written fresh. Once the draft has three sentences, ⌘3 in the title offers titles (for a LinkedIn post or a text message, opening lines, since their title isn't published). An email's Subject and a blog post's Excerpt, in the Piece panel, have a "Suggest from my draft" link while the help ceiling is 3 or more. Each candidate shows the sentence it came from. Code drops any whose source isn't really in the draft, that names a number or name the draft doesn't, or that is too long for its slot (subject 70 characters, title 90, opening line 210, excerpt 300). ↑↓ and ↵ choose: a title, subject or excerpt is written to the front matter; an opening line is proposed on the page to accept or reject. Asking again shows new ones. `EKDANTA_FAKE_MODEL=1` swaps in a stand-in model for testing.
+
 ## Keys
 
 Every shortcut below except the help ladder's can be changed in Settings → Keyboard shortcuts: click one and press the new keys. Ekdanta warns when keys are already taken, by another command (offering to swap) or by the browser or macOS.

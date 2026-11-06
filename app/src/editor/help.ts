@@ -4,6 +4,7 @@ import type { Node as PMNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
 import { diffWordsWithSpace } from 'diff'
+import { EDGE_NAMES, fromLine, type EdgeCandidate, type EdgeSlot } from '../lib/edge.ts'
 
 export type Level = 1 | 2 | 3 | 4 | 5
 
@@ -15,22 +16,22 @@ export interface RecallResult {
   score: number
 }
 
-export type Hunk =
-  | { kind: 'eq'; text: string }
-  | { kind: 'chg'; del: string; ins: string; state: 'pending' | 'accepted' | 'rejected' }
+export type Hunk = { kind: 'eq'; text: string } | { kind: 'chg'; del: string; ins: string; state: 'pending' | 'accepted' | 'rejected' }
 
 // Positions are document positions. `at` is where a card goes: just after the block the help is about.
 export type Help =
-  | { kind: 'loading'; level: Level; from: number; to: number; at: number; slow?: boolean }
-  | { kind: 'notice'; level?: Level; from: number; to: number; at: number; text: string; tone?: 'error' }
+  | { kind: 'loading'; level: Level; from: number; to: number; at: number; slow?: boolean; label?: string }
+  | { kind: 'notice'; level?: Level; from: number; to: number; at: number; text: string; tone?: 'error'; label?: string }
   | { kind: 'recall'; level: 1; from: number; to: number; at: number; results: RecallResult[]; page: number; sel: number }
   | { kind: 'nudge'; level: 2; from: number; to: number; at: number; text: string; history: string[]; inMargin: boolean }
   | { kind: 'word'; level: 3; mode: 'replace' | 'next'; from: number; to: number; at: number; options: string[]; sel: number; seen: string[] }
   | { kind: 'ghost'; level: 4; from: number; to: number; at: number; text: string; seen: string[] }
+  // A subject, title, excerpt or opening line drawn from the draft. Its card sits at the top of the page.
+  | { kind: 'edge'; level: 3; slot: EdgeSlot; from: number; to: number; at: number; options: EdgeCandidate[]; sel: number; seen: string[]; note?: string }
   | { kind: 'bar'; level: 4 | 5; from: number; to: number; busy: boolean }
   | {
       kind: 'diff'
-      level: 4 | 5
+      level: 3 | 4 | 5 // 3: an opening line proposed in place
       from: number
       to: number
       at: number
@@ -115,6 +116,8 @@ export interface WidgetHooks {
   runInstruction(text: string): void
   dismiss(): void
   pickWord(index: number): void
+  pickEdge(index: number): void
+  moreEdge(): void
   insertRecall(index: number): void
   openSource(doc: string): void
   resolveNudge(): void
@@ -158,6 +161,8 @@ export function noteCmdWorks() {
   window.dispatchEvent(new Event('ekdanta:helpmod'))
 }
 export const levelLabel = (l: Level) => `${helpMod}${l} · ${LEVEL_NAMES[l]}`
+/** Edge lines from ⌘3 in the title carry the key; those asked for beside a field are named for it. */
+export const edgeLabel = (slot: EdgeSlot) => (slot === 'title' || slot === 'opening' ? `${helpMod}3 · ${EDGE_NAMES[slot]}` : EDGE_NAMES[slot])
 
 // ---- Decorations ----------------------------------------------------------------------------
 
@@ -176,11 +181,11 @@ function buildDecorations(doc: PMNode, help: Help, d: Decoration[]) {
   switch (help.kind) {
     case 'loading':
       scope(help.from, help.to)
-      card(help.at, `loading-${help.level}-${help.slow}`, () => lineWidget(levelLabel(help.level), help.slow ? 'Still working · Esc to cancel' : '', 'loading'))
+      card(help.at, `loading-${help.level}-${help.slow}-${help.label}`, () => lineWidget(help.label ?? levelLabel(help.level), help.slow ? 'Still working · Esc to cancel' : '', 'loading'))
       break
     case 'notice':
       if (help.level) scope(help.from, help.to)
-      card(help.at, `notice-${help.text}`, () => lineWidget(help.level ? levelLabel(help.level) : '', help.text, help.tone === 'error' ? 'error' : 'notice'))
+      card(help.at, `notice-${help.text}`, () => lineWidget(help.label ?? (help.level ? levelLabel(help.level) : ''), help.text, help.tone === 'error' ? 'error' : 'notice'))
       break
     case 'recall':
       scope(help.from, help.to)
@@ -195,6 +200,10 @@ function buildDecorations(doc: PMNode, help: Help, d: Decoration[]) {
     case 'word':
       scope(help.from, help.to, 'cm-scope cm-scope-word')
       card(help.at, `word-${help.options.join('|')}-${help.sel}`, () => wordWidget(help))
+      break
+    case 'edge':
+      scope(help.from, help.to)
+      card(help.at, `edge-${help.slot}-${help.options.map((o) => o.text).join('|')}-${help.sel}-${help.note ?? ''}`, () => edgeWidget(help), -1)
       break
     case 'ghost':
       card(help.at, `ghost-${help.text}`, () => el('span', 'hl-ghost', help.text), 1)
@@ -345,6 +354,35 @@ function wordWidget(help: Extract<Help, { kind: 'word' }>) {
   return wrap
 }
 
+/** Edge lines: each candidate with the sentence of the draft it came from. */
+function edgeWidget(help: Extract<Help, { kind: 'edge' }>) {
+  const list = el('div', 'hl-card hl-edge')
+  const head = el('div', 'hl-card-head')
+  head.append(el('span', 'hl-label', edgeLabel(help.slot)), el('span', 'hl-meta', 'drawn from your draft'))
+  list.append(head)
+  help.options.forEach((o, i) => {
+    const row = el('div', 'hl-option hl-edge-option' + (i === help.sel ? ' is-sel' : ''))
+    const text = el('div', 'hl-edge-text')
+    text.append(el('span', undefined, o.text), el('span', 'hl-key', i === help.sel ? '↵' : String(i + 1)))
+    row.append(text, el('div', 'hl-edge-from', `from: ${fromLine(o.source)}`))
+    row.title = o.source
+    row.onmousedown = press(() => hooks?.pickEdge(i))
+    list.append(row)
+  })
+  const foot = el('div', 'hl-card-foot')
+  const hints = el('span')
+  hints.append(kbd('↑↓'), ' choose · ', kbd('↵'), ' use · ', kbd('Esc'))
+  // Once the draft has no more lines to offer, say so where 'more' was and keep these to choose from.
+  if (help.note) foot.append(hints, el('span', 'hl-meta', help.note))
+  else {
+    const more = el('button', 'hl-link', help.slot === 'title' || help.slot === 'opening' ? `${helpMod}3 more` : 'More')
+    more.onmousedown = press(() => hooks?.moreEdge())
+    foot.append(hints, more)
+  }
+  list.append(foot)
+  return list
+}
+
 let lastInstruction = ''
 
 function barWidget() {
@@ -386,7 +424,8 @@ function barWidget() {
 }
 
 function insWidget(text: string, state: 'pending' | 'accepted', index: number, focused: boolean) {
-  const span = el('span', `cm-ins is-${state}${focused ? ' is-focus' : ''}`, text)
+  // A proposed paragraph break shows as one, not as a space (an opening line goes in as its own paragraph).
+  const span = el('span', `cm-ins is-${state}${focused ? ' is-focus' : ''}${text.includes('\n') ? ' has-break' : ''}`, text)
   if (focused) {
     const marks = el('span', 'hl-marks')
     const yes = el('button', 'hl-yes', '✓')
@@ -562,9 +601,7 @@ function commonTrailingSpace(a: string, b: string) {
 }
 
 export function changedRatio(original: string, hunks: Hunk[]) {
-  const changedWords = hunks
-    .filter((h): h is Hunk & { kind: 'chg' } => h.kind === 'chg')
-    .reduce((n, h) => n + h.del.split(/\s+/).filter(Boolean).length, 0)
+  const changedWords = hunks.filter((h): h is Hunk & { kind: 'chg' } => h.kind === 'chg').reduce((n, h) => n + h.del.split(/\s+/).filter(Boolean).length, 0)
   const total = original.split(/\s+/).filter(Boolean).length || 1
   return changedWords / total
 }

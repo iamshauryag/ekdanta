@@ -11,6 +11,7 @@ import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
 import { markBriefs, readBrief, writeBrief } from './brief.ts'
+import { runEdge, type EdgeRequest } from './edge.ts'
 import { local, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import {
@@ -128,6 +129,8 @@ const routes: Record<string, Handler> = {
     const { doc, text } = await body<{ doc: string; text: string }>(req)
     return { text: await writeBrief(doc, text) }
   },
+  // A subject, title, excerpt or opening line drawn from the draft.
+  'POST /api/edge': async (req) => runEdge(await body<EdgeRequest>(req)),
   // Background check for the Recall dot: is there anything strong for this paragraph?
   'POST /api/recall-probe': async (req) => {
     const { text, doc } = await body<{ text: string; doc: string }>(req)

@@ -7,6 +7,7 @@ import { Icon } from './Icon.tsx'
 import { binding, formatKey, titled } from '../lib/keys.ts'
 import { helpMod } from '../editor/help.ts'
 import { BriefCard } from './BriefCard.tsx'
+import { EDGE_LIMITS, EDGE_NAMES, showSuggestLink, type EdgeSlot } from '../lib/edge.ts'
 
 export type PanelTab = 'material' | 'outline' | 'history' | 'piece'
 
@@ -32,6 +33,8 @@ interface Props {
   platform: string
   ceiling: number
   onCeiling: (n: number) => void
+  /** An email's subject or a blog post's excerpt, with 'Suggest from my draft' beside it. */
+  field: { slot: EdgeSlot; key: string; value: string; canSuggest: boolean; onChange: (v: string) => void } | null
   recallDot: boolean
   onRecallDot: (b: boolean) => void
   status: Status | null
@@ -80,9 +83,7 @@ export function Panel(p: Props) {
         </button>
       </div>
       <div className="panel-body">
-        {p.tab === 'material' && (
-          <Material thinking={p.thinking} covered={p.covered} nearest={p.nearest} onOpen={p.onThinking} thoughts={p.thoughts} onOpenDoc={p.onOpenDoc} />
-        )}
+        {p.tab === 'material' && <Material thinking={p.thinking} covered={p.covered} nearest={p.nearest} onOpen={p.onThinking} thoughts={p.thoughts} onOpenDoc={p.onOpenDoc} />}
         {p.tab === 'outline' && <Outline outline={p.outline} onHeading={p.onHeading} />}
         {p.tab === 'history' && <HistoryLog history={p.history} />}
         {p.tab === 'piece' && <Piece {...p} />}
@@ -347,6 +348,54 @@ function HistoryLog({ history }: { history: HistoryItem[] }) {
   )
 }
 
+/** Subject or Excerpt: the writer's own text field, with suggestions drawn from the draft when help allows level 3. */
+function EdgeField({ field, suggest }: { field: NonNullable<Props['field']>; suggest: boolean }) {
+  const [draft, setDraft] = useState(field.value)
+  useEffect(() => setDraft(field.value), [field.value])
+  const commit = () => {
+    const v = draft.replace(/\s+/g, ' ').trim()
+    if (v !== field.value) field.onChange(v)
+  }
+  const name = EDGE_NAMES[field.slot]
+  const over = draft.length > EDGE_LIMITS[field.slot]
+  return (
+    <div className="col edge-field">
+      <dt>
+        <span>{name}</span>
+        {suggest && (
+          <button className="link edge-suggest" onClick={() => window.dispatchEvent(new CustomEvent('ekdanta:edge', { detail: { slot: field.slot } }))}>
+            Suggest from my draft
+          </button>
+        )}
+      </dt>
+      <dd>
+        <textarea
+          className="edge-input"
+          aria-label={name}
+          rows={field.slot === 'excerpt' ? 3 : 1}
+          value={draft}
+          placeholder={field.slot === 'subject' ? 'No subject yet' : 'No excerpt yet'}
+          onChange={(e) => setDraft(e.target.value.replace(/\n/g, ' '))}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              e.currentTarget.blur()
+            } else if (e.key === 'Escape') {
+              setDraft(field.value)
+            }
+          }}
+        />
+        {over && (
+          <span className="muted edge-count">
+            {draft.length} characters · often cut off after {EDGE_LIMITS[field.slot]}
+          </span>
+        )}
+      </dd>
+    </div>
+  )
+}
+
 function Piece(p: Props) {
   const typical = findKind(kinds(), p.platform)?.words ?? 1000
   const s = p.status
@@ -361,6 +410,7 @@ function Piece(p: Props) {
           <dt>Kind</dt>
           <dd>{kindName(kinds(), p.platform)}</dd>
         </div>
+        {p.field && <EdgeField field={p.field} suggest={p.field.canSuggest && showSuggestLink(p.ceiling)} />}
         <div className="col">
           <dt>Length</dt>
           <dd>

@@ -1,4 +1,5 @@
 import type { Kind } from './kinds.ts'
+import type { EdgeCandidate, EdgeSlot } from './edge.ts'
 // Thin client for the local server in server/api.ts.
 export interface FileEntry {
   path: string
@@ -137,8 +138,7 @@ export const api = {
       .then((d) => d.content),
   thinking: (doc: string) => fetch('/api/thinking?doc=' + encodeURIComponent(doc)).then(json<Thinking>),
   saveThinking: (doc: string, t: Thinking) => fetch('/api/thinking', send('PUT', { doc, ...t })).then(json),
-  thinkingLinks: (fragments: Frag[], skip: string[]) =>
-    fetch('/api/thinking/links', send('POST', { fragments, skip })).then(json<{ links: { from: string; to: string; label: string }[] }>),
+  thinkingLinks: (fragments: Frag[], skip: string[]) => fetch('/api/thinking/links', send('POST', { fragments, skip })).then(json<{ links: { from: string; to: string; label: string }[] }>),
   thinkingClusters: (fragments: Frag[]) => fetch('/api/thinking/clusters', send('POST', { fragments })).then(json<{ clusters: { label: string; ids: string[] }[] }>),
   thinkingRecall: (doc: string, fragments: Frag[], taken: string[]) =>
     fetch('/api/thinking/recall', send('POST', { doc, fragments, taken })).then(json<{ chips: Record<string, { doc: string; title: string; folder: string } | null> }>),
@@ -154,5 +154,7 @@ export const api = {
     fetch('/api/brief', send('PUT', { doc, text }))
       .then(json<{ text: string }>)
       .then((d) => d.text),
+  edge: (req: { slot: EdgeSlot; text: string; kind: string; current?: string; avoid?: string[] }) =>
+    fetch('/api/edge', send('POST', req)).then(json<{ kind: 'edge'; candidates: EdgeCandidate[] } | { kind: 'empty' | 'error'; message: string }>),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),
 }
