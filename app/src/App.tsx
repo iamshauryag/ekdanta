@@ -14,6 +14,7 @@ import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
+import { LimitStatus, textStore } from './components/LimitStatus.tsx'
 import { helpMod } from './editor/help.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
@@ -107,6 +108,12 @@ export function App() {
 
   // The open document. Saves always read from here, so a save can never land in the wrong file.
   const docRef = useRef<Doc | null>(null)
+  // The open file as text, for the length count; it changes on every keystroke without re-rendering the app.
+  const [fileText] = useState(textStore)
+  const syncText = useCallback(() => {
+    const d = docRef.current
+    fileText.set(d ? joinFrontMatter(d.rawMeta, d.meta, d.body) : '')
+  }, [fileText])
   const saveTimer = useRef<number | undefined>(undefined)
   const renamed = useRef<string | null>(null)
 
@@ -150,6 +157,7 @@ export function App() {
       if (cancelled) return
       const { meta, body, raw } = splitFrontMatter(content)
       docRef.current = { path, meta, body, rawMeta: raw }
+      syncText()
       setLoaded({ ...docRef.current, key: path })
       setSaved('saved')
     })
@@ -176,11 +184,12 @@ export function App() {
   const onChange = useCallback(
     (text: string) => {
       if (docRef.current) docRef.current.body = text
+      syncText()
       setSaved('unsaved')
       window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(save, 800)
     },
-    [save],
+    [save, syncText],
   )
 
   /** Switch documents: finish any pending save first, and drop a new draft that was left empty. */
@@ -216,6 +225,7 @@ export function App() {
     const d = docRef.current
     if (!d) return
     d.meta = applyPatch(d.meta, patch)
+    syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
     save().then(refreshFiles)
   }
@@ -518,6 +528,15 @@ export function App() {
   const pagesRef = useRef<PageRef[]>([])
   pagesRef.current = files.map((f) => ({ target: f.path.replace(/\.md$/, '').split('/').pop()!, title: f.title, folder: f.folder }))
 
+  /** The page a [[link]] names, for counting it as the title it shows. */
+  const pageFor = useCallback(
+    (target: string) => {
+      const hit = files.find((f) => f.path.replace(/\.md$/, '') === target || f.path.replace(/\.md$/, '').split('/').pop() === target)
+      return hit ? { title: hit.title, path: hit.path } : null
+    },
+    [files],
+  )
+
   /** Follow a [[link]]. A link to a page that doesn't exist yet creates it, as in Obsidian. */
   const openPage = useCallback(
     async (target: string) => {
@@ -734,7 +753,23 @@ export function App() {
 
       <footer className="statusbar">
         <span>
-          {platformLabel(platform)} · Ceiling {ceiling} · {format?.selectedWords ? `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words` : `${words.toLocaleString()} words`}
+          {platformLabel(platform)} · Ceiling {ceiling} ·{' '}
+          {loaded && !voiceView ? (
+            <LimitStatus
+              key={loaded.key}
+              store={fileText}
+              target={loaded.meta.target ?? ''}
+              words={words}
+              selectedWords={format?.selectedWords ?? 0}
+              ceiling={ceiling}
+              mod={mod}
+              paper={loaded.meta.paper === 'a4' ? 'a4' : 'letter'}
+              page={pageFor}
+              onTarget={(target) => setMeta({ target })}
+            />
+          ) : (
+            `${words.toLocaleString()} words`
+          )}
           {words >= 60 && ` · ${Math.max(1, Math.round(words / 230))} min read`}
         </span>
         <span className="muted">
