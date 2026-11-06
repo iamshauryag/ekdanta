@@ -8,7 +8,7 @@ import path from 'node:path'
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ekdanta-brief-'))
 process.env.EKDANTA_VAULT = root
 const vault = await import('./vault.ts')
-const { readBrief, writeBrief, briefFile, briefForPrompt } = await import('./brief.ts')
+const { readBrief, writeBrief, briefFile, briefForPrompt, markBriefs } = await import('./brief.ts')
 const exists = (abs: string) =>
   fs.access(abs).then(
     () => true,
@@ -45,6 +45,17 @@ test('no brief reads as empty, and an empty brief unpins', async () => {
   assert.equal(await writeBrief('essays/plain.md', ' \n '), '')
   assert.equal(await exists(briefFile('essays/plain.md')), false)
   assert.equal(await writeBrief('essays/plain.md', ''), '') // unpinning twice is fine
+})
+
+test('the file list marks which documents have a brief pinned', async () => {
+  await vault.writeDoc('essays/marked.md', DOC)
+  await vault.writeDoc('essays/unmarked.md', DOC)
+  await writeBrief('essays/marked.md', 'What does it ask?')
+  const marks = Object.fromEntries((await markBriefs(await vault.listFiles())).map((f) => [f.path, f.brief]))
+  assert.equal(marks['essays/marked.md'], true)
+  assert.equal(marks['essays/unmarked.md'], false)
+  await writeBrief('essays/marked.md', '')
+  assert.equal((await markBriefs([{ path: 'essays/marked.md' }]))[0].brief, false)
 })
 
 test('a brief is refused for a missing document, a path outside the vault, or too much text', async () => {

@@ -46,6 +46,12 @@ export async function writeBrief(rel: string, text: string): Promise<string> {
   return clean
 }
 
+/** Mark which documents have a brief pinned, so a page's ⋯ menu can say "Edit the pinned brief". */
+export async function markBriefs<T extends { path: string }>(files: T[]): Promise<(T & { brief: boolean })[]> {
+  const pinned = new Set(await fs.readdir(path.join(META_DIR, 'briefs')).catch(() => [] as string[]))
+  return files.map((f) => ({ ...f, brief: pinned.has(path.basename(briefFile(f.path))) }))
+}
+
 /** The brief to ground a Nudge in: '' when there's none, or when it can't be read. */
 export async function briefForPrompt(rel: string | undefined): Promise<string> {
   if (!rel) return ''

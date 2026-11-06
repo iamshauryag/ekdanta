@@ -7,6 +7,8 @@ export interface FileEntry {
   platform?: string
   exemplar: boolean
   mtime: number
+  /** A brief is pinned to it. */
+  brief?: boolean
 }
 
 export interface Status {

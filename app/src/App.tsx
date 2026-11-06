@@ -84,8 +84,10 @@ export function App() {
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [thinking, setThinking] = useState<Thinking | null>(null)
   const [material, setMaterial] = useState<{ covered: string[]; nearest: string | null }>({ covered: [], nearest: null })
-  // The brief pinned beside the open document ('' for none), and whether its paste box is open.
-  const [brief, setBrief] = useState('')
+  // The brief pinned beside the open document ('' for none), tied to the document it was read for: it's
+  // null until both have loaded, so the paste box never opens empty over a brief still on its way, and
+  // a save always goes to the page the box was opened for. Plus whether its paste box is open.
+  const [brief, setBrief] = useState<{ doc: Doc; text: string } | null>(null)
   const [briefEditing, setBriefEditing] = useState(false)
   const briefFor = useRef<string | null>(null) // a page opened from its ⋯ menu to pin a brief
   const paragraph = useRef('')
@@ -150,28 +152,34 @@ export function App() {
       return
     }
     let cancelled = false
-    api.read(path).then((content) => {
+    if (briefFor.current !== path) briefFor.current = null
+    setBrief(null)
+    setBriefEditing(false)
+    // The page and its brief arrive together (a brief that can't be read stays null: nothing to edit or overwrite).
+    Promise.all([api.read(path), api.brief(path).catch(() => null)]).then(([content, b]) => {
       if (cancelled) return
       const { meta, body, raw } = splitFrontMatter(content)
-      docRef.current = { path, meta, body, rawMeta: raw }
-      setLoaded({ ...docRef.current, key: path })
+      const d = (docRef.current = { path, meta, body, rawMeta: raw })
+      setLoaded({ ...d, key: path })
       setSaved('saved')
+      if (b !== null) setBrief({ doc: d, text: b })
+      // Opened from its ⋯ menu to pin a brief (asked for before or while it loaded).
+      if (briefFor.current === path) {
+        briefFor.current = null
+        setBriefEditing(b !== null)
+      }
     })
     api.history(path).then((h) => !cancelled && setHistory(h as HistoryItem[]))
     setThinking(null)
     setMaterial({ covered: [], nearest: null })
     api.thinking(path).then((t) => !cancelled && setThinking(t))
-    setBrief('')
-    setBriefEditing(briefFor.current === path)
-    briefFor.current = null
-    api
-      .brief(path)
-      .then((b) => !cancelled && setBrief(b))
-      .catch(() => {})
     return () => {
       cancelled = true
     }
   }, [path])
+
+  // The open page's brief: only while it belongs to the page on screen (every switch re-renders).
+  const openBrief = brief && brief.doc === docRef.current ? brief : null
 
   const save = useCallback(async () => {
     window.clearTimeout(saveTimer.current)
@@ -313,42 +321,60 @@ export function App() {
       notify(`Deleted “${item.title}”`, () => restore(item.id))
     },
     pinBrief: (rel) => void pinBrief(rel),
-    hasBrief: (rel) => rel === docRef.current?.path && brief.trim() !== '',
+    hasBrief: (rel) => (openBrief && rel === openBrief.doc.path ? openBrief.text.trim() !== '' : !!files.find((f) => f.path === rel)?.brief),
   }
 
   /** Pin a brief to a page (or edit the one it has): open the page, and the paste box in the Piece tab. */
   const pinBrief = async (rel: string) => {
     setPanelOpen(true)
     setPanelTab('piece')
-    if (docRef.current?.path === rel) return setBriefEditing(true)
+    const d = docRef.current
+    // The page on screen, and not one that's still loading in its place.
+    if (d?.path === rel && path === rel) {
+      if (brief?.doc === d) return setBriefEditing(true)
+      // Its brief couldn't be read when the page opened: try again rather than offer an empty box over it.
+      const b = await api.brief(rel).catch(() => null)
+      if (b === null) return notify('Couldn’t read this page’s brief. Try again in a moment.')
+      if (docRef.current !== d) return
+      setBrief({ doc: d, text: b })
+      return setBriefEditing(true)
+    }
+    // The paste box opens once the page and its brief have loaded (see the [path] effect).
     briefFor.current = rel
     await openDoc(rel)
   }
 
+  /** Keep the file list's "has a brief" mark in step, for the ⋯ menus of pages that aren't open. */
+  const markBrief = (rel: string, on: boolean) => setFiles((fs) => fs.map((f) => (f.path === rel ? { ...f, brief: on } : f)))
+
+  // Save to the page the paste box was opened for (it's only shown while that page is the open one).
   const saveBrief = async (text: string) => {
-    const d = docRef.current
+    const d = brief?.doc
     if (!d) return
     if (!text.trim()) return unpinBrief()
     const saved = await api.pinBrief(d.path, text)
+    markBrief(d.path, saved !== '')
     if (docRef.current === d) {
-      setBrief(saved)
+      setBrief({ doc: d, text: saved })
       setBriefEditing(false)
     }
   }
 
   const unpinBrief = async () => {
-    const d = docRef.current
+    const d = brief?.doc
     if (!d) return
-    const was = brief
+    const was = brief.text
     await api.pinBrief(d.path, '')
-    setBrief('')
+    markBrief(d.path, false)
+    if (docRef.current === d) setBrief({ doc: d, text: '' })
     setBriefEditing(false)
     if (was)
       notify('Brief unpinned', async () => {
         // A rename since then updates d.path, so the brief goes back to the page wherever it is now.
         try {
           await api.pinBrief(d.path, was)
-          if (docRef.current === d) setBrief(was)
+          markBrief(d.path, true)
+          if (docRef.current === d) setBrief({ doc: d, text: was })
         } catch (e) {
           notify(`Couldn’t pin the brief back: ${(e as Error).message}`)
         }
@@ -764,8 +790,8 @@ export function App() {
           onOpenDoc={openDoc}
           onExemplar={() => current && toggleExemplar(current.path)}
           onClearHistory={() => setHistory([])}
-          brief={brief}
-          briefEditing={briefEditing}
+          brief={openBrief?.text ?? ''}
+          briefEditing={briefEditing && !!openBrief}
           onBriefEditing={setBriefEditing}
           onBriefSave={saveBrief}
           onBriefUnpin={unpinBrief}
