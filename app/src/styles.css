@@ -193,6 +193,12 @@ kbd {
 .rail-spacer {
   flex: 1;
 }
+.rail-sep {
+  width: 18px;
+  height: 1px;
+  margin: 2px 0;
+  background: var(--line-2);
+}
 .rail-btn {
   width: 34px;
   height: 34px;

@@ -588,6 +588,10 @@ export function App() {
       </header>
 
       <nav className="rail" aria-label="Main">
+        <button className="rail-btn" title={titled('New draft', 'newDraft')} onClick={() => newDraft()}>
+          <Icon name="compose" />
+        </button>
+        <span className="rail-sep" />
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'vault' ? ' is-on' : ''}`} title="Vault" onClick={() => showSidebar('vault')}>
           <Icon name="folder" />
         </button>
@@ -596,9 +600,6 @@ export function App() {
         </button>
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'voice' ? ' is-on' : ''}`} title="Voice" onClick={() => showSidebar('voice')}>
           <Icon name="voice" />
-        </button>
-        <button className="rail-btn" title={titled('New draft', 'newDraft')} onClick={() => newDraft()}>
-          <Icon name="compose" />
         </button>
         <div className="rail-spacer" />
         <button className="rail-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
