@@ -30,8 +30,13 @@ export function CaptureBox({ onCapture, onClose }: Props) {
 
   function close() {
     onClose()
-    const el = back.current
-    if (el instanceof HTMLElement && el.isConnected) requestAnimationFrame(() => el.focus({ preventScroll: true }))
+    requestAnimationFrame(() => {
+      // Opened from a menu, or the page was re-read while the box was open: what had focus is gone, so
+      // go back to the page itself (which still holds its caret) instead of leaving focus nowhere.
+      const el = back.current
+      const to = el instanceof HTMLElement && el.isConnected && el !== document.body ? el : document.querySelector<HTMLElement>('.editor .pm, .editor .cm-content')
+      to?.focus({ preventScroll: true })
+    })
   }
 
   async function submit() {

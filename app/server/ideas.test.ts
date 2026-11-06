@@ -24,7 +24,9 @@ test('an idea is one tidy line with no list marker of its own', () => {
   assert.equal(ideas.cleanIdea('  a  thought\nacross\tlines '), 'a thought across lines')
   assert.equal(ideas.cleanIdea('- already a bullet'), 'already a bullet')
   assert.equal(ideas.cleanIdea('* - [ ] nested'), 'nested')
-  assert.equal(ideas.cleanIdea('1. numbered'), 'numbered')
+  // A number is the writer's own words ("3. reasons…"), not a marker to strip.
+  assert.equal(ideas.cleanIdea('3. reasons I quit coffee'), '3. reasons I quit coffee')
+  assert.equal(ideas.cleanIdea('- 10) things'), '10) things')
   assert.equal(ideas.cleanIdea('-dash-led'), '-dash-led')
   assert.equal(ideas.cleanIdea('   '), '')
   assert.equal(ideas.ideaLine('walk to think', '6 Nov 2026'), '- walk to think (6 Nov 2026)')
@@ -195,6 +197,19 @@ test("a kind's template goes under the prompt", async () => {
   const gone = DEFAULT_KINDS.map((k) => (k.id === 'blog' ? { ...k, template: 'templates/missing.md' } : k))
   const rel2 = await ideas.startIdea(gone, 'no template', 'blog')
   assert.equal(splitFrontMatter(await fs.readFile(path.join(root, rel2), 'utf8')).body, '*Prompt: no template*\n')
+})
+
+test('an idea ending in a quote mark, or starting with #, still shows Started', async () => {
+  for (const idea of ['Why I said "no"', "notes on my parents'", '# big headline idea', '3. reasons I quit coffee']) {
+    await ideas.captureIdea(idea)
+    const rel = await ideas.startIdea(DEFAULT_KINDS, idea, 'blog')
+    const raw = await fs.readFile(path.join(root, rel), 'utf8')
+    assert.equal(splitFrontMatter(raw).meta['from-idea'], idea)
+    // Quoted in the file, so other YAML readers (Obsidian) see the same value.
+    if (!idea.startsWith('3')) assert.ok(raw.includes(`from-idea: ${JSON.stringify(idea)}`), raw)
+    const row = (await ideas.listIdeas()).ideas.find((r) => r.text === idea)
+    assert.equal(row?.started?.path, rel, idea)
+  }
 })
 
 test('the vault listing carries from-idea', async () => {

@@ -30,13 +30,16 @@ const MARKER = /^(?:[-*+]|\d{1,9}[.)])(?:\s+|$)(?:\[[ xX]\](?:\s+|$))?/
 // A date in brackets at the end of the line: "(6 Nov 2026)", "(6 November 2026)" or "(2026-11-06)".
 const TRAILING_DATE = /\s*\((\d{1,2} [A-Za-z]{3,9}\.? \d{4}|\d{4}-\d{2}-\d{2})\)\s*$/
 
-/** The idea as one tidy line: whitespace (newlines included) collapsed, and no list marker of its own. */
+// A bullet typed into the capture box. Numbers are the writer's words ("3. reasons I quit coffee"), so they stay.
+const BULLET = /^[-*+](?:\s+|$)(?:\[[ xX]\](?:\s+|$))?/
+
+/** The idea as one tidy line: whitespace (newlines included) collapsed, and no bullet of its own. */
 export function cleanIdea(text: string): string {
   let t = String(text ?? '')
     .replace(/\s+/g, ' ')
     .trim()
   // "- my idea" typed into the box shouldn't become "- - my idea".
-  for (let m = t.match(MARKER); m && m[0]; m = t.match(MARKER)) t = t.slice(m[0].length).trim()
+  for (let m = t.match(BULLET); m && m[0]; m = t.match(BULLET)) t = t.slice(m[0].length).trim()
   return t
 }
 
@@ -141,7 +144,7 @@ export function appendIdea(raw: string | null, text: string, date: string): { co
 export const escapeMarkdown = (text: string) => text.replace(/([\\`*_[\]<>~=|#])/g, '\\$1')
 
 /** The faded line at the top of a piece started from an idea: a template-style `*Prompt: …*` paragraph. */
-export const ideaPrompt = (text: string) => `*Prompt: ${escapeMarkdown(cleanIdea(text))}*`
+export const ideaPrompt = (text: string) => `*Prompt: ${escapeMarkdown(ideaKey(text))}*`
 
 /** A template's body for a new piece, without its front matter. Variables we can fill are filled; {{cursor}} goes. */
 export function templateBody(raw: string, vars: { date: string; kind: string }): string {
@@ -248,7 +251,8 @@ export function starIdea(text: string, on: boolean) {
  * how the Ideas page knows it was started.
  */
 export async function startIdea(kinds: Kind[], text: string, kindId: string): Promise<string> {
-  const idea = cleanIdea(text)
+  // The idea exactly as the list keys it, so its row shows Started (a cleaned copy could differ).
+  const idea = ideaKey(text)
   if (!idea) throw new HttpError(400, 'No idea to start from')
   const kind = findKind(kinds, kindId)
   if (!kind) throw new HttpError(400, 'Unknown kind of writing')

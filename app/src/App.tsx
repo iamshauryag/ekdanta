@@ -78,6 +78,19 @@ export function App() {
   // Ideas: the full-page list, the one-line capture box, and a counter that tells the list to re-read.
   const [ideasView, setIdeasView] = useState(false)
   const [captureOpen, setCaptureOpen] = useState(false)
+  // Where the caret was in ideas.md when a capture re-read it, to put it back on the new page.
+  const reselect = useRef<{ from: number; to: number } | null>(null)
+  useEffect(() => {
+    const sel = reselect.current
+    if (!editor || !sel) return
+    reselect.current = null
+    const max = editor.state.doc.content.size
+    editor
+      .chain()
+      .setTextSelection({ from: Math.min(sel.from, max), to: Math.min(sel.to, max) })
+      .focus()
+      .run()
+  }, [editor])
   const [ideasVersion, setIdeasVersion] = useState(0)
   const [trash, setTrash] = useState<Trashed[]>([])
   const refreshTrash = useCallback(() => api.trash().then(setTrash), [])
@@ -365,6 +378,9 @@ export function App() {
     if (isOpen && saveTimer.current !== undefined) await save()
     const { added } = await api.captureIdea(text)
     if (isOpen && added && docRef.current === d) {
+      // The line goes at the end, so the caret's place is unchanged: put it back once the page is re-read.
+      const sel = editor && !editor.isDestroyed ? editor.state.selection : null
+      reselect.current = sel ? { from: sel.from, to: sel.to } : null
       const { meta, body, raw } = splitFrontMatter(await api.read(d.path))
       docRef.current = { path: d.path, meta, body, rawMeta: raw }
       setLoaded({ ...docRef.current, key: `${d.path}#${Date.now()}` })
