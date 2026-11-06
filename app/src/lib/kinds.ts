@@ -60,9 +60,10 @@ export function newKind(name: string, taken: Kind[]): Kind | null {
 }
 
 /**
- * A folder a kind can file into. Special folders (templates, journal, sources…) are left out of
- * Recall and voice, so a kind named "Template" or "Journal" files into my-templates/ or my-journal/
- * instead: its pieces are the writer's own and should count like any other.
+ * The folder a new kind files into. Special folders (templates, journal, sources…) are left out of
+ * Recall and voice, so a new kind named "Template" or "Source" files into my-templates/ or my-sources/
+ * instead: its pieces are the writer's own and should count like any other. Only new kinds get this;
+ * a kind the writer already saved keeps its folder (see cleanKinds).
  */
 const kindFolder = (folder: string) => (isSpecialPath(folder) ? `my-${folder}` : folder)
 
@@ -73,7 +74,8 @@ export function cleanKinds(value: unknown): Kind[] | null {
   for (const k of value as Partial<Kind>[]) {
     if (!k || typeof k.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(k.id) || out.some((o) => o.id === k.id)) continue
     const name = typeof k.name === 'string' && k.name.trim() ? k.name.trim().slice(0, 40) : k.id
-    const folder = kindFolder(kindId(typeof k.folder === 'string' ? k.folder : '') || plural(k.id))
+    // A saved folder is the writer's: never rewritten, even a special one (its pieces already live there).
+    const folder = kindId(typeof k.folder === 'string' ? k.folder : '') || kindFolder(plural(k.id))
     const guidance = typeof k.guidance === 'string' ? k.guidance.trim().slice(0, 400) : ''
     const words = Math.max(1, Math.min(50000, Math.round(Number(k.words) || 800)))
     const kind: Kind = { id: k.id, name, folder, guidance, words }
@@ -112,11 +114,17 @@ function cleanKindDoc(value: unknown): KindDoc | undefined {
 
 export const findKind = (kinds: Kind[], id: string) => kinds.find((k) => k.id === id.toLowerCase())
 
-/** The kind a top-level folder holds: `emails` for email, say. Nested folders are the writer's own, and special folders (templates, journal…) hold no kind. */
+/**
+ * The kind a top-level folder holds: `emails` for email, say. Nested folders are the writer's own.
+ * A special folder (templates, journal…) holds a kind only when a kind names it as its folder: no guessing
+ * from the name, so templates/ never makes a "Template" kind's pieces.
+ */
 export const kindOfFolder = (kinds: Kind[], folder: string) => {
-  if (!folder || folder.includes('/') || isSpecialPath(folder)) return undefined
+  if (!folder || folder.includes('/')) return undefined
   const f = folder.toLowerCase()
-  return kinds.find((k) => f === k.folder) ?? kinds.find((k) => f.startsWith(k.id))
+  const exact = kinds.find((k) => f === k.folder)
+  if (exact || isSpecialPath(f)) return exact
+  return kinds.find((k) => f.startsWith(k.id))
 }
 
 /** A kind's name, or a readable one for a kind the list doesn't have (a piece from elsewhere). */

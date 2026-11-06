@@ -40,11 +40,14 @@ const file = (platform: string) => {
   return path.join(DIR, `${platform}.md`)
 }
 
-/** Exemplars first; if there are too few, the most recent unstarred pieces fill in. Templates, journals and excluded folders never count. */
+/**
+ * Exemplars first; if there are too few, the most recent unstarred pieces fill in. A piece the writer
+ * starred always counts, wherever it lives; templates, journals and excluded folders never fill in on their own.
+ */
 function sourcesFor(files: FileEntry[], platform: string, excluded: string[]) {
-  const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled' && !isSpecialPath(f.path, excluded))
+  const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled')
   const starred = mine.filter((f) => f.exemplar)
-  const others = mine.filter((f) => !f.exemplar).sort((a, b) => b.mtime - a.mtime)
+  const others = mine.filter((f) => !f.exemplar && !isSpecialPath(f.path, excluded)).sort((a, b) => b.mtime - a.mtime)
   return [...starred, ...others.slice(0, Math.max(0, ENOUGH - starred.length))]
 }
 

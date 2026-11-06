@@ -30,10 +30,11 @@ test('kinds without the new fields come out exactly as before', () => {
   assert.deepEqual(cleanKinds(DEFAULT_KINDS), DEFAULT_KINDS)
 })
 
-test('special folders hold no kind', () => {
+test('special folders hold a kind only when a kind names them', () => {
+  assert.equal(kindOfFolder(DEFAULT_KINDS, 'templates'), undefined)
+  assert.equal(kindOfFolder([...DEFAULT_KINDS, { id: 'template', name: 'Template', folder: 'my-templates', guidance: '', words: 300 }], 'templates'), undefined) // no guess from the name
   const kinds = [...DEFAULT_KINDS, { id: 'journal', name: 'Journal', folder: 'journal', guidance: '', words: 300 }]
-  assert.equal(kindOfFolder(kinds, 'journal'), undefined)
-  assert.equal(kindOfFolder(kinds, 'templates'), undefined)
+  assert.equal(kindOfFolder(kinds, 'journal')?.id, 'journal')
   assert.equal(kindOfFolder(kinds, 'essays')?.id, 'essay')
 })
 
@@ -42,8 +43,12 @@ test('a kind never files into a special folder', () => {
   assert.equal(newKind('Journal', DEFAULT_KINDS)?.folder, 'journals') // not the special journal/
   assert.equal(newKind('Source', DEFAULT_KINDS)?.folder, 'my-sources')
   assert.equal(newKind('Export', DEFAULT_KINDS)?.folder, 'my-exports')
-  const [kind] = cleanKinds([{ id: 'journal', name: 'Journal', folder: 'journal', guidance: '', words: 300 }])!
-  assert.equal(kind.folder, 'my-journal')
-  assert.equal(kindOfFolder([kind], 'my-journal')?.id, 'journal')
-  assert.equal(kindOfFolder([kind], 'journal'), undefined)
+})
+
+test('a saved kind keeps its folder, even a special one', () => {
+  const [kind] = cleanKinds([{ id: 'source', name: 'Source notes', folder: 'sources', guidance: '', words: 300 }])!
+  assert.equal(kind.folder, 'sources')
+  assert.equal(kindOfFolder([kind], 'sources')?.id, 'source')
+  // A kind saved without a folder gets one, and that one avoids special folders.
+  assert.equal(cleanKinds([{ id: 'template', name: 'Template', guidance: '', words: 300 }])![0].folder, 'my-templates')
 })

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { DEFAULT_KINDS, newKind, type Kind } from '../lib/kinds.ts'
+import { isSpecialPath } from '../lib/special.ts'
 
 interface Props {
   kinds: Kind[]
@@ -103,6 +104,7 @@ export function Kinds({ kinds, onChange }: Props) {
             />
             <small className="kind-folder">
               New pieces go in <code>{k.folder}/</code>
+              {isSpecialPath(k.folder) && <>, a folder Recall and voice leave out (pieces you star still shape your voice)</>}
             </small>
           </li>
         ))}
