@@ -14,6 +14,7 @@ import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
+import { LimitStatus, textStore } from './components/LimitStatus.tsx'
 import { helpMod, noteCmdWorks } from './editor/help.ts'
 import { fieldSlot, type EdgeSlot } from './lib/edge.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
@@ -115,6 +116,12 @@ export function App() {
 
   // The open document. Saves always read from here, so a save can never land in the wrong file.
   const docRef = useRef<Doc | null>(null)
+  // The open file as text, for the length count; it changes on every keystroke without re-rendering the app.
+  const [fileText] = useState(textStore)
+  const syncText = useCallback(() => {
+    const d = docRef.current
+    fileText.set(d ? joinFrontMatter(d.rawMeta, d.meta, d.body) : '')
+  }, [fileText])
   const saveTimer = useRef<number | undefined>(undefined)
   const renamed = useRef<string | null>(null)
 
@@ -162,6 +169,7 @@ export function App() {
       if (cancelled) return
       const { meta, body, raw } = splitFrontMatter(content)
       const d = (docRef.current = { path, meta, body, rawMeta: raw })
+      syncText()
       setLoaded({ ...d, key: path })
       setSaved('saved')
       if (b !== null) setBrief({ doc: d, text: b })
@@ -197,11 +205,12 @@ export function App() {
   const onChange = useCallback(
     (text: string) => {
       if (docRef.current) docRef.current.body = text
+      syncText()
       setSaved('unsaved')
       window.clearTimeout(saveTimer.current)
       saveTimer.current = window.setTimeout(save, 800)
     },
-    [save],
+    [save, syncText],
   )
 
   /** Switch documents: finish any pending save first, and drop a new draft that was left empty. */
@@ -237,8 +246,15 @@ export function App() {
     const d = docRef.current
     if (!d) return
     d.meta = applyPatch(d.meta, patch)
+    syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
     save().then(refreshFiles)
+  }
+
+  /** Change front matter of a given file: the open one through the editor's copy, any other on disk. */
+  const setMetaOf = async (rel: string, patch: MetaPatch) => {
+    if (docRef.current?.path === rel) setMeta(patch)
+    else await api.patchMeta(rel, patch).then(refreshFiles)
   }
 
   /** A title written for the first time also names the file. */
@@ -413,8 +429,7 @@ export function App() {
     const patch = { exemplar: f.exemplar ? null : 'true' }
     setFiles((fs) => fs.map((x) => (x.path === rel ? { ...x, exemplar: !x.exemplar } : x)))
     // The open document saves through the editor, so its front-matter must change there too.
-    if (docRef.current?.path === rel) setMeta(patch)
-    else await api.patchMeta(rel, patch).then(refreshFiles)
+    await setMetaOf(rel, patch)
     refreshVoices() // the profile for this platform is now out of date
   }
 
@@ -599,6 +614,15 @@ export function App() {
   // Links between pages use the file name, as Obsidian does: [[on-being-edited]].
   const pagesRef = useRef<PageRef[]>([])
   pagesRef.current = files.map((f) => ({ target: f.path.replace(/\.md$/, '').split('/').pop()!, title: f.title, folder: f.folder }))
+
+  /** The page a [[link]] names, for counting it as the title it shows. */
+  const pageFor = useCallback(
+    (target: string) => {
+      const hit = files.find((f) => f.path.replace(/\.md$/, '') === target || f.path.replace(/\.md$/, '').split('/').pop() === target)
+      return hit ? { title: hit.title, path: hit.path } : null
+    },
+    [files],
+  )
 
   /** Follow a [[link]]. A link to a page that doesn't exist yet creates it, as in Obsidian. */
   const openPage = useCallback(
@@ -848,7 +872,24 @@ export function App() {
         <span>
           {platformLabel(platform)} · Ceiling {ceiling} ·{' '}
           <span className="word-count" title={readingTimes(format?.selectedWords || words) || undefined}>
-            {format?.selectedWords ? `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words` : `${words.toLocaleString()} words`}
+            {loaded && !voiceView ? (
+              <LimitStatus
+                key={loaded.key}
+                store={fileText}
+                target={loaded.meta.target ?? ''}
+                selectedWords={format?.selectedWords ?? 0}
+                ceiling={ceiling}
+                mod={mod}
+                paper={loaded.meta.paper === 'a4' ? 'a4' : 'letter'}
+                page={pageFor}
+                // Bound to this file: a limit saved as the sheet closes lands here even if another file is opening.
+                onTarget={(target) => setMetaOf(loaded.path, { target })}
+              />
+            ) : format?.selectedWords ? (
+              `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words`
+            ) : (
+              `${words.toLocaleString()} words`
+            )}
             {words >= 60 && ` · ${Math.max(1, Math.round(words / READ_WPM))} min read`}
           </span>
         </span>

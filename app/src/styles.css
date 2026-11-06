@@ -3208,3 +3208,175 @@ button.keymap-key:hover {
 .pm .cm-ins.has-break {
   white-space: pre-wrap;
 }
+
+/* feature: limits — the length count in the status bar and its limit sheet */
+:root {
+  --limit-near: #a8700f;
+  --limit-near-bar: #c98a1b;
+  --limit-over: #b3412e;
+  --limit-over-bar: #c4543c;
+  --limit-in-bar: #3f8f5a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --limit-near: #e0a542;
+    --limit-near-bar: #d39a35;
+    --limit-over: #ef8270;
+    --limit-over-bar: #e0705c;
+    --limit-in-bar: #5fae78;
+  }
+}
+:root[data-theme='dark'] {
+  --limit-near: #e0a542;
+  --limit-near-bar: #d39a35;
+  --limit-over: #ef8270;
+  --limit-over-bar: #e0705c;
+  --limit-in-bar: #5fae78;
+}
+.lm {
+  position: relative;
+}
+.lm-count {
+  position: relative;
+  font: inherit;
+  color: inherit;
+  padding: 0 0 3px;
+  margin-bottom: -3px;
+}
+.lm-count:hover {
+  color: var(--ink);
+}
+.lm-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--line);
+  overflow: hidden;
+}
+.lm-progress i {
+  display: block;
+  height: 100%;
+  background: var(--ink-4);
+  transition: width 0.2s;
+}
+.lm-count.is-in .lm-progress i {
+  background: var(--limit-in-bar);
+}
+.lm-count.is-near .lm-progress i,
+.lm-count.is-over:not(.is-hard) .lm-progress i {
+  background: var(--limit-near-bar);
+}
+.lm-count.is-near,
+.lm-count.is-over:not(.is-hard) {
+  color: var(--limit-near);
+}
+.lm-count.is-over.is-hard {
+  color: var(--limit-over);
+  font-weight: 600;
+}
+.lm-count.is-over.is-hard .lm-progress i {
+  background: var(--limit-over-bar);
+}
+/* A count past its limit, or the sheet, stays fully visible in the faded status bar. */
+.statusbar:has(.lm-sheet, .lm-count.is-over, .lm-count.is-near) {
+  opacity: 1;
+}
+.lm-sheet {
+  position: absolute;
+  z-index: 40;
+  left: -8px;
+  bottom: calc(100% + 10px);
+  width: 336px;
+  max-width: calc(100vw - 16px);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink);
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.lm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lm-field span {
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.lm-field input {
+  width: 100%;
+  padding: 5px 8px;
+  font: 13px var(--sans);
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  outline: none;
+}
+.lm-field input:focus {
+  border-color: var(--accent-line);
+}
+.lm-field input[aria-invalid='true'] {
+  border-color: var(--limit-near-bar);
+}
+.lm-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.lm-presets button {
+  font: 500 12px var(--sans);
+  color: var(--ink-2);
+  padding: 3px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+}
+.lm-presets button:hover {
+  color: var(--ink);
+  border-color: var(--ink-4);
+}
+.lm-presets button.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+.lm-hint {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.lm-hint.is-bad {
+  color: var(--limit-near);
+}
+.lm-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+.lm-remove {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.lm-remove:hover {
+  color: var(--del-ink);
+}
+.lm-fallback {
+  width: 100%;
+  height: 90px;
+  font: 12px var(--sans);
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  resize: vertical;
+}
