@@ -132,7 +132,7 @@ Not every document — or sentence — represents a writer equally well. Weighti
 
 Later: on-request continuation, agent tasks, web search, the browser extension, linter checks.
 
-**Status:** a first version is in [`app/`](../app/). It has the vault and editor, all five help levels on real models (with Recall over the writer's own notes), word-level diff review, the help ceiling and Focus mode. Knowledge import, voice profiles and the Thinking Space come next.
+**Status:** a first version is in [`app/`](../app/). It has the vault and editor with new drafts, all five help levels on real models (with Recall over the writer's own notes), word-level diff review, the help ceiling, Focus mode, Settings, ★ exemplars, per-platform voice profiles and the Thinking Space. Knowledge import comes next.
 
 ## Non-goals (v1)
 
