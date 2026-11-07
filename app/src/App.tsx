@@ -788,7 +788,8 @@ export function App() {
         <button className="rail-btn" title={titled('New draft', 'newDraft')} onClick={() => newDraft()}>
           <Icon name="compose" />
         </button>
-        <button className="rail-btn" title={titled('Capture idea', 'captureIdea')} onClick={() => setCaptureOpen((o) => !o)}>
+        {/* Toggles like the shortcut; the mousedown leaves focus where the writer was, so the box can return it. */}
+        <button className="rail-btn" title={titled('Capture idea', 'captureIdea')} data-capture-toggle onMouseDown={(e) => e.preventDefault()} onClick={() => setCaptureOpen((o) => !o)}>
           <Icon name="idea" />
         </button>
         <span className="rail-sep" />

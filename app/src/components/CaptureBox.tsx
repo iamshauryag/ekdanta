@@ -22,22 +22,26 @@ export function CaptureBox({ onCapture, onClose }: Props) {
 
   useEffect(() => {
     input.current?.focus()
-    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && close()
+    // A click on Capture idea's own button is left to the button, which toggles the box.
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && !(e.target as Element).closest?.('[data-capture-toggle]') && close()
     document.addEventListener('mousedown', away)
-    return () => document.removeEventListener('mousedown', away)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      // However the box closed (Enter, Escape, a click away, the shortcut or the button), go back to where the writer was.
+      requestAnimationFrame(() => {
+        // Something else took focus (a click on a field or button): leave it there.
+        if (document.activeElement && document.activeElement !== document.body) return
+        // Opened from a menu, or the page was re-read while the box was open: what had focus is gone, so
+        // go back to the page itself (which still holds its caret) instead of leaving focus nowhere.
+        const el = back.current
+        const to = el instanceof HTMLElement && el.isConnected && el !== document.body ? el : document.querySelector<HTMLElement>('.editor .pm, .editor .cm-content')
+        to?.focus({ preventScroll: true })
+      })
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  function close() {
-    onClose()
-    requestAnimationFrame(() => {
-      // Opened from a menu, or the page was re-read while the box was open: what had focus is gone, so
-      // go back to the page itself (which still holds its caret) instead of leaving focus nowhere.
-      const el = back.current
-      const to = el instanceof HTMLElement && el.isConnected && el !== document.body ? el : document.querySelector<HTMLElement>('.editor .pm, .editor .cm-content')
-      to?.focus({ preventScroll: true })
-    })
-  }
+  const close = () => onClose()
 
   async function submit() {
     if (busy) return
