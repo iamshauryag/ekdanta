@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from '@tiptap/core'
 import { Editor, helpLevel, type EditorFormat, type Heading } from './editor/Editor.tsx'
 import type { PageRef } from './editor/menus.ts'
 import { SourceEditor } from './editor/Source.tsx'
-import { kindName, kinds, setKinds } from './lib/kinds.ts'
+import { findKind, kindName, kinds, setKinds } from './lib/kinds.ts'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
 import { api, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Trashed, type VoiceSummary } from './lib/api.ts'
@@ -24,6 +24,10 @@ import { IdeasPage } from './components/IdeasPage.tsx'
 import { IDEAS_FILE } from './lib/special.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, isMac as isMacKeys, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
+import { isSpecialPath } from './lib/special.ts'
+import { authorOf, templateBody, templateMeta, type TemplateInfo } from './lib/templates.ts'
+import { StartFrom, TemplatePicker } from './components/TemplatePicker.tsx'
+import { insertTemplate, replacePlaceholder } from './editor/prompts.ts'
 import { READ_WPM, readingTimes } from './lib/sentences.ts'
 
 function usePref<T>(key: string, initial: T) {
@@ -57,7 +61,9 @@ export function App() {
   const [status, setStatus] = useState<Status | null>(null)
   const [path, setPath] = usePref<string | null>('lastDoc', null)
   // What's on screen. `key` changes only when a different document opens, not when one is renamed.
-  const [loaded, setLoaded] = useState<(Doc & { key: string }) | null>(null)
+  const [loaded, setLoaded] = useState<(Doc & { key: string; caret?: number | null }) | null>(null)
+  // The open document has nothing in its body yet (a new draft can start from a template).
+  const [bodyEmpty, setBodyEmpty] = useState(false)
   const [fresh, setFresh] = useState<string | null>(null) // a new draft, whose title gets the caret
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [words, setWords] = useState(0)
@@ -171,8 +177,34 @@ export function App() {
   }, [fileText])
   const saveTimer = useRef<number | undefined>(undefined)
   const renamed = useRef<string | null>(null)
+  const opened = useRef(0)
 
   const refreshFiles = useCallback(() => api.files().then(setFiles), [])
+  // The vault's templates. Re-read when the files change (a template may have been added or edited).
+  const [templates, setTemplates] = useState<TemplateInfo[]>([])
+  const templatesRef = useRef<TemplateInfo[]>([])
+  templatesRef.current = templates
+  const refreshTemplates = useCallback(
+    () =>
+      api
+        .templates()
+        .then(setTemplates)
+        .catch(() => {}),
+    [],
+  )
+  useEffect(() => {
+    refreshTemplates()
+  }, [files, refreshTemplates])
+  useEffect(() => {
+    // Settings → Kinds added the starter set.
+    const on = () => refreshFiles()
+    window.addEventListener('ekdanta:templates', on)
+    return () => window.removeEventListener('ekdanta:templates', on)
+  }, [refreshFiles])
+  // A template picker: for a new piece, for the open draft, or to insert at the caret.
+  const [picker, setPicker] = useState<'new' | 'draft' | 'insert' | null>(null)
+  // Where the caret goes in a document about to open (a template's {{cursor}}).
+  const pendingCaret = useRef<{ path: string; caret: number | null } | null>(null)
   useEffect(() => {
     refreshFiles()
     api.status().then(setStatus)
@@ -216,8 +248,12 @@ export function App() {
       if (cancelled) return
       const { meta, body, raw } = splitFrontMatter(content)
       const d = (docRef.current = { path, meta, body, rawMeta: raw })
+      const caret = pendingCaret.current?.path === path ? pendingCaret.current.caret : null
+      pendingCaret.current = null
       syncText()
-      setLoaded({ ...d, key: path })
+      // A fresh key for every opening: a new untitled.md can reuse the name of a draft just titled and renamed.
+      setLoaded({ ...d, key: `${path}#${++opened.current}`, caret })
+      setBodyEmpty(!body.trim())
       setSaved('saved')
       if (b !== null) setBrief({ doc: d, text: b })
       // Opened from its ⋯ menu to pin a brief (asked for before or while it loaded).
@@ -253,6 +289,7 @@ export function App() {
   const onChange = useCallback(
     (text: string) => {
       if (docRef.current) docRef.current.body = text
+      setBodyEmpty(!text.trim())
       syncText()
       setSaved('unsaved')
       window.clearTimeout(saveTimer.current)
@@ -356,10 +393,18 @@ export function App() {
     else await api.patchMeta(rel, patch).then(refreshFiles)
   }
 
-  /** A title written for the first time also names the file. */
+  /** A title written for the first time also names the file, and fills a template's {{title}} if it's still there. */
   const setTitle = async (title: string) => {
     const d = docRef.current
     if (!d) return
+    if (!d.meta.title?.trim() && title.trim() && d.body.includes('{{title}}')) {
+      if (editor && livePreview)
+        replacePlaceholder(editor, '{{title}}', title) // the page reports the change, which updates d.body
+      else {
+        d.body = d.body.split('{{title}}').join(title)
+        setLoaded((l) => (l ? { ...l, body: d.body, key: l.key + '~' } : l))
+      }
+    }
     d.meta = { ...d.meta, title }
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
     await save()
@@ -377,6 +422,110 @@ export function App() {
     follow((await api.place(d.path)).path)
     refreshFiles()
     refreshVoices()
+  }
+
+  /** Read the open document again after the server rewrote it, with the caret at `caret` (an offset into the body). */
+  const reloadOpen = async (caret: number | null) => {
+    const d = docRef.current
+    if (!d) return
+    const { meta, body, raw } = splitFrontMatter(await api.read(d.path))
+    docRef.current = { path: d.path, meta, body, rawMeta: raw }
+    setLoaded({ ...docRef.current, key: `${d.path}#${++opened.current}`, caret })
+    setBodyEmpty(!body.trim())
+    setSaved('saved')
+  }
+
+  const templateFailed = (e: unknown) => {
+    notify((e as Error).message || 'Template not found')
+    refreshTemplates()
+  }
+
+  /**
+   * Start the open (new, empty) draft from a template. A title typed but not yet committed is kept.
+   * On the page the template goes in through the editor, so one Cmd-Z takes it back out again; in the
+   * Markdown view, where there is no editor, the server fills the file and the view is read afresh.
+   */
+  const startFrom = async (t: TemplateInfo) => {
+    setPicker(null)
+    const d = docRef.current
+    if (!d) return
+    const typed = (document.querySelector('.doc-title')?.textContent ?? '').replace(/\s+/g, ' ').trim()
+    if (typed && typed !== (d.meta.title ?? '')) await setTitle(typed)
+    if (saveTimer.current !== undefined) await save()
+    const doc = docRef.current
+    if (!doc) return
+    const ed = editorRef.current
+    if (!livePreview || !ed) {
+      try {
+        const { cursor } = await api.applyTemplate(doc.path, t.path)
+        await reloadOpen(cursor)
+        refreshFiles()
+      } catch (e) {
+        templateFailed(e)
+      }
+      return
+    }
+    let raw: string
+    try {
+      raw = await api.read(t.path)
+    } catch {
+      return templateFailed(new Error('Template not found'))
+    }
+    // The same guard the server keeps: a piece with writing in it is never overwritten.
+    if (docRef.current?.body.trim()) return notify('This piece already has writing in it. Use /template to add a template where the caret is.')
+    const kind = (doc.meta.platform ?? '').toLowerCase()
+    const ctx = { title: doc.meta.title ?? '', kind: findKind(kinds(), kind) ? platformLabel(kind) : '', author: authorOf(settings), now: new Date() }
+    const { text, cursor } = templateBody(raw, ctx)
+    insertTemplate(ed, text, cursor)
+    // The template's own extra front matter (its kind and name stay behind), as the server would copy it.
+    const extras = templateMeta(raw, ctx)
+    if (Object.keys(extras).length) setMeta(extras)
+    refreshFiles()
+  }
+
+  /** A new piece from a template, filed as the template's kind (or where a new draft would go, for a template for any kind). */
+  const newFromTemplate = async (t: TemplateInfo) => {
+    setPicker(null)
+    const kind = findKind(kinds(), t.kind)
+    const here = files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
+    const folder = kind || isSpecialPath(here) ? '' : here
+    let { path: rel } = await api.create(folder, kind?.id)
+    if (kind) rel = (await api.place(rel)).path
+    let caret: number | null = null
+    try {
+      caret = (await api.applyTemplate(rel, t.path)).cursor
+    } catch (e) {
+      templateFailed(e) // the new piece stays blank
+    }
+    pendingCaret.current = { path: rel, caret }
+    await refreshFiles()
+    setFresh(rel)
+    await openDoc(rel)
+  }
+
+  /** Put a template's text in at the caret (the "/" menu), without its front matter. */
+  const insertAtCaret = async (t: TemplateInfo) => {
+    setPicker(null)
+    const ed = editorRef.current
+    const d = docRef.current
+    if (!ed || !d) return
+    let raw: string
+    try {
+      raw = await api.read(t.path)
+    } catch {
+      return templateFailed(new Error('Template not found'))
+    }
+    const kind = (d.meta.platform ?? 'essay').toLowerCase()
+    const { text, cursor } = templateBody(raw, { title: d.meta.title ?? '', kind: findKind(kinds(), kind) ? platformLabel(kind) : '', author: authorOf(settings), now: new Date() })
+    insertTemplate(ed, text, cursor)
+  }
+
+  const seedTemplates = async () => {
+    const { added } = await api.seedTemplates()
+    await refreshFiles()
+    await refreshTemplates()
+    if (!added.length) notify('The starter templates are already in templates/')
+    return added.length
   }
 
   /** Re-read the open document's front-matter after the server changed it (a move can set the platform). */
@@ -723,6 +872,7 @@ export function App() {
       star: () => void (docRef.current && toggleExemplar(docRef.current.path)),
       settings: () => setSettingsOpen((o) => !o),
       newDraft: () => newDraft(),
+      newFromTemplate: () => setPicker('new'),
       // The Thinking Space closes itself with the same key.
       thinking: () => {
         if (docRef.current && !thinkingOpen) {
@@ -774,6 +924,11 @@ export function App() {
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
   const title = loaded ? (loaded.meta.title ?? current?.title ?? '') : ''
   const isNew = !!loaded && fresh === loaded.path
+  const editorRef = useRef<TiptapEditor | null>(null)
+  editorRef.current = editor
+  const templateItems = useMemo(() => ({ list: () => templatesRef.current, insert: (t: TemplateInfo) => insertAtCaretRef.current(t), browse: () => setPicker('insert') }), [])
+  const insertAtCaretRef = useRef(insertAtCaret)
+  insertAtCaretRef.current = insertAtCaret
 
   // Links between pages use the file name, as Obsidian does: [[on-being-edited]].
   const pagesRef = useRef<PageRef[]>([])
@@ -968,11 +1123,14 @@ export function App() {
             <TitleField
               key={'title:' + loaded.key}
               value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)}
-              autoFocus={isNew}
+              autoFocus={isNew && loaded.caret == null}
               onCommit={setTitle}
               onHelp={livePreview ? (level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } })) : undefined}
             />
             {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
+            {isNew && bodyEmpty && templates.length > 0 && (
+              <StartFrom templates={templates} platform={platform} preferred={findKind(kinds(), platform)?.template} onApply={startFrom} onAll={() => setPicker('draft')} />
+            )}
             {livePreview ? (
               <Editor
                 // Back from the Markdown view, the page is read afresh from what was written there.
@@ -980,6 +1138,8 @@ export function App() {
                 docKey={loaded.key}
                 // Opened to pin a brief: the paste box keeps the focus.
                 autoFocus={!isNew && !briefEditing}
+                caret={loaded.caret}
+                templates={templateItems}
                 initial={docRef.current?.body ?? loaded.body}
                 onChange={onChange}
                 {...editorProps}
@@ -1076,6 +1236,20 @@ export function App() {
       )}
       {captureOpen && <CaptureBox onCapture={captureIdea} onClose={() => setCaptureOpen(false)} />}
       {thinkingOpen && loaded && <ThinkingSpace doc={loaded.path} title={title} onClose={closeThinking} />}
+
+      {picker && (
+        <TemplatePicker
+          title={picker === 'new' ? 'New from template' : picker === 'draft' ? 'Start from a template' : 'Insert a template'}
+          templates={templates}
+          kinds={kinds()}
+          onPick={picker === 'new' ? newFromTemplate : picker === 'draft' ? startFrom : insertAtCaret}
+          onClose={() => {
+            setPicker(null)
+            if (picker !== 'new') editorRef.current?.commands.focus()
+          }}
+          onSeed={seedTemplates}
+        />
+      )}
 
       {settingsOpen && settings && <Settings settings={settings} status={status} onChange={changeSettings} onClose={() => setSettingsOpen(false)} onRenameKindFolder={renameKindFolder} />}
 

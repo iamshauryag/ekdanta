@@ -4,6 +4,7 @@ import { Extension, type Editor, type Range } from '@tiptap/core'
 import { PluginKey } from '@tiptap/pm/state'
 import { Suggestion, type SuggestionProps } from '@tiptap/suggestion'
 import { binding, formatKey } from '../lib/keys.ts'
+import type { TemplateInfo } from '../lib/templates.ts'
 import { runCommand } from './commands.ts'
 
 export interface PageRef {
@@ -102,13 +103,47 @@ export const SLASH: Item[] = [
 ]
 
 /** Match on keywords as well as names ("/h1", "/todo", "/hr"). */
-function filterSlash(query: string) {
+function filterSlash(query: string, templates: TemplateItems) {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
-  return SLASH.filter((item) => {
+  const match = (item: Item) => {
     if (item.hidden?.()) return false
     const hay = `${item.label} ${item.keywords ?? ''}`.toLowerCase().split(/\s+/)
     return words.every((w) => hay.some((h) => h.startsWith(w)))
-  })
+  }
+  const list = templates.list()
+  // The vault's templates are listed by name once "/template" (or a name) is typed; before that, one entry stands for them all.
+  const named: Item[] = list.map((t) => ({
+    label: `Template: ${t.name}`,
+    keywords: `template templates ${t.name}`,
+    section: 'Templates',
+    run: (editor, range) => {
+      editor.chain().focus().deleteRange(range).run()
+      templates.insert(t)
+    },
+  }))
+  const entry: Item = {
+    label: 'Template',
+    detail: list.length ? `${list.length} in templates/` : 'add some',
+    keywords: 'template templates structure starter',
+    section: 'Insert',
+    run: (editor, range) => {
+      editor.chain().focus().deleteRange(range).run()
+      if (list.length) editor.chain().insertContent('/template').run()
+      else templates.browse()
+    },
+  }
+  const items = SLASH.filter(match)
+  const hits = words.length ? named.filter(match) : []
+  return hits.length ? [...items, ...hits] : [...items, ...(match(entry) ? [entry] : [])]
+}
+
+/** The vault's templates, for the "/" menu. */
+export interface TemplateItems {
+  list: () => TemplateInfo[]
+  /** Put this template's text in at the caret. */
+  insert: (t: TemplateInfo) => void
+  /** Show every template (with a way to add the starter set when there are none). */
+  browse: () => void
 }
 
 // ---- A small menu, drawn next to the caret ---------------------------------------------------
@@ -201,9 +236,11 @@ function menuRenderer(kind: 'slash' | 'page') {
   }
 }
 
-export const SlashMenu = Extension.create({
+export const SlashMenu = Extension.create<{ templates: TemplateItems }>({
   name: 'slashMenu',
+  addOptions: () => ({ templates: { list: () => [], insert: () => {}, browse: () => {} } }),
   addProseMirrorPlugins() {
+    const templates = this.options.templates
     return [
       Suggestion<Item, Item>({
         editor: this.editor,
@@ -211,7 +248,7 @@ export const SlashMenu = Extension.create({
         char: '/',
         // At the start of a line or after a space, so dates and paths aren't interrupted.
         allowedPrefixes: [' '],
-        items: ({ query }) => filterSlash(query),
+        items: ({ query }) => filterSlash(query, templates),
         command: ({ editor, range, props }) => props.run(editor, range),
         allow: ({ editor }) => !editor.isActive('codeBlock'),
         render: () => menuRenderer('slash'),
@@ -237,23 +274,24 @@ export const PageLinkMenu = Extension.create<{ pages: () => PageRef[] }>({
           return pages()
             .filter((p) => !q || p.title.toLowerCase().includes(q) || p.target.includes(q))
             .slice(0, 30)
-            .map(
-              (p): Item => ({
-                label: p.title,
-                detail: p.folder,
-                run: (editor, range) => {
-                  // Typed brackets that were closed already ("[[…]]") go too.
-                  const after = editor.state.doc.textBetween(range.to, Math.min(editor.state.doc.content.size, range.to + 2))
-                  const to = after === ']]' ? range.to + 2 : range.to
-                  editor
-                    .chain()
-                    .focus()
-                    .deleteRange({ from: range.from, to })
-                    .insertContent([{ type: 'pageLink', attrs: { target: p.target, label: null } }, { type: 'text', text: ' ' }])
-                    .run()
-                },
-              }),
-            )
+            .map((p): Item => ({
+              label: p.title,
+              detail: p.folder,
+              run: (editor, range) => {
+                // Typed brackets that were closed already ("[[…]]") go too.
+                const after = editor.state.doc.textBetween(range.to, Math.min(editor.state.doc.content.size, range.to + 2))
+                const to = after === ']]' ? range.to + 2 : range.to
+                editor
+                  .chain()
+                  .focus()
+                  .deleteRange({ from: range.from, to })
+                  .insertContent([
+                    { type: 'pageLink', attrs: { target: p.target, label: null } },
+                    { type: 'text', text: ' ' },
+                  ])
+                  .run()
+              },
+            }))
         },
         command: ({ editor, range, props }) => props.run(editor, range),
         render: () => menuRenderer('page'),

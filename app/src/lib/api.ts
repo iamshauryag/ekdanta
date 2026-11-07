@@ -1,4 +1,5 @@
 import type { Kind } from './kinds.ts'
+import type { TemplateInfo } from './templates.ts'
 import type { EdgeCandidate, EdgeSlot } from './edge.ts'
 import type { VersionEntry, VersionRow } from './versions.ts'
 // Thin client for the local server in server/api.ts.
@@ -168,6 +169,9 @@ export const api = {
   nameVersion: (doc: string, id: string, name: string) => fetch('/api/versions/name', send('POST', { doc, id, name })).then(json<{ version: VersionEntry }>),
   clearHistory: (doc: string) => fetch('/api/history?doc=' + encodeURIComponent(doc), { method: 'DELETE' }).then(json),
   renameKindFolder: (id: string) => fetch('/api/kinds/rename-folder', send('POST', { id })).then(json<{ settings: Settings; moved: { from: string; to: string }[] }>),
+  templates: () => fetch('/api/templates').then(json<TemplateInfo[]>),
+  applyTemplate: (path: string, template: string) => fetch('/api/templates/apply', send('POST', { path, template })).then(json<{ cursor: number | null }>),
+  seedTemplates: () => fetch('/api/templates/seed', send('POST', {})).then(json<{ added: string[] }>),
   brief: (doc: string) =>
     fetch('/api/brief?doc=' + encodeURIComponent(doc))
       .then(json<{ text: string }>)

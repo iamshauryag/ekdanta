@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { api } from '../lib/api.ts'
 import { DEFAULT_KINDS, doubledFolder, kindTaken, nameTakenBy, newKind, type Kind } from '../lib/kinds.ts'
 import { isSpecialPath } from '../lib/special.ts'
+import type { TemplateInfo } from '../lib/templates.ts'
 
 interface Props {
   kinds: Kind[]
@@ -17,6 +19,20 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
   const [removed, setRemoved] = useState<{ kind: Kind; at: number } | null>(null)
   // A rename that would collide with another kind: the old name stays, and this says why.
   const [renameClash, setRenameClash] = useState<{ id: string; name: string } | null>(null)
+  const [templates, setTemplates] = useState<TemplateInfo[] | null>(null)
+  const [seeded, setSeeded] = useState<string | null>(null)
+  useEffect(() => {
+    api
+      .templates()
+      .then(setTemplates)
+      .catch(() => setTemplates([]))
+  }, [])
+  const seed = async () => {
+    const { added } = await api.seedTemplates()
+    setSeeded(added.length ? `Added ${added.length} template${added.length === 1 ? '' : 's'} to templates/.` : 'The starter templates are already in templates/.')
+    setTemplates(await api.templates())
+    window.dispatchEvent(new Event('ekdanta:templates'))
+  }
   const missing = DEFAULT_KINDS.filter((d) => !kinds.some((k) => k.id === d.id))
 
   // What Add would make, or why it can't: the same rules as newKind, shown before the writer commits.
@@ -190,6 +206,7 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
             <small className="kind-folder">
               New pieces go in <code>{k.folder}/</code>
               {isSpecialPath(k.folder) && <>, a folder Recall and voice leave out (pieces you star still shape your voice)</>}
+              {!!templates?.length && <TemplateSelect kind={k} templates={templates} onChange={(template) => edit(k.id, { template })} />}
             </small>
             {onRenameFolder && <FolderFix kind={k} onRename={onRenameFolder} />}
           </li>
@@ -201,6 +218,19 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
           Bring back {missing.map((m) => m.name).join(', ')}
         </button>
       )}
+
+      <h3>Templates</h3>
+      <p className="sheet-note">
+        Templates are Markdown files in <code>templates/</code>, with prompts that give a new piece its structure. Edit them like any page.{' '}
+        {templates && (templates.length ? `You have ${templates.length}.` : 'You have none yet.')}
+      </p>
+      <div className="kind-templates">
+        <button className="btn" onClick={seed}>
+          Add starter templates
+        </button>
+        <span className="muted">Academic essay, research paper, lab report, LinkedIn post, YouTube script and more. Files already there are kept.</span>
+      </div>
+      {seeded && <p className="sheet-note kind-seeded">{seeded}</p>}
     </>
   )
 }
@@ -230,5 +260,35 @@ function FolderFix({ kind, onRename }: { kind: Kind; onRename: (id: string) => P
       </button>
       {error && <span className="kind-folder-error"> {error}</span>}
     </small>
+  )
+}
+
+/** A kind's default template: highlighted on its new drafts, so ↵ starts from it. */
+function TemplateSelect({ kind, templates, onChange }: { kind: Kind; templates: TemplateInfo[]; onChange: (template: string | undefined) => void }) {
+  const mine = templates.filter((t) => t.kind === kind.id)
+  const others = templates.filter((t) => t.kind !== kind.id)
+  const gone = kind.template && !templates.some((t) => t.path === kind.template)
+  return (
+    <label className="kind-template" title="Highlighted under a new draft of this kind, so ↵ starts from it">
+      · start from
+      <select value={kind.template ?? ''} onChange={(e) => onChange(e.target.value || undefined)} aria-label={`Default template for ${kind.name}`}>
+        <option value="">None (start blank)</option>
+        {gone && <option value={kind.template}>{kind.template} (not found)</option>}
+        {mine.map((t) => (
+          <option key={t.path} value={t.path}>
+            {t.name}
+          </option>
+        ))}
+        {others.length > 0 && (
+          <optgroup label="Other templates">
+            {others.map((t) => (
+              <option key={t.path} value={t.path}>
+                {t.name}
+              </option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+    </label>
   )
 }

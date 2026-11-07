@@ -35,7 +35,7 @@ const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
   return {
     path: rel,
     folder: rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '',
-    title: meta.title || firstHeading(body) || (isUntitled(rel) ? 'Untitled' : path.posix.basename(rel, '.md')),
+    title: meta.title || meta['template-name'] || firstHeading(body) || (isUntitled(rel) ? 'Untitled' : path.posix.basename(rel, '.md')),
     platform: meta.platform,
     exemplar: meta.exemplar === 'true',
     mtime: stat.mtime,
@@ -526,7 +526,9 @@ export function splitFrontMatter(raw: string): { meta: Record<string, string>; b
 }
 
 function firstHeading(body: string) {
-  return body.match(/^#\s+(.+)$/m)?.[1]?.trim()
+  const h = body.match(/^#\s+(.+)$/m)?.[1]?.trim()
+  // A template's `# {{title}}`, still waiting for the title, isn't one.
+  return h && !/^\{\{\s*title\s*\}\}$/i.test(h) ? h : undefined
 }
 
 const canvasOf = (rel: string) => rel.replace(/\.md$/, '.canvas')

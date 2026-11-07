@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Extension, type Editor as TiptapEditor } from '@tiptap/core'
 import { EditorContent, useEditor, type UseEditorOptions } from '@tiptap/react'
 import { BubbleMenu } from '@tiptap/react/menus'
-import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state'
+import type { Node as PMNode } from '@tiptap/pm/model'
+import { NodeSelection, Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { closeHistory, redoDepth, undoDepth } from '@tiptap/pm/history'
 import { COMMANDS, binding, matches, titled } from '../lib/keys.ts'
@@ -11,8 +12,8 @@ import { HelpController, type HistoryItem } from './controller.ts'
 import type { EdgeSlot } from '../lib/edge.ts'
 import { helpKey, helpOf, helpPlugin, noteCmdWorks, paragraphAt, textOf, type Help, type Level } from './help.ts'
 import { parseMarkdown, serializeMarkdown, type Source } from './markdown.ts'
-import { PageLinkMenu, SlashMenu, type PageRef } from './menus.ts'
-import { promptPlugin } from './prompts.ts'
+import { PageLinkMenu, SlashMenu, type PageRef, type TemplateItems } from './menus.ts'
+import { caretFor, isPromptSelected, promptPlugin, promptRanges } from './prompts.ts'
 import { extensions, resolver } from './schema.ts'
 import { readAloudPlugin } from './readAloud.ts'
 import { ReadAloudBar, canReadAloud, readAloud, useReadAloud } from '../components/ReadAloudBar.tsx'
@@ -48,6 +49,10 @@ interface Props {
   openDoc: (path: string) => void
   onWordCount: (n: number) => void
   autoFocus?: boolean
+  /** Where the caret starts: an offset into `initial` (a template's {{cursor}}). */
+  caret?: number | null
+  /** The vault's templates, for the "/" menu. */
+  templates?: TemplateItems
   /** The paragraph around the caret, whenever it may have changed. */
   onParagraph?: (text: string) => void
   pages: () => PageRef[]
@@ -81,6 +86,14 @@ export function helpLevel(e: KeyboardEvent): Level | null {
 const EDITOR_COMMANDS = COMMANDS.filter((c) => c.group !== 'App' && c.id !== 'save').map((c) => c.id)
 
 export const countWords = (text: string) => text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length
+
+/** Words between two positions, leaving out a template's prompts: they aren't the writer's words. */
+function wordsOutsidePrompts(doc: PMNode, from: number, to: number) {
+  const prompts = promptRanges(doc)
+    .filter((r) => r.from >= from && r.to <= to)
+    .reduce((n, r) => n + countWords(textOf(doc, r.from, r.to)), 0)
+  return countWords(textOf(doc, from, to)) - prompts
+}
 
 function readAsBase64(file: File) {
   return new Promise<string>((resolve, reject) => {
@@ -134,7 +147,9 @@ export function Editor(props: Props) {
           priority: 1000,
           addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), promptPlugin(), currentBlock, readAloudPlugin(), new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
         }),
-        SlashMenu,
+        SlashMenu.configure({
+          templates: { list: () => p().templates?.list() ?? [], insert: (t) => p().templates?.insert(t), browse: () => p().templates?.browse() },
+        }),
         PageLinkMenu.configure({ pages: () => p().pages() }),
       ],
       editorProps: {
@@ -226,7 +241,13 @@ export function Editor(props: Props) {
     p().onEditor?.(editor)
     report(editor)
     format(editor)
-    if (p().autoFocus !== false) editor.commands.focus('start')
+    const caret = p().caret
+    if (caret != null && caret >= 0 && caret <= p().initial.length) {
+      // A template's {{cursor}}: the caret goes there (a prompt there is selected, ready to be typed over).
+      const c = caretFor(editor.schema, editor.state.doc, 0, p().initial, caret)
+      editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, c.from, c.to)).scrollIntoView())
+      editor.view.focus()
+    } else if (p().autoFocus !== false) editor.commands.focus('start')
     return () => {
       if (editorRef.current === editor) editorRef.current = null
       controller.current = null
@@ -237,7 +258,7 @@ export function Editor(props: Props) {
 
   function report(ed: TiptapEditor) {
     const doc = ed.state.doc
-    p().onWordCount(countWords(textOf(doc, 0, doc.content.size)))
+    p().onWordCount(wordsOutsidePrompts(doc, 0, doc.content.size))
     const outline: Heading[] = []
     doc.descendants((n, pos) => {
       if (n.type.name === 'heading') outline.push({ level: n.attrs.level, text: n.textContent, pos })
@@ -257,7 +278,7 @@ export function Editor(props: Props) {
       marks: marksOf(ed),
       canUndo: undoDepth(ed.state) > 0,
       canRedo: redoDepth(ed.state) > 0,
-      selectedWords: sel.empty ? 0 : countWords(textOf(ed.state.doc, sel.from, sel.to)),
+      selectedWords: sel.empty ? 0 : wordsOutsidePrompts(ed.state.doc, sel.from, sel.to),
       inTable: ed.isActive('table'),
     }
     // Only when something the toolbar shows has changed, not on every keystroke.
@@ -405,7 +426,9 @@ export function Editor(props: Props) {
       {find && <FindBar editor={editor} onClose={() => setFind(false)} />}
       <BubbleMenu
         editor={editor}
-        shouldShow={({ editor: ed, state }) => !state.selection.empty && ed.isFocused && !helpOf(state) && !(state.selection instanceof NodeSelection) && !ed.isActive('codeBlock')}
+        shouldShow={({ editor: ed, state }) =>
+          !state.selection.empty && !isPromptSelected(state) && ed.isFocused && !helpOf(state) && !(state.selection instanceof NodeSelection) && !ed.isActive('codeBlock')
+        }
         options={{ placement: 'top', offset: 8 }}
       >
         <SelectionBar editor={editor} canRead={canReadAloud(reading.voices)} />

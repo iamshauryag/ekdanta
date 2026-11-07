@@ -41,6 +41,7 @@ const COMMAND_LIST = [
   { id: 'save', label: 'Save now', group: 'Editing', key: 'Mod-s' },
 
   { id: 'newDraft', label: 'New draft', group: 'App', key: 'Alt-n' },
+  { id: 'newFromTemplate', label: 'New from template…', group: 'App', key: '' },
   { id: 'thinking', label: 'Thinking Space', group: 'App', key: 'Alt-t' },
   { id: 'star', label: 'Star as exemplar', group: 'App', key: 'Alt-Shift-8' },
   { id: 'focus', label: 'Focus mode', group: 'App', key: 'Mod-.' },

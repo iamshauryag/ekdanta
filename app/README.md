@@ -32,7 +32,7 @@ You write on a formatted page, as in Google Docs or Notion: bold is bold, a head
 
 Each page in the sidebar has a ⋯ menu: **Rename** (double-click works too) renames the file and updates every `[[link]]` to it; **Move to…** files it in another folder, and moving it into a kind's folder makes it a piece of that kind; **Duplicate**; and **Delete**, which can be undone and keeps the page under **Recently deleted** (in `.ekdanta/trash/`) until you empty it. Changing a piece's kind moves it into that kind's folder, unless you filed it in a folder of your own.
 
-Every piece is a **kind** of writing: Essay, LinkedIn post, Email, Text message and Blog post to start with. Add your own in Settings → Kinds (a YT script, a letter, a speech). Each kind has its own folder, voice profile and typical length, plus a line on how it should read that the help levels follow ("spoken rhythm, a hook in the first ten seconds"). A piece's kind is stored as `platform:` in its front-matter, and the list in `.ekdanta/settings.json`, so a kind you remove and add again finds its pieces.
+Every piece is a **kind** of writing: Essay, LinkedIn post, Email, Text message, Blog post and YouTube script to start with. Add your own in Settings → Kinds (a letter, a speech, a newsletter). Each kind has its own folder, voice profile and typical length, plus a line on how it should read that the help levels follow ("spoken rhythm, a hook in the first ten seconds"). A piece's kind is stored as `platform:` in its front-matter, and the list in `.ekdanta/settings.json`, so a kind you remove and add again finds its pieces.
 
 ## Models
 

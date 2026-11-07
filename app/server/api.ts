@@ -20,6 +20,7 @@ import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
 import { isSameOrigin, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
+import { applyTemplateTo, listTemplates, seedTemplates } from './templates.ts'
 import {
   VAULT,
   appendHistory,
@@ -231,6 +232,16 @@ const routes: Record<string, Handler> = {
     const { doc, id, name } = await body<{ doc: string; id: string; name: string }>(req)
     return { version: await nameVersion(doc, id, String(name ?? '')) }
   },
+  'GET /api/templates': async () => listTemplates(),
+  // Fill an empty new piece from a template: front matter merged, body filled in.
+  'POST /api/templates/apply': async (req) => {
+    const { path, template } = await body<{ path: string; template: string }>(req)
+    const result = await applyTemplateTo(path, template)
+    refresh().catch(() => {})
+    return result
+  },
+  // The starter set, written only when the writer asks; files already there are never replaced.
+  'POST /api/templates/seed': async () => seedTemplates(),
   'GET /api/meta': async (_req, url) => splitFrontMatter(await readDoc(url.searchParams.get('path') ?? '')).meta,
   // Ideas: ideas.md at the top of the vault, only ever appended to; stars are the app's own.
   'GET /api/ideas': async () => listIdeas(),

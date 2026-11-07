@@ -1,4 +1,4 @@
-// Kinds of writing: Essay, LinkedIn post, Email and any the writer adds (a YouTube script, a letter).
+// Kinds of writing: Essay, LinkedIn post, Email, YouTube script and any the writer adds (a letter).
 // A piece's kind is its `platform` in front-matter. Each kind has a folder its pieces are filed in,
 // a voice profile, a typical length, and a line on how it should read that the help levels follow.
 // The list lives in the vault's settings; this module is shared by the app and the server.
@@ -36,6 +36,7 @@ export const DEFAULT_KINDS: Kind[] = [
   { id: 'email', name: 'Email', folder: 'emails', guidance: 'clear, courteous, gets to the point', words: 150 },
   { id: 'text', name: 'Text message', folder: 'texts', guidance: 'brief and natural', words: 40 },
   { id: 'blog', name: 'Blog post', folder: 'blog', guidance: 'conversational but substantial', words: 900 },
+  { id: 'youtube-script', name: 'YouTube script', folder: 'scripts', guidance: 'written to be spoken: short sentences, says early what the viewer gets, no throat-clearing', words: 900 },
 ]
 
 /** A kind's id from its name as typed: "YT Scripts" → `yt-scripts`, "ब्लॉग" → `ब्लॉग`. Empty if nothing nameable. */
