@@ -64,13 +64,18 @@ function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, 
       <div className="section-label">Vault</div>
       <div className="folder ideas">
         <div className={`folder-name ideas-head${ideasCurrent ? ' is-current' : ''}`}>
-          <button className="ideas-open" aria-current={ideasCurrent ? 'page' : undefined} onClick={onIdeas}>
-            <span>Ideas</span>
-            {ideaCount !== null && <span className="count">{ideaCount}</span>}
+          <button className="ideas-open" aria-current={ideasCurrent ? 'page' : undefined} aria-label={ideaCount !== null ? `Ideas, ${ideaCount}` : 'Ideas'} onClick={onIdeas}>
+            Ideas
           </button>
           <button className="icon-btn small" title={titled('Capture idea', 'captureIdea')} onClick={onCaptureIdea}>
             <Icon name="plus" />
           </button>
+          {/* The count sits at the far right, past the +; it opens the page too. */}
+          {ideaCount !== null && (
+            <span className="count" aria-hidden="true" onClick={onIdeas}>
+              {ideaCount}
+            </span>
+          )}
         </div>
       </div>
       {folders.map((folder) => (

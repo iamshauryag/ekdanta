@@ -475,11 +475,12 @@ kbd {
   background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);
 }
+.ideas-head .count {
+  padding: 0 4px;
+  cursor: pointer;
+}
 .ideas-open {
   flex: 1;
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
   min-width: 0;
   padding: 2px 0;
   text-align: left;
