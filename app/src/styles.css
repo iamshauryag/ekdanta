@@ -6023,3 +6023,484 @@ li.hl-ghost-block::marker {
   color: var(--accent);
   font-weight: 500;
 }
+
+/* feature: brain */
+.page.brain-page {
+  width: auto;
+  max-width: 880px;
+  margin-left: 84px;
+  margin-right: 40px;
+}
+.app:not(.has-panel) .page.brain-page,
+.app.is-focus .page.brain-page {
+  margin-left: auto;
+  margin-right: auto;
+}
+.brain-page .doc-title {
+  margin-bottom: 18px;
+}
+.brain-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.brain-tools .spacer {
+  flex: 1;
+}
+.brain-search,
+.dialog input:not([type]),
+.dialog input[type='date'],
+.dialog textarea,
+.brain-filters select,
+.folder-field input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  padding: 5px 9px;
+}
+.brain-search {
+  width: 240px;
+}
+.brain-search:focus,
+.dialog input:focus,
+.dialog textarea:focus,
+.folder-field input:focus {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.brain-error {
+  color: var(--del-ink);
+  margin: 8px 0;
+}
+.brain-warn {
+  color: var(--del-ink);
+  margin: 4px 0 10px;
+}
+
+/* An empty Brain: what it's for, and the two ways in. */
+.brain-empty {
+  max-width: 520px;
+  padding: 28px 0 8px;
+}
+.brain-empty p {
+  font: 17px/1.55 var(--serif);
+  color: var(--ink-2);
+  margin: 0 0 20px;
+}
+.brain-empty-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.brain-empty .btn {
+  padding: 7px 14px;
+}
+p.brain-empty-note,
+.brain-empty p.brain-empty-note {
+  font: 12px/1.45 var(--sans);
+  color: var(--ink-3);
+  margin: 12px 0 0;
+}
+
+/* The shelf: one group per type of source. */
+.brain-group {
+  margin-bottom: 28px;
+}
+.brain-group h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  margin: 0 0 10px;
+}
+.brain-group h2 .muted {
+  font-weight: 500;
+  margin-left: 4px;
+}
+.brain-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.brain-card {
+  position: relative;
+  background: var(--pop);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.brain-card:hover,
+.brain-card:focus-within {
+  border-color: var(--line-2);
+  box-shadow: 0 2px 8px rgb(40 35 25 / 0.06);
+}
+.brain-card.is-fresh {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.brain-card-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  min-height: 96px;
+  padding: 12px 14px;
+  text-align: left;
+}
+.brain-card-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 9px;
+}
+.brain-card-title {
+  font: 500 15.5px/1.3 var(--serif);
+  color: var(--ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.brain-card-author {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.brain-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 6px;
+  font-size: 11.5px;
+}
+.brain-card-add {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--accent);
+  padding: 2px 6px;
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.brain-card:hover .brain-card-add,
+.brain-card-add:focus-visible {
+  opacity: 1;
+}
+.brain-card-add:hover {
+  background: var(--accent-soft);
+}
+.pill {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 10px;
+  color: var(--ink-2);
+  background: var(--chrome-2);
+  white-space: nowrap;
+}
+.pill.is-reading {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.pill.is-done {
+  color: var(--ink-2);
+  background: var(--chrome-2);
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.pill.is-want {
+  color: var(--ink-3);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.rating {
+  color: var(--ink-3);
+  letter-spacing: 1px;
+}
+
+/* The table: every source, sortable and filterable. */
+.brain-filters {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.brain-filters label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.brain-filters select {
+  padding: 3px 6px;
+}
+.brain-filters .muted {
+  margin-left: auto;
+}
+.brain-table-wrap {
+  overflow-x: auto;
+}
+.brain-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.brain-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--line-2);
+  padding: 0;
+  white-space: nowrap;
+}
+.brain-table th button {
+  width: 100%;
+  text-align: inherit;
+  padding: 6px 8px;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+.brain-table th button:hover,
+.brain-table th[aria-sort='ascending'],
+.brain-table th[aria-sort='descending'] {
+  color: var(--ink);
+}
+.sort-mark {
+  display: inline-block;
+  width: 1em;
+  margin-left: 2px;
+}
+.brain-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  vertical-align: top;
+}
+.brain-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.brain-table td.title button {
+  font: 500 14px/1.3 var(--serif);
+  color: var(--ink);
+  text-align: left;
+}
+.brain-table td.tags {
+  color: var(--ink-3);
+}
+.brain-table tbody tr {
+  cursor: pointer;
+}
+.brain-table tbody tr:hover {
+  background: var(--chrome);
+}
+.brain-table tr.is-fresh td {
+  background: var(--accent-soft);
+}
+
+/* Dialogs: add a source, add a highlight, import. */
+.dialog {
+  width: min(520px, 100%);
+  max-height: 84vh;
+  overflow-y: auto;
+  background: var(--pop);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 22px 24px 20px;
+}
+.dialog h2 {
+  font: 500 20px/1.2 var(--serif);
+  margin: 0 0 14px;
+}
+.dialog .field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 12px;
+  min-width: 0;
+  flex: 1;
+}
+.dialog .field > span,
+.dialog .field > label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.dialog .field small {
+  font-size: 11.5px;
+}
+.dialog .field.narrow {
+  flex: 0 0 120px;
+}
+.dialog .field-row {
+  display: flex;
+  gap: 12px;
+}
+.dialog textarea {
+  resize: vertical;
+  font: 15px/1.5 var(--serif);
+}
+.dialog input[aria-invalid='true'] {
+  border-color: var(--del-ink);
+}
+.dialog .seg {
+  align-self: flex-start;
+}
+.lookup {
+  padding-bottom: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.lookup-row {
+  display: flex;
+  gap: 6px;
+}
+.lookup-row input {
+  flex: 1;
+  min-width: 0;
+}
+.candidates {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.candidates button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 7px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.candidates li:last-child button {
+  border-bottom: 0;
+}
+.candidates button:hover,
+.candidates button:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+.candidates .t {
+  font: 500 14px/1.3 var(--serif);
+}
+.candidates .muted {
+  font-size: 11.5px;
+}
+.stars {
+  display: flex;
+  gap: 1px;
+}
+.stars button {
+  font-size: 17px;
+  line-height: 1;
+  padding: 3px 2px;
+  color: var(--ink-4);
+}
+.stars button.is-on {
+  color: var(--accent);
+}
+.stars button:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: 4px;
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.brain-file {
+  margin: -8px 0 14px;
+  font-size: 12px;
+}
+.brain-summary {
+  font: 17px/1.4 var(--serif);
+  margin: 0 0 8px;
+}
+.brain-import-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+}
+.brain-import-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.brain-import-list .t {
+  font: 500 14px/1.3 var(--serif);
+}
+.brain-import-list .n {
+  margin-left: auto;
+  padding-left: 12px;
+  white-space: nowrap;
+  color: var(--ink-3);
+}
+.folder-field {
+  font: 11.5px var(--mono);
+  color: var(--ink-3);
+}
+.folder-field input {
+  font: 12px var(--mono);
+  width: 140px;
+  padding: 3px 7px;
+  margin-right: 2px;
+}
+@media (max-width: 1100px) {
+  .page.brain-page {
+    margin-left: 32px;
+    margin-right: 24px;
+  }
+}
+@media (max-width: 640px) {
+  .page.brain-page {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+  .brain-search {
+    width: 100%;
+  }
+  .dialog .field-row {
+    flex-direction: column;
+    gap: 0;
+  }
+  .dialog .field.narrow {
+    flex-basis: auto;
+  }
+}
+/* The dialog itself takes focus only when it has nothing to focus inside. */
+.dialog:focus {
+  outline: none;
+}
+/* An open Brain note says what it is, and leads back to the Brain. */
+.doc-meta .source-kind {
+  font-size: 12px;
+}

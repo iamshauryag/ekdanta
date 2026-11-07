@@ -8,6 +8,7 @@ import { helpMod } from '../editor/help.ts'
 import { SearchPane, type SearchProps } from './SearchPane.tsx'
 import { titled } from '../lib/keys.ts'
 import { IDEAS_FILE, isSpecialFile } from '../lib/special.ts'
+import { isBrainPath } from '../lib/brain.ts'
 
 /** 'search' has no rail button: it shows while it's in use (⌘⇧F), and its × goes back to the Vault. */
 export type SidebarMode = 'vault' | 'exemplars' | 'voice' | 'search'
@@ -19,6 +20,10 @@ interface Props {
   onOpen: (path: string) => void
   onCreate: (folder: string) => void
   onStar: (path: string) => void
+  /** Whether a page may be starred (notes in the Brain may not). */
+  canStar?: (path: string) => boolean
+  /** The Brain's folder: its groups are labelled as the Brain's, and hold sources rather than drafts. */
+  brainFolder?: string
   voices: VoiceSummary[]
   voiceView: string | null
   onVoice: (platform: string) => void
@@ -82,7 +87,7 @@ export function Sidebar(p: Props) {
   )
 }
 
-function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, onRestore, tags, onImport, ideasOpen, ideaCount, onIdeas, onCaptureIdea }: Props) {
+function Vault({ files: all, current, onOpen, onCreate, onStar, canStar, brainFolder, actions, trash, onRestore, tags, onImport, ideasOpen, ideaCount, onIdeas, onCaptureIdea }: Props) {
   // ideas.md has its own row at the top, so it isn't listed again among the pages.
   const files = all.filter((f) => !isSpecialFile(f.path))
   const allFolders = [...new Set(files.map((f) => f.folder))].sort()
@@ -133,15 +138,27 @@ function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, 
       {folders.map((folder) => (
         <div key={folder} className="folder">
           <div className="folder-name">
-            <span>{folderLabel(folder)}</span>
-            <button className="icon-btn small" title={`New draft in ${folderLabel(folder)}`} onClick={() => onCreate(folder)}>
-              <Icon name="plus" />
-            </button>
+            <span>{folderLabel(folder, brainFolder)}</span>
+            {/* Sources are added on the Brain page, with their details; a blank draft there would be neither. */}
+            {!inBrain(folder, brainFolder) && (
+              <button className="icon-btn small" title={`New draft in ${folderLabel(folder)}`} onClick={() => onCreate(folder)}>
+                <Icon name="plus" />
+              </button>
+            )}
           </div>
           {shown
             .filter((f) => f.folder === folder)
             .map((f) => (
-              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} actions={actions} folders={allFolders} />
+              <FileRow
+                key={f.path}
+                f={f}
+                current={current}
+                onOpen={onOpen}
+                onStar={f.exemplar || !canStar || canStar(f.path) ? onStar : undefined}
+                actions={actions}
+                folders={allFolders}
+                brainFolder={brainFolder}
+              />
             ))}
         </div>
       ))}
@@ -234,7 +251,7 @@ function VaultMenu({ onImport }: { onImport: () => void }) {
   )
 }
 
-function Exemplars({ files, current, onOpen, onStar, actions }: Props) {
+function Exemplars({ files, current, onOpen, onStar, canStar, actions }: Props) {
   const folders = [...new Set(files.map((f) => f.folder))].sort()
   const platformOf = (f: FileEntry) => (f.platform ?? 'essay').toLowerCase()
   // The usual platforms first, then anything else the vault uses (notes, say).
@@ -253,7 +270,7 @@ function Exemplars({ files, current, onOpen, onStar, actions }: Props) {
               <span className="count">{starred.length}</span>
             </div>
             {starred.map((f) => (
-              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} actions={actions} folders={folders} />
+              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={f.exemplar || !canStar || canStar(f.path) ? onStar : undefined} actions={actions} folders={folders} />
             ))}
             {ids.includes(pl) && starred.length < ENOUGH && (
               <p className="sidebar-hint">
@@ -296,13 +313,15 @@ function FileRow({
   onStar,
   actions,
   folders,
+  brainFolder,
 }: {
   f: FileEntry
   current: string | null
   onOpen: (p: string) => void
-  onStar: (p: string) => void
+  onStar?: (p: string) => void
   actions: FileActions
   folders: string[]
+  brainFolder?: string
 }) {
   const [menu, setMenu] = useState<null | 'main' | 'move' | 'new-folder'>(null)
   const [renaming, setRenaming] = useState(false)
@@ -348,14 +367,16 @@ function FileRow({
           {f.title}
         </button>
       )}
-      <button
-        className={`star${f.exemplar ? ' is-on' : ''}`}
-        aria-pressed={f.exemplar}
-        title={f.exemplar ? 'Exemplar. Click to un-star' : 'Star as an exemplar: sounds like you'}
-        onClick={() => onStar(f.path)}
-      >
-        <Icon name="star" />
-      </button>
+      {onStar && (
+        <button
+          className={`star${f.exemplar ? ' is-on' : ''}`}
+          aria-pressed={f.exemplar}
+          title={f.exemplar ? 'Exemplar. Click to un-star' : 'Star as an exemplar: sounds like you'}
+          onClick={() => onStar(f.path)}
+        >
+          <Icon name="star" />
+        </button>
+      )}
       <button className="more" title="More" aria-haspopup="menu" aria-expanded={!!menu} onClick={() => setMenu(menu ? null : 'main')}>
         <Icon name="more" />
       </button>
@@ -373,9 +394,11 @@ function FileRow({
           <button role="menuitem" onClick={act(() => actions.layout(f.path))}>
             Document layout…
           </button>
-          <button role="menuitem" onClick={act(() => onStar(f.path))}>
-            {f.exemplar ? 'Un-star' : 'Star as exemplar'}
-          </button>
+          {onStar && (
+            <button role="menuitem" onClick={act(() => onStar(f.path))}>
+              {f.exemplar ? 'Un-star' : 'Star as exemplar'}
+            </button>
+          )}
           <button role="menuitem" onClick={act(() => actions.pinBrief(f.path))}>
             {briefLabel(f.platform, actions.hasBrief(f.path))}
           </button>
@@ -395,7 +418,7 @@ function FileRow({
           </button>
           {folders.map((folder) => (
             <button key={folder} role="menuitem" disabled={folder === f.folder} onClick={act(() => actions.move(f.path, folder))}>
-              {folderLabel(folder)}
+              {folderLabel(folder, brainFolder)}
               {folder === f.folder && <span className="muted">here</span>}
             </button>
           ))}
@@ -425,9 +448,13 @@ function FileRow({
 const platformLabel = (p: string) => (findKind(kinds(), p) ? plural(kindDisplayName(kindName(kinds(), p))) : p === 'note' ? 'Notes' : kindName(kinds(), p))
 
 /** A kind's own folder takes the kind's name; any other keeps its own. */
-function folderLabel(folder: string) {
+const inBrain = (folder: string, brain?: string) => !!brain && isBrainPath(folder + '/x', brain)
+
+function folderLabel(folder: string, brain?: string) {
   if (!folder) return 'Vault'
   const last = folder.split('/').pop()!
+  // brain/books reads "Brain · Books", so the Brain's shelves aren't mistaken for the writer's own groups.
+  if (inBrain(folder, brain)) return folder.toLowerCase() === brain!.toLowerCase() ? 'Brain' : `Brain · ${last[0].toUpperCase() + last.slice(1)}`
   // The same match that files pieces: a kind's folder, or a folder named exactly as its id.
   const kind = kindOfFolder(kinds(), folder)
   return kind ? plural(kindDisplayName(kind.name)) : last[0].toUpperCase() + last.slice(1)

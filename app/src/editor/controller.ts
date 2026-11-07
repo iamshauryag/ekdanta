@@ -841,7 +841,7 @@ export class HelpController {
     if (h?.kind !== 'recall') return
     const r = h.results[i]
     const schema = this.doc.type.schema
-    // The quote, then its source as a link to the page it came from.
+    // The quote, then its source as a link to the page it came from (and, for a highlight from the Brain, where in the source).
     const quote = schema.nodes.blockquote.create(
       null,
       schema.nodes.paragraph.create(null, [
@@ -849,6 +849,7 @@ export class HelpController {
         schema.nodes.hardBreak.create(),
         schema.text('— '),
         schema.nodes.pageLink.create({ target: r.doc.replace(/\.md$/, ''), label: r.title }),
+        ...(r.location ? [schema.text(`, ${r.location}`)] : []),
       ]),
     )
     const tr = this.own(this.view.state.tr.insert(h.at, quote))

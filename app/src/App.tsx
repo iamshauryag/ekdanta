@@ -22,6 +22,8 @@ import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { MoreMenu } from './components/MoreMenu.tsx'
 import { SparksPage } from './components/SparksPage.tsx'
+import { BrainPage } from './components/BrainPage.tsx'
+import { DEFAULT_BRAIN_FOLDER, STATUS_LABELS, TYPE_LABELS, asStatus, isBrainPath, typeOf } from './lib/brain.ts'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
 import { helpLevel, type Level } from './editor/caret.ts'
@@ -167,6 +169,8 @@ export function App() {
   const fail = useCallback((e: unknown) => setError(e instanceof Error ? e.message : String(e)), [])
   const [voices, setVoices] = useState<VoiceSummary[]>([])
   const [voiceView, setVoiceView] = useState<string | null>(null) // a platform whose profile fills the page
+  const [brainView, setBrainView] = useState(false) // the Brain fills the page
+  const brainFolder = settings?.brainFolder ?? DEFAULT_BRAIN_FOLDER
   const refreshVoices = useCallback(() => api.voice().then(setVoices).catch(fail), [fail])
   // Ideas: the full-page list, the one-line capture box, and a counter that tells the list to re-read.
   const [ideasView, setIdeasView] = useState(false)
@@ -239,7 +243,15 @@ export function App() {
           // Provider or model changes show up in the Piece module's Models list.
           if ('provider' in patch || 'wordLocal' in patch || 'embedder' in patch || /Model$/.test(Object.keys(patch)[0])) api.status().then(setStatus).catch(fail)
         })
-        .catch(fail)
+        .catch((e) => {
+          fail(e)
+          // Refused (a Brain folder that holds the writer's pieces, say): show what is really saved, not the refused change.
+          if (seq === settingsSeq.current)
+            api
+              .settings()
+              .then(setSettings)
+              .catch(() => {})
+        })
     },
     [fail],
   )
@@ -635,6 +647,7 @@ export function App() {
       setFresh((f) => (f === next ? f : null))
       setLayoutFor((f) => (f === next ? f : null))
       setVoiceView(null)
+      setBrainView(false)
       setIdeasView(false)
       if (!newly) setLivePreview(chosenView)
       setPath(next)
@@ -1296,6 +1309,8 @@ export function App() {
   const toggleExemplar = async (rel: string) => {
     const f = files.find((x) => x.path === rel)
     if (!f) return
+    // Notes on books and talks hold other people's words: never the writer's voice.
+    if (!f.exemplar && isBrainPath(rel, brainFolder)) return notify('Notes in the Brain can’t be exemplars')
     const patch = { exemplar: f.exemplar ? null : 'true' }
     setFiles((fs) => fs.map((x) => (x.path === rel ? { ...x, exemplar: !x.exemplar } : x)))
     // The open document saves through the editor, so its front-matter must change there too.
@@ -1305,12 +1320,14 @@ export function App() {
 
   const openVoice = (platform: string) => {
     refreshVoices()
+    setBrainView(false)
     setIdeasView(false)
     setVoiceView(platform)
   }
 
   const openIdeas = () => {
     setVoiceView(null)
+    setBrainView(false)
     setIdeasView(true)
   }
 
@@ -1591,6 +1608,7 @@ export function App() {
         setReaderOpen(true)
         setReaderFocus((n) => n + 1)
       },
+      brain: () => void toggleBrain(),
     }
     actionsRef.current = appActions
     const onKey = (e: KeyboardEvent) => {
@@ -1611,9 +1629,32 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, ceiling, livePreview, notify, startImport, toggleOverlay, openSearch])
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, ceiling, livePreview, notify, startImport, toggleOverlay, openSearch, brainView])
+
+  /** The Brain fills the page; again, and it's back to the writing. */
+  const toggleBrain = async () => {
+    if (brainView) return setBrainView(false)
+    // Saved before the Brain can write to the same note, so the two never cross.
+    await save()
+    setVoiceView(null)
+    setIdeasView(false)
+    setThinkingOpen(false)
+    setBrainView(true)
+  }
+
+  /**
+   * The Brain wrote these notes. One open in the editor is read again: otherwise the editor would
+   * still hold the old text, and its next save would put it back over the new highlights.
+   */
+  const brainChanged = (touched: Touched[]) => {
+    refreshFiles()
+    // Taken in as Ekdanta's own change: anything not yet saved merges with it rather than being written over.
+    op(() => absorb(touched)).catch(fail)
+  }
 
   const current = files.find((f) => f.path === path)
+  // A note in the Brain is a source (a book, a talk), not a piece of the writer's own: it's labelled as one.
+  const sourceLabel = loaded && isBrainPath(loaded.path, brainFolder) ? TYPE_LABELS[typeOf(loaded.meta, loaded.path)] : null
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
   const title = loaded ? (loaded.meta.title ?? current?.title ?? '') : ''
   const isNew = !!loaded && fresh === loaded.path
@@ -1625,7 +1666,7 @@ export function App() {
   // Document mode: page view, style and length target, all from the piece's own front matter.
   const docSet = docOf(loaded?.meta ?? {})
   const docKind = findKind(kinds(), platform)
-  const sheet = !!loaded && !voiceView && !ideasView && livePreview && docSet.page
+  const sheet = !!loaded && !voiceView && !ideasView && !brainView && livePreview && docSet.page
   const layoutOpen = !!loaded && layoutFor === loaded.path
   const showDocButton = !!loaded && (usesDocument(loaded.meta, docKind) || layoutOpen)
   // A piece being written to a brief doesn't count its Works Cited or References: not in the total, the
@@ -1700,7 +1741,7 @@ export function App() {
     const group = COMMANDS.find((c) => c.id === id)?.group
     const onPage = group === 'Text' || group === 'Blocks' || id === 'find' || id === 'readAloud'
     const needsDoc = onPage || ['save', 'star', 'thinking', 'brief', 'saveVersion', 'readAs'].includes(id)
-    if (needsDoc && (!loaded || voiceView || ideasView)) return 'No document open'
+    if (needsDoc && (!loaded || voiceView || ideasView || brainView)) return 'No document open'
     if (onPage && !livePreview) return 'Not in Markdown view'
     if (id === 'readAs' && ceiling < 2) return 'Needs help ceiling 2 or more'
     if (onPage && thinkingOpen) return 'Thinking Space is open'
@@ -1739,7 +1780,7 @@ export function App() {
   }, [tryReveal, loaded?.key])
   const openAt = (target: string, select?: { text: string; nth: number }) => {
     reveal.current = select ? { path: target, ...select } : null
-    if (docRef.current?.path === target && loaded?.key === target && !voiceView && !ideasView) tryReveal()
+    if (docRef.current?.path === target && loaded?.key === target && !voiceView && !ideasView && !brainView) tryReveal()
     else openDoc(target)
   }
 
@@ -1835,8 +1876,14 @@ export function App() {
     >
       <header className="titlebar">
         <div className="crumb">
-          {current?.folder ? <span className="muted">{current.folder} / </span> : null}
-          {(loaded || !filesLoaded || pages.length > 0) && <b>{title || 'Untitled'}</b>}
+          {brainView ? (
+            <b>Brain</b>
+          ) : (
+            <>
+              {current?.folder ? <span className="muted">{current.folder} / </span> : null}
+              {(loaded || !filesLoaded || pages.length > 0) && <b>{title || 'Untitled'}</b>}
+            </>
+          )}
         </div>
         <div className="titlebar-meta">
           {loaded && <SaveChip state={saved} onRetry={() => saver.retry()} />}
@@ -1867,6 +1914,9 @@ export function App() {
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'voice' ? ' is-on' : ''}`} title="Voice" onClick={() => showSidebar('voice')}>
           <Icon name="voice" />
         </button>
+        <button className={`rail-btn${brainView ? ' is-on' : ''}`} title={titled('Brain', 'brain')} aria-pressed={brainView} onClick={() => void toggleBrain()}>
+          <Icon name="book" />
+        </button>
         <MoreMenu items={moreItems} />
         <div className="rail-spacer" />
         <button className="rail-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
@@ -1884,7 +1934,7 @@ export function App() {
           voices={voices}
           voiceView={voiceView}
           onVoice={openVoice}
-          current={voiceView || ideasView ? null : path}
+          current={voiceView || ideasView || brainView ? null : path}
           ideasOpen={ideasView && !voiceView}
           ideaCount={ideaCount}
           onIdeas={openIdeas}
@@ -1892,6 +1942,8 @@ export function App() {
           onOpen={openDoc}
           onCreate={newDraft}
           onStar={toggleExemplar}
+          canStar={(p) => !isBrainPath(p, brainFolder)}
+          brainFolder={brainFolder}
           actions={fileActions}
           trash={trash}
           onRestore={restore}
@@ -1899,7 +1951,7 @@ export function App() {
             state: search,
             onState: (patch) => setSearchState((s) => ({ ...s, ...patch })),
             focusTick: searchFocus,
-            current: voiceView || ideasView ? null : path,
+            current: voiceView || ideasView || brainView ? null : path,
             onReveal: openAt,
             onClose: () => setSidebarMode('vault'),
           }}
@@ -1923,7 +1975,8 @@ export function App() {
           filesLoaded &&
           !pages.length &&
           !loaded &&
-          !voiceView && (
+          !voiceView &&
+          !brainView && (
             <Welcome
               vault={status?.vault ?? ''}
               onStart={startWriting}
@@ -1937,13 +1990,16 @@ export function App() {
           )
         )}
         {voiceView && <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />}
+        {brainView && !voiceView && <BrainPage folder={brainFolder} onOpenDoc={openDoc} run={op} onChanged={brainChanged} />}
         {ideasView && !voiceView && <IdeasPage version={ideasVersion} onCapture={captureIdea} onStart={startIdea} onOpenDoc={openDoc} />}
-        {loaded && !voiceView && !ideasView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={chooseView} />}
+        {loaded && !voiceView && !ideasView && !brainView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={chooseView} />}
         {/* Saving needs the writer. In focus mode the title bar is hidden, so a failing save shows here too. */}
-        {loaded && !voiceView && !ideasView && focus && saved === 'failed' && <SaveChip state={saved} onRetry={() => saver.retry()} floating />}
-        {!loaded && openFailed && !voiceView && !ideasView && <NoticeBar text="Couldn’t open the page: the app’s server isn’t answering. Trying again…" actions={[]} />}
-        {loaded && !voiceView && !ideasView && conflict && conflict.path === loaded.path && <ConflictBar onTheirs={loadTheirs} onMine={keepMine} onCompare={() => setCompare('conflict')} />}
-        {loaded && !voiceView && !ideasView && saved === 'gone' && (
+        {loaded && !voiceView && !ideasView && !brainView && focus && saved === 'failed' && <SaveChip state={saved} onRetry={() => saver.retry()} floating />}
+        {!loaded && openFailed && !voiceView && !ideasView && !brainView && <NoticeBar text="Couldn’t open the page: the app’s server isn’t answering. Trying again…" actions={[]} />}
+        {loaded && !voiceView && !ideasView && !brainView && conflict && conflict.path === loaded.path && (
+          <ConflictBar onTheirs={loadTheirs} onMine={keepMine} onCompare={() => setCompare('conflict')} />
+        )}
+        {loaded && !voiceView && !ideasView && !brainView && saved === 'gone' && (
           <NoticeBar
             text="This file was deleted on disk"
             actions={[
@@ -1952,7 +2008,7 @@ export function App() {
             ]}
           />
         )}
-        {loaded && !voiceView && !ideasView && offer && offer.path === loaded.path && !conflict && (
+        {loaded && !voiceView && !ideasView && !brainView && offer && offer.path === loaded.path && !conflict && (
           <NoticeBar
             text={`Unsaved changes from ${whenKept(offer.at)}`}
             actions={[
@@ -1962,22 +2018,33 @@ export function App() {
             ]}
           />
         )}
-        {loaded && !voiceView && !ideasView && (
+        {loaded && !voiceView && !ideasView && !brainView && (
           <div className={`page${sheet ? ' is-sheet' : ''}`}>
             <div className="doc-meta">
-              <label className="platform">
-                <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Kind of writing" disabled={loaded.readonly}>
-                  {(kinds().some((k) => k.id === platform) ? kinds().map((k) => k.id) : [...kinds().map((k) => k.id), platform]).map((p) => (
-                    <option key={p} value={p}>
-                      {platformLabel(p)}
-                    </option>
-                  ))}
-                </select>
-                <svg className="chevron" viewBox="0 0 12 12" aria-hidden="true">
-                  <path d="M3.5 4.75 6 7.25l2.5-2.5" />
-                </svg>
-              </label>
-              <span className="muted">· {loaded.meta.status ?? 'draft'}</span>
+              {sourceLabel ? (
+                <>
+                  <button className="link source-kind" title="Back to the Brain" onClick={() => void toggleBrain()}>
+                    {sourceLabel} · Brain
+                  </button>
+                  {asStatus(loaded.meta.status) && <span className="muted">· {STATUS_LABELS[asStatus(loaded.meta.status) as keyof typeof STATUS_LABELS]}</span>}
+                </>
+              ) : (
+                <>
+                  <label className="platform">
+                    <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Kind of writing" disabled={loaded.readonly}>
+                      {(kinds().some((k) => k.id === platform) ? kinds().map((k) => k.id) : [...kinds().map((k) => k.id), platform]).map((p) => (
+                        <option key={p} value={p}>
+                          {platformLabel(p)}
+                        </option>
+                      ))}
+                    </select>
+                    <svg className="chevron" viewBox="0 0 12 12" aria-hidden="true">
+                      <path d="M3.5 4.75 6 7.25l2.5-2.5" />
+                    </svg>
+                  </label>
+                  <span className="muted">· {loaded.meta.status ?? 'draft'}</span>
+                </>
+              )}
               {due && <span className={`doc-due${/^(Overdue|Due yesterday)/.test(due) ? ' is-late' : ' is-soon'}`}>· {due}</span>}
               {showDocButton && (
                 <button
@@ -2020,7 +2087,7 @@ export function App() {
                 onHelp={(level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } }))}
               />
               <Properties key={'props:' + loaded.key} fm={loaded} open={propsOpen} onOpen={setPropsOpen} onPatch={setMeta} vaultTags={vaultTags} />
-              {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
+              {isNew && !words && !sourceLabel && <PlatformPicker value={platform} onPick={setPlatform} />}
               {isNew && bodyEmpty && templates.length > 0 && (
                 <StartFrom templates={templates} platform={platform} preferred={findKind(kinds(), platform)?.template} onApply={startFrom} onAll={() => setPicker('draft')} />
               )}
@@ -2086,6 +2153,8 @@ export function App() {
           status={status}
           path={loaded?.path ?? path}
           exemplar={!!current?.exemplar}
+          canStar={!!current && (!!current.exemplar || !isBrainPath(current.path, brainFolder))}
+          source={sourceLabel ?? undefined}
           voice={voices.find((v) => v.platform === platform)}
           onVoice={() => openVoice(platform)}
           outline={outline}
@@ -2187,10 +2256,10 @@ export function App() {
       {overlay === 'switcher' && (
         <Switcher
           files={pages}
-          current={voiceView || ideasView ? null : path}
+          current={voiceView || ideasView || brainView ? null : path}
           recent={recentDocs}
           onOpen={(p) => {
-            if (p === path && !voiceView && !ideasView) return closeOverlay()
+            if (p === path && !voiceView && !ideasView && !brainView) return closeOverlay()
             setOverlay(null)
             openDoc(p)
           }}

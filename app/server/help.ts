@@ -61,7 +61,7 @@ Help only as much as you are asked, never more. Never add commentary, preambles,
 async function voiceSamples(req: HelpRequest) {
   const profile = await voiceForPrompt(req.platform)
   try {
-    const hits = (await search(req.scope, { exclude: req.doc, limit: 8 }))
+    const hits = (await search(req.scope, { exclude: req.doc, limit: 8, sources: false }))
       .map((h) => ({ ...h, rank: h.score + (h.exemplar ? 0.05 : 0) }))
       .sort((a, b) => b.rank - a.rank)
       .slice(0, 3)

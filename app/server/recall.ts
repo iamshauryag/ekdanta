@@ -6,6 +6,7 @@ import { embedder } from './embed.ts'
 import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from './vault.ts'
 import { loadSettings } from './settings.ts'
 import { isPromptParagraph, isSpecialPath } from '../src/lib/special.ts'
+import { isBrainPath, locationText, parseHighlights, typeOf } from '../src/lib/brain.ts'
 
 export interface Chunk {
   doc: string
@@ -15,16 +16,21 @@ export interface Chunk {
   exemplar?: boolean
   text: string
   vec: number[]
+  /** A highlight kept in the Brain: what kind of source it's from, and where in it. */
+  sourceType?: string
+  location?: string
 }
 
 // Bump when chunks gain a field, so an older index is rebuilt rather than half-filled.
-// 3: templates' prompts and special folders are left out. Only a change to chunking should bump it again.
-const INDEX_VERSION = 3
+// 3: templates' prompts and special folders are left out.
+// 4: each highlight in the Brain is its own chunk, with its source type and location. Only a change to chunking should bump it again.
+const INDEX_VERSION = 4
 
 interface IndexFile {
   version?: number
   embedder: string // which model made the vectors
   files: Record<string, number> // path → mtime when indexed
+  brain?: string // the Brain folder when indexed: its notes are chunked by highlight
   chunks: Chunk[]
 }
 
@@ -64,14 +70,38 @@ async function save(ix: IndexFile) {
   await fs.writeFile(INDEX_PATH, JSON.stringify(ix), 'utf8')
 }
 
-async function indexFile(ix: IndexFile, f: FileEntry) {
-  const { body } = splitFrontMatter(await readDoc(f.path))
-  const paras = paragraphs(body)
+/** A Brain note's highlights worth recalling: each quote on its own, however short, as long as it says something. */
+export function highlightChunks(body: string) {
+  return parseHighlights(body)
+    .map((h) => ({ text: h.text.replace(/\s+/g, ' ').trim(), location: h.location ? locationText(h.location) : undefined }))
+    .filter((h) => h.text.length >= 25)
+}
+
+async function indexFile(ix: IndexFile, f: FileEntry, brain: string) {
+  const { meta, body } = splitFrontMatter(await readDoc(f.path))
+  // From the writer's own pages, their paragraphs; from the Brain, only the highlights they kept.
+  const isSource = isBrainPath(f.path, brain)
+  const items: { text: string; location?: string }[] = isSource ? highlightChunks(body) : paragraphs(body).map((text) => ({ text }))
+  const sourceType = isSource ? typeOf(meta, f.path) : undefined
   ix.chunks = ix.chunks.filter((c) => c.doc !== f.path)
-  for (let i = 0; i < paras.length; i += 32) {
-    const batch = paras.slice(i, i + 32)
-    const vecs = await embedder().embed(batch, 'document')
-    batch.forEach((text, j) => ix.chunks.push({ doc: f.path, title: f.title, folder: f.folder, platform: f.platform, exemplar: f.exemplar, text, vec: vecs[j] }))
+  for (let i = 0; i < items.length; i += 32) {
+    const batch = items.slice(i, i + 32)
+    const vecs = await embedder().embed(
+      batch.map((b) => b.text),
+      'document',
+    )
+    batch.forEach(({ text, location }, j) =>
+      ix.chunks.push({
+        doc: f.path,
+        title: f.title,
+        folder: f.folder,
+        platform: f.platform,
+        exemplar: f.exemplar && !isSource,
+        text,
+        vec: vecs[j],
+        ...(isSource ? { sourceType, location } : {}),
+      }),
+    )
   }
   ix.files[f.path] = f.mtime
 }
@@ -87,10 +117,18 @@ export function refresh(): Promise<IndexFile> {
     const ix = await load()
     // Templates, journals, sources and the writer's excluded folders aren't recalled; any already
     // indexed (from before they were excluded) are pruned below like deleted files.
-    const { excludedFolders } = await loadSettings()
-    const files = (await listFiles()).filter((f) => !isSpecialPath(f.path, excludedFolders))
+    // The Brain's notes are the exception: their highlights are recalled, cited to the source.
+    const { excludedFolders, brainFolder } = await loadSettings()
+    const files = (await listFiles()).filter((f) => isBrainPath(f.path, brainFolder) || !isSpecialPath(f.path, excludedFolders))
     const live = new Set(files.map((f) => f.path))
     let changed = false
+    // Another Brain folder changes how notes are chunked: index everything afresh.
+    if ((ix.brain ?? 'brain') !== brainFolder) {
+      ix.files = {}
+      ix.chunks = []
+      ix.brain = brainFolder
+      changed = true
+    }
     for (const p of Object.keys(ix.files)) {
       if (!live.has(p)) {
         delete ix.files[p]
@@ -100,7 +138,7 @@ export function refresh(): Promise<IndexFile> {
     }
     for (const f of files) {
       if (ix.files[f.path] !== f.mtime) {
-        await indexFile(ix, f)
+        await indexFile(ix, f, brainFolder)
         changed = true
       }
     }
@@ -135,14 +173,28 @@ export interface RecallResult {
   text: string
   score: number
   exemplar: boolean
+  sourceType?: string
+  location?: string
 }
 
-export async function search(query: string, opts: { exclude?: string; limit?: number; platform?: string } = {}) {
+/**
+ * The chunks nearest a query. `sources: false` leaves out highlights from the Brain: other people's
+ * words, which mustn't stand in for the writer's own voice.
+ */
+export async function search(query: string, opts: { exclude?: string; limit?: number; platform?: string; sources?: boolean } = {}): Promise<RecallResult[]> {
   const ix = await refresh()
   const [q] = await embedder().embed([query], 'query')
   const scored = ix.chunks
-    .filter((c) => c.doc !== opts.exclude && (!opts.platform || c.platform === opts.platform))
-    .map((c) => ({ doc: c.doc, title: c.title, folder: c.folder, text: c.text, exemplar: !!c.exemplar, score: cosine(q, c.vec) }))
+    .filter((c) => c.doc !== opts.exclude && (!opts.platform || c.platform === opts.platform) && (opts.sources !== false || !c.sourceType))
+    .map((c) => ({
+      doc: c.doc,
+      title: c.title,
+      folder: c.folder,
+      text: c.text,
+      exemplar: !!c.exemplar,
+      score: cosine(q, c.vec),
+      ...(c.sourceType ? { sourceType: c.sourceType, location: c.location } : {}),
+    }))
     .sort((a, b) => b.score - a.score)
   const best = scored[0]?.score ?? 0
   // A strong result shouldn't be padded out with weak ones.

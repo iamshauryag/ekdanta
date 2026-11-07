@@ -155,7 +155,7 @@ export async function recallChips(doc: string, fragments: Fragment[], taken: str
   const bar = embedder().strong + 0.04 // fragments are short, so they match loosely; ask for more
   for (const f of usable(fragments)) {
     out[f.id] = null
-    const [hit] = await search(f.text, { exclude: doc, limit: 1 })
+    const [hit] = await search(f.text, { exclude: doc, limit: 1, sources: false })
     if (!hit || hit.score < bar || taken.includes(hit.doc)) continue
     if ((best.get(hit.doc)?.score ?? 0) < hit.score) best.set(hit.doc, { id: f.id, score: hit.score, hit: { doc: hit.doc, title: hit.title, folder: hit.folder } })
   }

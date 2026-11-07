@@ -5,6 +5,9 @@ import path from 'node:path'
 import { META_DIR, VAULT } from './paths.ts'
 import { cleanKinds, DEFAULT_KINDS, doubledFolder, type Kind } from '../src/lib/kinds.ts'
 import { APPEARANCE_DEFAULTS, cleanAppearance, type Appearance } from '../src/lib/appearance.ts'
+import { asType, cleanBrainFolder, DEFAULT_BRAIN_FOLDER } from '../src/lib/brain.ts'
+import { splitFrontMatter } from '../src/lib/frontmatter.ts'
+import { HttpError } from './net.ts'
 
 export type ProviderChoice = 'auto' | 'claude-cli' | 'anthropic-api' | 'ollama'
 
@@ -35,6 +38,8 @@ export interface Settings extends Appearance {
   profileInstitution: string
   /** The style a piece takes when the writer turns on page view without choosing one. */
   defaultStyle: 'mla' | 'apa' | 'chicago' | 'none'
+  /** Where the Brain keeps its notes on books, podcasts, videos and articles (vault-relative). */
+  brainFolder: string
 }
 
 const env = process.env
@@ -55,6 +60,7 @@ export const DEFAULTS: Settings = {
   profileName: '',
   profileInstitution: '',
   defaultStyle: 'mla',
+  brainFolder: DEFAULT_BRAIN_FOLDER,
   ...APPEARANCE_DEFAULTS,
 }
 
@@ -65,7 +71,14 @@ export async function loadSettings(): Promise<Settings> {
   if (current) return current
   try {
     const saved = JSON.parse(await fs.readFile(FILE, 'utf8')) as Partial<Settings>
-    current = { ...DEFAULTS, ...saved, kinds: await settleFolders(cleanKinds(saved.kinds) ?? DEFAULTS.kinds), excludedFolders: cleanFolders(saved.excludedFolders), ...cleanAppearance(saved) }
+    current = {
+      ...DEFAULTS,
+      ...saved,
+      kinds: await settleFolders(cleanKinds(saved.kinds) ?? DEFAULTS.kinds),
+      excludedFolders: cleanFolders(saved.excludedFolders),
+      brainFolder: cleanBrainFolder(saved.brainFolder) || DEFAULT_BRAIN_FOLDER,
+      ...cleanAppearance(saved),
+    }
   } catch {
     current = { ...DEFAULTS }
   }
@@ -94,6 +107,40 @@ const holdsAnything = (abs: string) =>
     (names) => names.some((n) => n !== '.DS_Store'),
     () => false,
   )
+
+/**
+ * Why `folder` can't hold the Brain, or null if it can. Every note in the Brain's folder is read as a
+ * source (a book, a talk), so a folder of the writer's own writing would turn their pieces into books:
+ * a kind's folder is refused, and so is one already holding notes that aren't sources.
+ */
+export async function brainFolderProblem(folder: string, kinds: Kind[]): Promise<string | null> {
+  const f = folder.toLowerCase()
+  const kind = kinds.find((k) => {
+    const kf = k.folder.toLowerCase()
+    return kf === f || kf.startsWith(f + '/') || f.startsWith(kf + '/')
+  })
+  if (kind) return `${folder}/ is where your ${kind.name} pieces are filed, so it can’t be the Brain folder`
+  const stray = await firstNonSource(path.join(VAULT, folder), folder)
+  if (stray) return `${folder}/ already holds writing that isn’t a source (${stray}), so it can’t be the Brain folder`
+  return null
+}
+
+/** The first Markdown note under `dir` that isn't a source note (no book, podcast, video or article type). */
+async function firstNonSource(dir: string, rel: string): Promise<string | null> {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
+  for (const e of entries) {
+    if (e.name.startsWith('.')) continue
+    const abs = path.join(dir, e.name)
+    if (e.isDirectory()) {
+      const found = await firstNonSource(abs, `${rel}/${e.name}`)
+      if (found) return found
+    } else if (/\.md$/i.test(e.name)) {
+      const { meta } = splitFrontMatter(await fs.readFile(abs, 'utf8').catch(() => ''))
+      if (!asType(String(meta.type ?? '').toLowerCase())) return `${rel}/${e.name}`
+    }
+  }
+  return null
+}
 
 /** Vault-relative folder paths, tidied: forward slashes, no leading or trailing slash, no dot-folders or `..`, no repeats. */
 function cleanFolders(value: unknown): string[] {
@@ -129,6 +176,11 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   next.profileName = typeof next.profileName === 'string' ? next.profileName.trim().slice(0, 120) : ''
   next.profileInstitution = typeof next.profileInstitution === 'string' ? next.profileInstitution.trim().slice(0, 160) : ''
   if (!['mla', 'apa', 'chicago', 'none'].includes(next.defaultStyle)) next.defaultStyle = DEFAULTS.defaultStyle
+  next.brainFolder = cleanBrainFolder(next.brainFolder) || prev.brainFolder
+  if (next.brainFolder !== prev.brainFolder) {
+    const problem = await brainFolderProblem(next.brainFolder, next.kinds)
+    if (problem) throw new HttpError(400, problem)
+  }
   Object.assign(next, cleanAppearance(next))
   next.keys = Object.fromEntries(Object.entries(next.keys ?? {}).filter(([k, v]) => /^[\w.-]+$/.test(k) && typeof v === 'string' && v.length < 40))
   current = next

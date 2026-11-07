@@ -23,6 +23,8 @@ import { runReader, type ReaderRequest } from './reader.ts'
 import { HttpError, isLocalRequest, isSameOrigin, local, statusOf } from './net.ts'
 import { addUpload, commit, convert, openBatch, preview, undo } from './import/index.ts'
 import { exportDoc, pandoc, type ExportRequest } from './export.ts'
+import { addHighlight, addSource, brainFolder, listSources, lookup, previewImport, runImport } from './brain.ts'
+import { isBrainPath, type SourceFields } from '../src/lib/brain.ts'
 import { indexState, isReady, refresh, search, paragraphs } from './recall.ts'
 import { searchVault } from './search.ts'
 import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
@@ -97,7 +99,7 @@ const routes: Record<string, Handler> = {
         .catch(() => {})
     if (next.claudeModel !== prev.claudeModel) warmClaude()
     if (next.claudeFastModel !== prev.claudeFastModel) warmClaude()
-    if (JSON.stringify(next.excludedFolders) !== JSON.stringify(prev.excludedFolders)) refresh().catch(() => {})
+    if (JSON.stringify(next.excludedFolders) !== JSON.stringify(prev.excludedFolders) || next.brainFolder !== prev.brainFolder) refresh().catch(() => {})
     return next
   },
   'GET /api/snippets': async () => listSnippets(),
@@ -281,6 +283,8 @@ const routes: Record<string, Handler> = {
   // Front-matter changes to a document that isn't open in the editor (starring it from the Vault, say).
   'POST /api/meta': async (req) => {
     const { path, patch } = await body<{ path: string; patch: MetaPatch }>(req)
+    // A note on someone else's book isn't the writer's voice.
+    if (patch.exemplar && isBrainPath(path, await brainFolder())) throw new HttpError(400, 'Notes in the Brain can’t be exemplars')
     const { touched } = await collectTouched(async () => {
       const before = await readDoc(path)
       if (splitFrontMatter(before).readonly) await editableFrontMatter(path, Object.keys(patch).includes('exemplar') ? 'star' : 'change')
@@ -387,6 +391,32 @@ const routes: Record<string, Handler> = {
     const { text, kind } = await body<{ text: string; kind: string }>(req)
     return { path: await startIdea((await loadSettings()).kinds, typeof text === 'string' ? text : '', typeof kind === 'string' ? kind : '') }
   },
+  // The Brain: sources the writer read, heard or watched, and the highlights they kept.
+  'GET /api/brain': async () => listSources(),
+  'POST /api/brain/source': async (req) => {
+    const fields = await body<Partial<SourceFields>>(req)
+    const { result: out, touched } = await collectTouched(() => addSource(fields))
+    if (!out.existed) refresh().catch(() => {})
+    return { ...out, touched }
+  },
+  'POST /api/brain/highlight': async (req) => {
+    const { path, text, location } = await body<{ path: string; text: string; location?: string }>(req)
+    const { result: out, touched } = await collectTouched(() => addHighlight(path, text, location))
+    if (out.added) refresh().catch(() => {})
+    return { ...out, touched }
+  },
+  'POST /api/brain/import/preview': async (req) => {
+    const { text, name } = await body<{ text: string; name?: string }>(req)
+    return previewImport(text, name)
+  },
+  'POST /api/brain/import': async (req) => {
+    const { text, name } = await body<{ text: string; name?: string }>(req)
+    const { result: out, touched } = await collectTouched(() => runImport(text, name))
+    refresh().catch(() => {})
+    return { ...out, touched }
+  },
+  // Only when the writer presses "Look up": the server fetches a public http(s) page, never a local one.
+  'POST /api/brain/lookup': local(async (req) => lookup((await body<{ input: string }>(req)).input)),
 }
 
 /** Keep a version before the server moves or rewrites a document. A failure never blocks the move. */

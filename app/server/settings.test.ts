@@ -42,3 +42,20 @@ test('doubled folders are put right only when that is safe', async () => {
     ['YT script', 'Caption', 'Letter', 'Letter'],
   )
 })
+
+test('the Brain folder is never one that holds the writer’s own pieces', async () => {
+  const { saveSettings } = await import('./settings.ts')
+  // A kind's folder, or a folder inside one, would turn its pieces into books.
+  await assert.rejects(saveSettings({ brainFolder: 'letters' }), /Letter pieces/)
+  await assert.rejects(saveSettings({ brainFolder: 'letters/reading' }), /Letter pieces/)
+  // A folder that already holds a note that isn't a source.
+  await fs.mkdir(path.join(root, 'notes/old'), { recursive: true })
+  await fs.writeFile(path.join(root, 'notes/old/draft.md'), '---\ntitle: A draft\n---\nMy own words.')
+  await assert.rejects(saveSettings({ brainFolder: 'notes' }), /notes\/old\/draft\.md/)
+  assert.equal((await loadSettings()).brainFolder, 'brain')
+  // Sources only, or nothing there yet: fine.
+  await fs.mkdir(path.join(root, 'reading/books'), { recursive: true })
+  await fs.writeFile(path.join(root, 'reading/books/bird.md'), '---\ntype: book\ntitle: Bird by Bird\n---\n')
+  assert.equal((await saveSettings({ brainFolder: 'reading' })).brainFolder, 'reading')
+  assert.equal((await saveSettings({ brainFolder: 'library' })).brainFolder, 'library')
+})

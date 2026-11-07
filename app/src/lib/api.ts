@@ -6,6 +6,7 @@ import type { Appearance } from './appearance.ts'
 import type { EdgeCandidate, EdgeSlot } from './edge.ts'
 import type { VersionEntry, VersionRow } from './versions.ts'
 import type { Reader, ReaderQuestion } from './reader.ts'
+import type { SourceFields, SourceType } from './brain.ts'
 // Thin client for the local server in server/api.ts.
 export interface FileEntry {
   path: string
@@ -95,6 +96,29 @@ export interface Settings extends Appearance {
   defaultStyle: 'mla' | 'apa' | 'chicago' | 'none'
   /** Folders (vault-relative) left out of Recall and voice, besides the special ones. */
   excludedFolders: string[]
+  /** Where the Brain keeps its source notes. */
+  brainFolder: string
+}
+
+/** A source in the Brain, as the shelf lists it. */
+export interface Source extends SourceFields {
+  path: string
+  highlights: number
+  mtime: number
+}
+/** Details a lookup found, for the writer to check before saving. */
+export interface SourceCandidate extends Partial<SourceFields> {
+  type: SourceType
+  title: string
+}
+export interface ImportPlan {
+  format: 'kindle' | 'readwise' | null
+  books: { title: string; author: string; path: string | null; highlights: number; fresh: number }[]
+  fresh: number
+  skipped: number
+  created?: number
+  /** After an import: every note it wrote. */
+  changed?: string[]
 }
 
 export interface VoiceSummary {
@@ -375,6 +399,12 @@ export const api = {
     const info = JSON.parse(decodeURIComponent(r.headers.get('x-ekdanta-export') ?? '%7B%7D')) as Omit<Exported, 'blob'>
     return { ...info, blob: await r.blob() }
   },
+  brain: () => fetch('/api/brain').then(json<Source[]>),
+  addSource: (fields: Partial<SourceFields>) => fetch('/api/brain/source', send('POST', fields)).then(json<{ path: string; existed: boolean; touched?: Touched[] }>),
+  addHighlight: (path: string, text: string, location: string) => fetch('/api/brain/highlight', send('POST', { path, text, location })).then(json<{ added: number; touched?: Touched[] }>),
+  lookupSource: (input: string) => fetch('/api/brain/lookup', send('POST', { input })).then(json<{ candidates: SourceCandidate[] }>),
+  previewImport: (text: string, name: string) => fetch('/api/brain/import/preview', send('POST', { text, name })).then(json<ImportPlan>),
+  runImport: (text: string, name: string) => fetch('/api/brain/import', send('POST', { text, name })).then(json<ImportPlan & { touched?: Touched[] }>),
 }
 
 export type ReaderReply = { kind: 'questions'; items: ReaderQuestion[]; provider: string } | { kind: 'empty' | 'error'; message: string }

@@ -405,6 +405,14 @@ export const ROWS: SettingRow[] = [
     full: true,
     render: (c) => <Excluded {...c} />,
   },
+  {
+    tab: 'vault',
+    id: 'brainFolder',
+    label: 'Brain folder',
+    keywords: 'brain books podcasts videos articles highlights sources kindle readwise',
+    hint: () => 'Where notes on books, podcasts, videos and articles go. Their highlights are the only part Recall reads. Notes already there aren’t moved.',
+    render: ({ s, onChange }) => <FolderField value={s.brainFolder ?? 'brain'} label="Brain folder" onCommit={(brainFolder) => onChange({ brainFolder })} />,
+  },
 
   // ---- Shortcuts
   {
@@ -550,6 +558,36 @@ function NewNotes({ s, folders, onChange }: RowCtx) {
           ))}
         </select>
       )}
+    </span>
+  )
+}
+
+/** A folder name, saved when the field loses focus or on Return; Esc puts it back. */
+function FolderField({ value, label, onCommit }: { value: string; label: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  const commit = () => {
+    const v = draft.trim().replace(/^\/+|\/+$/g, '')
+    if (v && v !== value) onCommit(v)
+    else setDraft(value)
+  }
+  return (
+    <span className="folder-field">
+      <input
+        aria-label={label}
+        value={draft}
+        spellCheck={false}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+          else if (e.key === 'Escape') {
+            e.stopPropagation()
+            setDraft(value)
+          }
+        }}
+      />
+      /
     </span>
   )
 }

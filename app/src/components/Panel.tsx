@@ -56,6 +56,10 @@ interface Props {
   status: Status | null
   path: string | null
   exemplar: boolean
+  /** Notes in the Brain can't be starred: they hold other people's words. */
+  canStar?: boolean
+  /** For a note in the Brain, what kind of source it is ("Book"): it has no kind, length or brief of its own. */
+  source?: string
   onExemplar: () => void
   voice: VoiceSummary | undefined
   onVoice: () => void
@@ -453,29 +457,38 @@ function Piece(p: Props) {
   const s = p.status
   return (
     <>
-      <BriefCard key={p.path ?? ''} text={p.brief} platform={p.platform} editing={p.briefEditing} onEditing={p.onBriefEditing} onSave={p.onBriefSave} onUnpin={p.onBriefUnpin} />
+      {!p.source && <BriefCard key={p.path ?? ''} text={p.brief} platform={p.platform} editing={p.briefEditing} onEditing={p.onBriefEditing} onSave={p.onBriefSave} onUnpin={p.onBriefUnpin} />}
       {/* Read as… is level-2 help (questions only), so it goes with the help ceiling. */}
-      {p.ceiling >= 2 && p.path && (
+      {p.ceiling >= 2 && p.path && !p.source && (
         <ReaderList editor={p.editor} doc={p.path} platform={p.platform} open={p.readerOpen} onOpen={p.onReaderOpen} focusTick={p.readerFocus} reading={p.reading} onReading={p.onReading} />
       )}
       <div className="panel-head">
-        Piece <em>· facts</em>
+        {p.source ? 'Source' : 'Piece'} <em>· facts</em>
       </div>
       <dl className="facts">
-        <div>
-          <dt>Kind</dt>
-          <dd>{kindName(kinds(), p.platform)}</dd>
-        </div>
-        {p.field && <EdgeField field={p.field} suggest={p.field.canSuggest && showSuggestLink(p.ceiling)} />}
-        <div className="col">
-          <dt>Length</dt>
-          <dd>
-            <b>{p.words.toLocaleString()}</b> <span className="muted">/ ~{typical.toLocaleString()} typical</span>
-          </dd>
-          <div className="bar">
-            <i style={{ width: `${Math.min(100, (p.words / typical) * 100)}%` }} />
+        {p.source ? (
+          <div>
+            <dt>Kind</dt>
+            <dd>{p.source} in the Brain</dd>
           </div>
-        </div>
+        ) : (
+          <>
+            <div>
+              <dt>Kind</dt>
+              <dd>{kindName(kinds(), p.platform)}</dd>
+            </div>
+            {p.field && <EdgeField field={p.field} suggest={p.field.canSuggest && showSuggestLink(p.ceiling)} />}
+            <div className="col">
+              <dt>Length</dt>
+              <dd>
+                <b>{p.words.toLocaleString()}</b> <span className="muted">/ ~{typical.toLocaleString()} typical</span>
+              </dd>
+              <div className="bar">
+                <i style={{ width: `${Math.min(100, (p.words / typical) * 100)}%` }} />
+              </div>
+            </div>
+          </>
+        )}
         <div className="col">
           <dt>Help ceiling</dt>
           <dd>
@@ -496,7 +509,7 @@ function Piece(p: Props) {
             </label>
           </dd>
         </div>
-        {p.voice && (
+        {p.voice && !p.source && (
           <div>
             <dt>Voice</dt>
             <dd>
@@ -506,15 +519,17 @@ function Piece(p: Props) {
             </dd>
           </div>
         )}
-        <div>
-          <dt>Exemplar</dt>
-          <dd>
-            <button className={`star-toggle${p.exemplar ? ' is-on' : ''}`} onClick={p.onExemplar} title={`${p.exemplar ? 'Un-star' : 'Star'} (⌥⇧8)`}>
-              <Icon name="star" />
-              {p.exemplar ? 'Sounds like you' : 'Mark as sounding like you'}
-            </button>
-          </dd>
-        </div>
+        {p.canStar !== false && (
+          <div>
+            <dt>Exemplar</dt>
+            <dd>
+              <button className={`star-toggle${p.exemplar ? ' is-on' : ''}`} onClick={p.onExemplar} title={`${p.exemplar ? 'Un-star' : 'Star'} (⌥⇧8)`}>
+                <Icon name="star" />
+                {p.exemplar ? 'Sounds like you' : 'Mark as sounding like you'}
+              </button>
+            </dd>
+          </div>
+        )}
         <div className="col">
           <dt>File</dt>
           <dd className="path">{p.path}</dd>

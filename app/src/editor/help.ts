@@ -14,6 +14,16 @@ export interface RecallResult {
   folder: string
   text: string
   score: number
+  /** A highlight from the Brain: the kind of source ('book', 'video'…) and where in it. */
+  sourceType?: string
+  location?: string
+}
+
+/** A result's chip: "Book · Title · loc 1234" for a Brain highlight, "folder / Title" for the writer's own page. */
+export function sourceLabel(r: RecallResult): string {
+  if (!r.sourceType) return `${r.folder ? r.folder + ' / ' : ''}${r.title}`
+  const type = r.sourceType.charAt(0).toUpperCase() + r.sourceType.slice(1)
+  return [type, r.title, r.location].filter(Boolean).join(' · ')
 }
 
 export type Hunk = { kind: 'eq'; text: string } | { kind: 'chg'; del: string; ins: string; state: 'pending' | 'accepted' | 'rejected' }
@@ -330,8 +340,8 @@ function recallWidget(help: Extract<Help, { kind: 'recall' }>) {
     const i = page * 3 + k
     const row = el('div', 'hl-result' + (i === sel ? ' is-sel' : ''))
     row.append(el('div', 'hl-excerpt', `“${excerpt(r.text)}”`))
-    const chip = el('button', 'chip', `↳ ${r.folder ? r.folder + ' / ' : ''}${r.title}`)
-    chip.title = 'Open the source'
+    const chip = el('button', 'chip' + (r.sourceType ? ' is-source' : ''), `↳ ${sourceLabel(r)}`)
+    chip.title = r.sourceType ? 'Open the note in your Brain' : 'Open the source'
     chip.onmousedown = press(() => hooks?.openSource(r.doc))
     row.append(chip)
     row.onmousedown = (e) => {

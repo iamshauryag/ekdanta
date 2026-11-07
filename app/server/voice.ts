@@ -9,6 +9,7 @@ import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from '
 import { loadSettings } from './settings.ts'
 import { KIND_ID, kindName } from '../src/lib/kinds.ts'
 import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
+import { isBrainPath } from '../src/lib/brain.ts'
 
 const DIR = path.join(META_DIR, 'voice')
 /** Below this many exemplars, recent unstarred pieces top up the sources. */
@@ -43,9 +44,10 @@ const file = (platform: string) => {
 /**
  * Exemplars first; if there are too few, the most recent unstarred pieces fill in. A piece the writer
  * starred always counts, wherever it lives; templates, journals and excluded folders never fill in on their own.
+ * Notes in the Brain hold other people's words, so they never count, starred or not.
  */
-function sourcesFor(files: FileEntry[], platform: string, excluded: string[]) {
-  const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled')
+function sourcesFor(files: FileEntry[], platform: string, excluded: string[], brain: string) {
+  const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled' && !isBrainPath(f.path, brain))
   // The ideas list is a list, not a piece of writing: it never speaks for the writer's voice, starred or not.
   const starred = mine.filter((f) => f.exemplar && !isSpecialFile(f.path))
   const others = mine.filter((f) => !f.exemplar && !isSpecialPath(f.path, excluded)).sort((a, b) => b.mtime - a.mtime)
@@ -68,9 +70,9 @@ export async function writeProfile(platform: string, content: string) {
 export async function summaries(): Promise<VoiceSummary[]> {
   const files = await listFiles()
   const out: VoiceSummary[] = []
-  const { kinds, excludedFolders } = await loadSettings()
+  const { kinds, excludedFolders, brainFolder } = await loadSettings()
   for (const { id: platform } of kinds) {
-    const sources = sourcesFor(files, platform, excludedFolders)
+    const sources = sourcesFor(files, platform, excludedFolders, brainFolder)
     if (!sources.length) continue
     const profile = await readProfile(platform)
     const meta = profile ? splitFrontMatter(profile).meta : {}
@@ -101,8 +103,8 @@ interface Trait {
 /** Propose a new profile. Nothing is written: the writer reviews it as a diff first. */
 export async function buildProfile(platform: string): Promise<string> {
   const files = await listFiles()
-  const { kinds, excludedFolders } = await loadSettings()
-  const sources = sourcesFor(files, platform, excludedFolders)
+  const { kinds, excludedFolders, brainFolder } = await loadSettings()
+  const sources = sourcesFor(files, platform, excludedFolders, brainFolder)
   const name = kindName(kinds, platform)
   if (!sources.length) throw new Error(`No ${name} pieces to learn from yet`)
   const texts: { path: string; text: string }[] = []
