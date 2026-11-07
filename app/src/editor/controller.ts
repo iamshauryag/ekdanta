@@ -25,6 +25,7 @@ import {
 import { EDGE_NAMES, openingEdit, sentencesOf, titleHelp, type EdgeCandidate, type EdgeSlot } from '../lib/edge.ts'
 import { isPromptParagraph } from '../lib/special.ts'
 import { sentenceCount } from '../lib/versions.ts'
+import { AFTER_STOP, splitAfter } from '../lib/split.ts'
 
 export interface HistoryItem {
   level: Level
@@ -236,10 +237,7 @@ export class HelpController {
     if (level === 4) {
       if (sel.empty) return this.fetchGhost(sel.head, [])
       const text = textOf(this.doc, sel.from, sel.to)
-      const sentences = text
-        .trim()
-        .split(/(?<=[.!?])\s+/)
-        .filter(Boolean)
+      const sentences = splitAfter(text.trim(), AFTER_STOP).filter(Boolean)
       if (sentences.length > 1) return this.openBar(5, sel.from, sel.to)
       // A word or phrase selected: rewrite the whole sentence around it.
       const p = paragraphAt(state, sel.from)

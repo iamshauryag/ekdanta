@@ -1,6 +1,7 @@
 // Version history: the rules shared by the server (what to keep) and the panel (how to show it).
 // No DOM here, so it can be tested with node:test.
 import { diffWordsWithSpace } from 'diff'
+import { splitAfter } from './split.ts'
 
 export interface VersionEntry {
   /** Also the snapshot's file name (without .md): its time, made safe for a file name. */
@@ -61,10 +62,7 @@ export function wordDelta(before: string, after: string): { added: number; remov
 
 /** How many sentences a stretch of text holds (a fragment with no full stop counts as one). */
 export function sentenceCount(text: string) {
-  return text
-    .trim()
-    .split(/(?<=[.!?…])["'”’)]*\s+/)
-    .filter((s) => /[\p{L}\p{N}]/u.test(s)).length
+  return splitAfter(text.trim(), /([.!?…])["'”’)]*\s+/g).filter((s) => /[\p{L}\p{N}]/u.test(s)).length
 }
 
 /**

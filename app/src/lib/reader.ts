@@ -2,6 +2,8 @@
 // and the app (who the reader is, how long a draft may be, where a quoted phrase sits now).
 // No DOM here, so it can be tested on its own.
 
+import { splitAfter } from './split.ts'
+
 export type ReaderPreset = 'teacher' | 'manager' | 'investor' | 'newcomer'
 export type ReaderId = ReaderPreset | 'other'
 
@@ -127,7 +129,7 @@ export function isReaderQuestion(q: string, text = ''): boolean {
   if (!q || !QUESTION_END.test(q)) return false
   if (words(q) > QUESTION_MAX_WORDS) return false
   // Two sentences at most ("I lost the thread here. Who is 'she'?"); more is commentary.
-  if (q.split(/(?<=[.!?？؟\u037e])\s+/).filter(Boolean).length > 2) return false
+  if (splitAfter(q, /([.!?？؟\u037e])\s+/g).filter(Boolean).length > 2) return false
   if (/^\s*(rewrite|rephrase|change|replace|try|consider|cut|delete|remove|add|use)\b/i.test(q)) return false
   // A quoted phrase that isn't in the draft is wording being proposed ("Why not say 'we grew fast' instead?").
   for (const m of q.matchAll(/["“«]([^"”»]+)["”»]|(?:^|[\s(])['‘]([^'’]+)['’](?=[\s,.?!;:)]|$)/g)) {

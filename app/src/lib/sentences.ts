@@ -241,7 +241,7 @@ export function spokenText(sentence: string): string {
     sentence
       // Markdown footnote references and superscript note numbers.
       .replace(/\[\^[^\]\s]+\]/g, '')
-      .replace(/(?<=[\p{L}.,;:!?)”’"'])[¹²³⁴⁵⁶⁷⁸⁹⁰]+/gu, '')
+      .replace(/([\p{L}.,;:!?)”’"'])[¹²³⁴⁵⁶⁷⁸⁹⁰]+/gu, '$1')
       .replace(/\(([^()]{3,200})\)/g, (whole, inner: string) => {
         const parts = inner.split(';')
         const said: string[] = []

@@ -3,6 +3,8 @@
 // that keep a candidate honest (its source is really in the draft, it invents no number or name, it
 // fits the slot) are tested in one place.
 
+import { splitAfter } from './split.ts'
+
 export type EdgeSlot = 'title' | 'opening' | 'subject' | 'excerpt'
 
 /** The longest each slot may be, in characters. */
@@ -63,7 +65,7 @@ export function sentencesOf(text: string): string[] {
     .split(/\n+/)
     .filter((line) => !SALUTATION.test(line.trim()))
     .flatMap((line) =>
-      line.split(/(?<=[.!?…]["'”’)\]]*)\s+(?=\S)/).reduce<string[]>((acc, part) => {
+      splitAfter(line, /([.!?…]["'”’)\]]*)\s+(?=\S)/g).reduce<string[]>((acc, part) => {
         if (acc.length && ABBREVIATION.test(acc[acc.length - 1])) acc[acc.length - 1] += ' ' + part
         else acc.push(part)
         return acc
@@ -121,7 +123,8 @@ export function cleanLine(text: string, slot: EdgeSlot) {
     .replace(/\s+/g, ' ')
     .trim()
   t = t.replace(/^["'“‘](.*)["'”’]$/s, '$1').trim()
-  if (slot === 'title' || slot === 'subject') t = t.replace(/(?<!\.)\.$/, '')
+  // One full stop goes; an ellipsis stays.
+  if ((slot === 'title' || slot === 'subject') && t.endsWith('.') && !t.endsWith('..')) t = t.slice(0, -1)
   return t
 }
 
