@@ -110,6 +110,12 @@ function oneAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return run
 }
 
+/**
+ * Run `fn` while no write of this document is under way (and hold later writes until it's done), so
+ * the file and the write record agree while it looks at them. Never call writeDoc from inside it.
+ */
+export const betweenWrites = <T>(rel: string, fn: () => Promise<T>): Promise<T> => oneAtATime(resolveInVault(rel), fn)
+
 export async function writeDoc(rel: string, content: string, opts: { reason?: string } = {}): Promise<{ mtime: number }> {
   const abs = resolveInVault(rel)
   if (!abs.endsWith('.md')) throw new Error('Only .md files can be written')

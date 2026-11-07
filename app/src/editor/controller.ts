@@ -24,6 +24,7 @@ import {
 } from './help.ts'
 import { EDGE_NAMES, openingEdit, sentencesOf, titleHelp, type EdgeCandidate, type EdgeSlot } from '../lib/edge.ts'
 import { isPromptParagraph } from '../lib/special.ts'
+import { sentenceCount } from '../lib/versions.ts'
 
 export interface HistoryItem {
   level: Level
@@ -40,6 +41,8 @@ export interface ControllerOptions {
   platform: () => string
   ceiling: () => number
   record: (item: HistoryItem) => void
+  /** Keep a version of the text as it is now (called just before help replaces more than a sentence). */
+  snapshot?: (reason: string) => void
   openDoc: (path: string) => void
   /** What a title, subject or excerpt says now, so edge lines don't offer it back. */
   edgeCurrent?: (slot: EdgeSlot) => string
@@ -596,6 +599,8 @@ export class HelpController {
     let text = h.text
     if (oneWord) text = text.match(/^\s*\S+/)?.[0] ?? text
     const rest = h.text.slice(text.length)
+    // Taking a whole continuation of more than a sentence: keep the text as it was first.
+    if (!rest.trim() && sentenceCount(h.text) > 1) this.opts.snapshot?.(`before ${helpMod}4 continuation`)
     const tr = this.view.state.tr
     const end = insertPlain(tr, h.at, h.at, text)
     tr.setSelection(TextSelection.create(tr.doc, end))
@@ -690,6 +695,9 @@ export class HelpController {
       }
       offset += x.del.length
     }
+    // A rewrite that replaces more than a sentence: keep the text as it was first.
+    const inserted = edits.map((e) => e.text).join(' ')
+    if (edits.length && (sentenceCount(h.original) > 1 || sentenceCount(inserted) > 1)) this.opts.snapshot?.(`before ${helpMod}${h.level} rewrite`)
     const tr = this.own(this.view.state.tr)
     // From the end, so earlier positions stay valid.
     for (const e of edits.reverse()) insertPlain(tr, e.from, e.to, e.text)
@@ -721,7 +729,10 @@ export class HelpController {
     if (dotOf(state) !== null) this.view.dispatch(state.tr.setMeta(helpKey, { dot: null } satisfies HelpMeta))
     if (!enabled) return
     this.dotTimer = window.setTimeout(async () => {
-      const text = textOf(this.doc, para.from, para.to)
+      // The page may have changed since (a rewrite accepted, a version restored): read the paragraph as it is now.
+      const now = paragraphAt(this.view.state, this.view.state.selection.head)
+      if (now.from !== para.from) return
+      const text = textOf(this.doc, now.from, now.to)
       try {
         const r = await fetch('/api/recall-probe', {
           method: 'POST',

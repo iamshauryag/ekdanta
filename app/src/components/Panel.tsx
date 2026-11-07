@@ -8,10 +8,23 @@ import { binding, formatKey, titled } from '../lib/keys.ts'
 import { helpMod } from '../editor/help.ts'
 import type { Editor as TiptapEditor } from '@tiptap/core'
 import { OutlineList } from './OutlineList.tsx'
+import type { VersionRow } from '../lib/versions.ts'
+import { VersionsList } from './VersionsList.tsx'
 import { BriefCard } from './BriefCard.tsx'
 import { EDGE_LIMITS, EDGE_NAMES, showSuggestLink, type EdgeSlot } from '../lib/edge.ts'
 
 export type PanelTab = 'material' | 'outline' | 'history' | 'piece'
+/** The History tab's two halves: the document's versions, and the log of help asked for. */
+export type HistorySeg = 'versions' | 'help'
+
+/** What the Versions list needs from the app. */
+export interface VersionsProps {
+  tick: number
+  ask: number
+  open: string | null
+  onSave: (name: string) => Promise<void>
+  onOpen: (row: VersionRow) => void
+}
 
 /** What the Material tab can do to the Thinking Space without opening it. */
 export interface Thoughts {
@@ -58,6 +71,9 @@ interface Props {
   thoughts: Thoughts
   onOpenDoc: (path: string) => void
   onClearHistory: () => void
+  historySeg: HistorySeg
+  onHistorySeg: (s: HistorySeg) => void
+  versions: VersionsProps
   /** The pinned brief ('' for none), and the paste box for it. */
   brief: string
   briefEditing: boolean
@@ -91,7 +107,23 @@ export function Panel(p: Props) {
       <div className="panel-body">
         {p.tab === 'material' && <Material thinking={p.thinking} covered={p.covered} nearest={p.nearest} onOpen={p.onThinking} thoughts={p.thoughts} onOpenDoc={p.onOpenDoc} />}
         {p.tab === 'outline' && <OutlineList editor={p.editor} outline={p.outline} onHeading={p.onHeading} onBeforeMove={p.onBeforeMove} notify={p.notify} />}
-        {p.tab === 'history' && <HistoryLog history={p.history} />}
+        {p.tab === 'history' && (
+          <>
+            <div className="seg seg-text vh-seg" role="tablist" aria-label="History">
+              {(
+                [
+                  ['versions', 'Versions'],
+                  ['help', 'Help log'],
+                ] as const
+              ).map(([id, label]) => (
+                <button key={id} role="tab" aria-selected={p.historySeg === id} className={p.historySeg === id ? 'is-on' : ''} onClick={() => p.onHistorySeg(id)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {p.historySeg === 'versions' ? <VersionsList doc={p.path} {...p.versions} /> : <HistoryLog history={p.history} />}
+          </>
+        )}
         {p.tab === 'piece' && <Piece {...p} />}
       </div>
     </aside>
@@ -302,7 +334,7 @@ function HistoryLog({ history }: { history: HistoryItem[] }) {
   return (
     <>
       <div className="panel-head">
-        History <em>· this document</em>
+        Help log <em>· this document</em>
         <span className="count">{history.length} items</span>
       </div>
       {!items.length && <p className="empty">Nothing yet. Press 1–5 with ⌘ (or ⌥) while writing; every request and what you did with it shows up here.</p>}

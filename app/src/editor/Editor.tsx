@@ -4,7 +4,7 @@ import { EditorContent, useEditor, type UseEditorOptions } from '@tiptap/react'
 import { BubbleMenu } from '@tiptap/react/menus'
 import { NodeSelection, Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
-import { redoDepth, undoDepth } from '@tiptap/pm/history'
+import { closeHistory, redoDepth, undoDepth } from '@tiptap/pm/history'
 import { COMMANDS, binding, matches, titled } from '../lib/keys.ts'
 import { blockOf, marksOf, runCommand, type Block, type Mark } from './commands.ts'
 import { HelpController, type HistoryItem } from './controller.ts'
@@ -43,6 +43,8 @@ interface Props {
   ceiling: () => number
   recallDot: () => boolean
   record: (item: HistoryItem) => void
+  /** Keep a version of the text as it is now, before help replaces a lot of it. */
+  snapshot?: (reason: string) => void
   openDoc: (path: string) => void
   onWordCount: (n: number) => void
   autoFocus?: boolean
@@ -169,6 +171,10 @@ export function Editor(props: Props) {
       },
       onUpdate: ({ editor, transaction }) => {
         if (transaction.getMeta('ekdanta-load') || editor !== editorRef.current) return
+        // A restored version brings the source of its blocks, so it's written back exactly as it was kept.
+        // The old blocks' source stays too, for ⌘Z.
+        const restored = transaction.getMeta('ekdanta-source') as Source | undefined
+        if (restored) source.current = { prefix: restored.prefix, blocks: new Map([...(source.current?.blocks ?? []), ...restored.blocks]), last: restored.last }
         p().onChange(serializeMarkdown(editor.state.doc, source.current))
         report(editor)
       },
@@ -212,6 +218,7 @@ export function Editor(props: Props) {
       platform: () => p().platform(),
       ceiling: () => p().ceiling(),
       record: (item) => p().record(item),
+      snapshot: (reason) => p().snapshot?.(reason),
       openDoc: (path) => p().openDoc(path),
       edgeCurrent: (slot) => p().edgeCurrent?.(slot) ?? '',
       acceptEdge: (slot, text) => p().acceptEdge?.(slot, text),
@@ -348,6 +355,19 @@ export function Editor(props: Props) {
       input.onchange = () => addImages([...(input.files ?? [])])
       input.click()
     }
+    // Restoring a version: the whole body in one transaction, so ⌘Z brings back what was there.
+    const replaceBody = (e: Event) => {
+      const ed = editorRef.current
+      if (!ed) return
+      const { doc, source: src } = parseMarkdown(ed.schema, (e as CustomEvent<{ body: string }>).detail.body)
+      // Its own undo step, even straight after typing.
+      const tr = closeHistory(ed.state.tr).replaceWith(0, ed.state.doc.content.size, doc.content)
+      const kept = new Set<unknown>()
+      tr.doc.forEach((n) => kept.add(n))
+      tr.setMeta('ekdanta-source', { ...src, blocks: new Map([...src.blocks].filter(([n]) => kept.has(n))), last: src.last && kept.has(src.last) ? src.last : null })
+      ed.view.dispatch(tr.setMeta(helpKey, { help: null }).scrollIntoView())
+      ed.commands.focus('start')
+    }
     // A help key pressed in the title, and 'Suggest from my draft' beside a field: both run here.
     const fromTitle = (e: Event) => {
       const level = (e as CustomEvent<{ level: Level }>).detail?.level
@@ -367,7 +387,9 @@ export function Editor(props: Props) {
     window.addEventListener('ekdanta:find', openFind)
     window.addEventListener('ekdanta:link', openLink)
     window.addEventListener('ekdanta:image', pickImage)
+    window.addEventListener('ekdanta:replace-body', replaceBody)
     return () => {
+      window.removeEventListener('ekdanta:replace-body', replaceBody)
       window.removeEventListener('ekdanta:help', fromTitle)
       window.removeEventListener('ekdanta:edge', edge)
       window.removeEventListener('ekdanta:find', openFind)

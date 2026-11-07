@@ -8,7 +8,9 @@ import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
 import { api, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Trashed, type VoiceSummary } from './lib/api.ts'
 import { applyPatch, joinFrontMatter, splitFrontMatter, type Meta, type MetaPatch } from './lib/frontmatter.ts'
-import { Panel, type PanelTab } from './components/Panel.tsx'
+import { Panel, type HistorySeg, type PanelTab } from './components/Panel.tsx'
+import { VersionPreview } from './components/VersionPreview.tsx'
+import type { VersionRow } from './lib/versions.ts'
 import { Settings } from './components/Settings.tsx'
 import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
@@ -21,7 +23,7 @@ import { CaptureBox } from './components/CaptureBox.tsx'
 import { IdeasPage } from './components/IdeasPage.tsx'
 import { IDEAS_FILE } from './lib/special.ts'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
-import { binding, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
+import { binding, isMac as isMacKeys, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
 import { READ_WPM, readingTimes } from './lib/sentences.ts'
 
 function usePref<T>(key: string, initial: T) {
@@ -65,6 +67,12 @@ export function App() {
   const [sidebarMode, setSidebarMode] = usePref<SidebarMode>('sidebarMode', 'vault')
   const [panelOpen, setPanelOpen] = usePref('panel', true)
   const [panelTab, setPanelTab] = usePref<PanelTab>('panelTab', 'piece')
+  const [historySeg, setHistorySeg] = usePref<HistorySeg>('historySeg', 'versions')
+  // Version history: a counter that tells the list to re-read, one that opens its name field, and the version being previewed.
+  const [versionsTick, setVersionsTick] = useState(0)
+  const [versionsAsk, setVersionsAsk] = useState(0)
+  const [preview, setPreview] = useState<VersionRow | null>(null)
+  const bumpVersions = useCallback(() => setVersionsTick((t) => t + 1), [])
   const [focus, setFocus] = useState(false)
   const [livePreview, setLivePreview] = usePref('livePreview', true)
   const [editor, setEditor] = useState<TiptapEditor | null>(null)
@@ -239,6 +247,7 @@ export function App() {
     // The page forgives `**bold **` while it's being typed; the file always gets valid Markdown.
     await api.write(d.path, joinFrontMatter(d.rawMeta, d.meta, d.body))
     setSaved('saved')
+    setVersionsTick((t) => t + 1) // a save can keep a version
   }, [])
 
   const onChange = useCallback(
@@ -251,6 +260,56 @@ export function App() {
     },
     [save, syncText],
   )
+
+  /** The open document as it is on screen, front matter included: what a version keeps. */
+  const currentText = useCallback(() => {
+    const d = docRef.current
+    return d ? joinFrontMatter(d.rawMeta, d.meta, d.body) : ''
+  }, [])
+
+  /** Keep a version of the text on screen now (before help replaces a lot of it, say). */
+  const snapshotNow = useCallback(
+    (reason: string) => {
+      const d = docRef.current
+      if (!d) return
+      api
+        .snapshot(d.path, { reason, content: currentText() })
+        .then(bumpVersions)
+        .catch(() => {})
+    },
+    [currentText, bumpVersions],
+  )
+
+  /** Save version…: keep the text as it is, with the writer's name for it if they gave one. */
+  const saveVersion = useCallback(
+    async (name: string) => {
+      const d = docRef.current
+      if (!d) return
+      if (saveTimer.current !== undefined) await save()
+      const { version } = await api.snapshot(d.path, { reason: 'saved by you', name: name || undefined, content: currentText() })
+      bumpVersions()
+      notify(version ? (name ? `Saved version “${name}”` : 'Saved a version') : 'Nothing new to save · the last version is the same')
+    },
+    [save, currentText, bumpVersions, notify],
+  )
+
+  /** Put a version's text back: saves first, keeps what's there as a version, then replaces the body in one step (⌘Z undoes it). Front matter stays as it is now. */
+  const restoreVersion = async (content: string) => {
+    const d = docRef.current
+    const row = preview
+    if (!d) return
+    if (saveTimer.current !== undefined) await save()
+    await api.snapshot(d.path, { reason: 'before restore', content: currentText() })
+    window.dispatchEvent(new CustomEvent('ekdanta:replace-body', { detail: { body: splitFrontMatter(content).body } }))
+    await save()
+    setPreview(null)
+    bumpVersions()
+    const at = row ? new Date(row.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+    notify(`Restored ${row?.name ? `“${row.name}”` : `the version from ${at}`} · ${isMacKeys ? '⌘Z' : 'Ctrl+Z'} undoes it`)
+  }
+
+  // A preview belongs to the document it was opened on.
+  useEffect(() => setPreview(null), [loaded?.key, voiceView])
 
   /** Switch documents: finish any pending save first, and drop a new draft that was left empty. */
   const openDoc = useCallback(
@@ -665,6 +724,16 @@ export function App() {
       outline: () => openTab('outline'),
       history: () => openTab('history'),
       piece: () => openTab('piece'),
+      versions: () => {
+        openTab('history')
+        setHistorySeg('versions')
+      },
+      saveVersion: () => {
+        if (!docRef.current) return
+        openTab('history')
+        setHistorySeg('versions')
+        setVersionsAsk((a) => a + 1)
+      },
       brief: () => void (docRef.current && pinBrief(docRef.current.path)),
       readAloud: () => (livePreview ? window.dispatchEvent(new Event('ekdanta:read-aloud')) : notify('Read aloud works on the page, not in the Markdown view')),
       captureIdea: () => setCaptureOpen((o) => !o),
@@ -683,7 +752,7 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, save, newDraft, setPanelOpen, setPanelTab, files, thinkingOpen, livePreview, notify])
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, livePreview, notify])
 
   const current = files.find((f) => f.path === path)
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
@@ -899,6 +968,7 @@ export function App() {
                 onChange={onChange}
                 {...editorProps}
                 record={record}
+                snapshot={snapshotNow}
                 openDoc={openDoc}
                 onWordCount={setWords}
                 onParagraph={onParagraph}
@@ -921,6 +991,9 @@ export function App() {
         )}
         {focus && <div className="focus-hint">esc or ⌘. to exit focus</div>}
       </main>
+      {preview && loaded && !voiceView && (
+        <VersionPreview key={preview.id} doc={loaded.path} row={preview} current={currentText} onRestore={restoreVersion} onNamed={bumpVersions} onClose={() => setPreview(null)} />
+      )}
 
       {panelOpen && (
         <Panel
@@ -956,6 +1029,9 @@ export function App() {
           onOpenDoc={openDoc}
           onExemplar={() => current && toggleExemplar(current.path)}
           onClearHistory={() => setHistory([])}
+          historySeg={historySeg}
+          onHistorySeg={setHistorySeg}
+          versions={{ tick: versionsTick, ask: versionsAsk, open: preview?.id ?? null, onSave: saveVersion, onOpen: setPreview }}
           brief={openBrief?.text ?? ''}
           briefEditing={briefEditing && !!openBrief}
           onBriefEditing={setBriefEditing}

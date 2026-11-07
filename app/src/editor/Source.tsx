@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { defaultKeymap, history, historyKeymap, isolateHistory } from '@codemirror/commands'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { syntaxHighlighting } from '@codemirror/language'
 import { EditorState } from '@codemirror/state'
@@ -28,7 +28,19 @@ export function SourceEditor({ initial, onChange }: { initial: string; onChange:
       }),
     })
     view.focus()
-    return () => view.destroy()
+    // Restoring a version: one change, so ⌘Z brings back what was there.
+    const replaceBody = (e: Event) =>
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: (e as CustomEvent<{ body: string }>).detail.body },
+        selection: { anchor: 0 },
+        scrollIntoView: true,
+        annotations: isolateHistory.of('full'),
+      })
+    window.addEventListener('ekdanta:replace-body', replaceBody)
+    return () => {
+      window.removeEventListener('ekdanta:replace-body', replaceBody)
+      view.destroy()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   return <div className="editor source-editor" ref={host} />

@@ -1,5 +1,6 @@
 import type { Kind } from './kinds.ts'
 import type { EdgeCandidate, EdgeSlot } from './edge.ts'
+import type { VersionEntry, VersionRow } from './versions.ts'
 // Thin client for the local server in server/api.ts.
 export interface FileEntry {
   path: string
@@ -157,6 +158,14 @@ export const api = {
     fetch('/api/thinking/material', send('POST', { doc, fragments, paragraph })).then(json<{ covered: string[]; nearest: string | null }>),
   history: (doc: string) => fetch('/api/history?doc=' + encodeURIComponent(doc)).then(json<unknown[]>),
   appendHistory: (doc: string, item: unknown) => fetch('/api/history', send('POST', { doc, item })).then(json),
+  versions: (doc: string) => fetch('/api/versions?doc=' + encodeURIComponent(doc)).then(json<VersionRow[]>),
+  version: (doc: string, id: string) =>
+    fetch(`/api/version?doc=${encodeURIComponent(doc)}&id=${encodeURIComponent(id)}`)
+      .then(json<{ content: string }>)
+      .then((d) => d.content),
+  /** Keep a version: of `content` if given (the text on screen), else of the file as saved. */
+  snapshot: (doc: string, opts: { reason: string; name?: string; content?: string }) => fetch('/api/versions/snapshot', send('POST', { doc, ...opts })).then(json<{ version: VersionEntry | null }>),
+  nameVersion: (doc: string, id: string, name: string) => fetch('/api/versions/name', send('POST', { doc, id, name })).then(json<{ version: VersionEntry }>),
   brief: (doc: string) =>
     fetch('/api/brief?doc=' + encodeURIComponent(doc))
       .then(json<{ text: string }>)

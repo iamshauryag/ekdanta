@@ -18,6 +18,7 @@ import { runEdge, type EdgeRequest } from './edge.ts'
 import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
 import { isSameOrigin, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
+import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
 import {
   VAULT,
   appendHistory,
@@ -64,7 +65,12 @@ const routes: Record<string, Handler> = {
     return next
   },
   'GET /api/files': async () => markBriefs(await listFiles()),
-  'GET /api/file': async (_req, url) => ({ content: await readDoc(url.searchParams.get('path') ?? '') }),
+  'GET /api/file': async (_req, url) => {
+    const path = url.searchParams.get('path') ?? ''
+    // Changed outside Ekdanta since we last wrote it? Keep both sides as versions before it's edited.
+    const content = await checkOutside(path)
+    return { content }
+  },
   'PUT /api/file': async (req) => {
     const { path, content } = await body<{ path: string; content: string }>(req)
     await writeDoc(path, content)
@@ -83,18 +89,21 @@ const routes: Record<string, Handler> = {
   },
   'POST /api/place': async (req) => {
     const { path } = await body<{ path: string }>(req)
+    await keepBefore(path, 'before move')
     const next = await placeDoc((await loadSettings()).kinds, path)
     if (next !== path) refresh().catch(() => {})
     return { path: next }
   },
   'POST /api/rename': async (req) => {
     const { path, title } = await body<{ path: string; title: string }>(req)
+    await keepBefore(path, 'before rename')
     const next = await renameDoc(path, title)
     refresh().catch(() => {})
     return { path: next }
   },
   'POST /api/move': async (req) => {
     const { path, folder } = await body<{ path: string; folder: string }>(req)
+    await keepBefore(path, 'before move')
     const next = await moveToFolder((await loadSettings()).kinds, path, folder)
     refresh().catch(() => {})
     return { path: next }
@@ -105,6 +114,7 @@ const routes: Record<string, Handler> = {
   },
   'POST /api/delete': async (req) => {
     const { path } = await body<{ path: string }>(req)
+    await keepBefore(path, 'before delete')
     const item = await trashDoc(path)
     refresh().catch(() => {})
     return item
@@ -190,6 +200,16 @@ const routes: Record<string, Handler> = {
     const { doc, fragments, paragraph } = await body<{ doc: string; fragments: Fragment[]; paragraph: string }>(req)
     return material(doc, fragments, paragraph ?? '')
   },
+  'GET /api/versions': async (_req, url) => listVersions(url.searchParams.get('doc') ?? ''),
+  'GET /api/version': async (_req, url) => ({ content: await readVersion(url.searchParams.get('doc') ?? '', url.searchParams.get('id') ?? '') }),
+  'POST /api/versions/snapshot': async (req) => {
+    const { doc, name, reason, content } = await body<{ doc: string; name?: string; reason?: string; content?: string }>(req)
+    return { version: await snapshot(doc, { name, content: typeof content === 'string' ? content : undefined, reason: String(reason || (name ? 'saved by you' : 'snapshot')).slice(0, 60) }) }
+  },
+  'POST /api/versions/name': async (req) => {
+    const { doc, id, name } = await body<{ doc: string; id: string; name: string }>(req)
+    return { version: await nameVersion(doc, id, String(name ?? '')) }
+  },
   'GET /api/meta': async (_req, url) => splitFrontMatter(await readDoc(url.searchParams.get('path') ?? '')).meta,
   // Ideas: ideas.md at the top of the vault, only ever appended to; stars are the app's own.
   'GET /api/ideas': async () => listIdeas(),
@@ -206,6 +226,8 @@ const routes: Record<string, Handler> = {
     return { path: await startIdea((await loadSettings()).kinds, typeof text === 'string' ? text : '', typeof kind === 'string' ? kind : '') }
   },
 }
+
+/** Keep a version before the server moves or rewrites a document. A failure never blocks the move. */
 
 /** Start the Claude sessions the current settings will use, if Claude is the one answering. */
 function warmClaude() {

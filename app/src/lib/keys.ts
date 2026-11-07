@@ -51,6 +51,8 @@ const COMMAND_LIST = [
   { id: 'piece', label: 'Panel: Piece', group: 'App', key: 'Ctrl-Alt-4' },
   { id: 'brief', label: 'Pin a brief', group: 'App', key: '' },
   { id: 'settings', label: 'Settings', group: 'App', key: 'Alt-,' },
+  { id: 'saveVersion', label: 'Save version…', group: 'App', key: '' },
+  { id: 'versions', label: 'Version history', group: 'App', key: '' },
   { id: 'readAloud', label: 'Read aloud', group: 'App', key: '' },
   // ⌘⇧I on a Mac; elsewhere Ctrl+Shift+I opens the browser's developer tools, so Ctrl+Alt+I.
   { id: 'captureIdea', label: 'Capture idea', group: 'App', key: isMac ? 'Mod-Shift-i' : 'Mod-Alt-i' },
