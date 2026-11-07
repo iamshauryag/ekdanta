@@ -4,6 +4,9 @@ import { Editor, type EditorFormat, type Heading } from './editor/Editor.tsx'
 import type { PageRef } from './editor/menus.ts'
 import { SourceEditor } from './editor/Source.tsx'
 import { findKind, kindName, kinds, setKinds } from './lib/kinds.ts'
+import { DocumentMode, DocumentPanel } from './components/DocumentMode.tsx'
+import { docOf, dueLabel, kindSwitchPatch, usesDocument } from './lib/docstyle.ts'
+import { countable, type Block } from './lib/targets.ts'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
 import { api, ApiError, type Changes, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Touched, type Trashed, type VoiceSummary } from './lib/api.ts'
@@ -98,6 +101,10 @@ export function App() {
   const [saveNews, setSaveNews] = useState('')
   // A document that couldn't be read because the server didn't answer: it's tried again until it can be.
   const [openFailed, setOpenFailed] = useState<string | null>(null)
+  const [blocks, setBlocks] = useState<Block[]>([])
+  // Pages the text fills in page view (an estimate), and the document whose Document layout popover is open.
+  const [sheetPages, setSheetPages] = useState<{ total: number; body: number } | null>(null)
+  const [layoutFor, setLayoutFor] = useState<string | null>(null)
 
   const [sidebarOpen, setSidebarOpen] = usePref('sidebar', true)
   const [sidebarMode, setSidebarMode] = usePref<SidebarMode>('sidebarMode', 'vault')
@@ -572,6 +579,7 @@ export function App() {
         }
       }
       setFresh((f) => (f === next ? f : null))
+      setLayoutFor((f) => (f === next ? f : null))
       setVoiceView(null)
       setIdeasView(false)
       if (!newly) setLivePreview(chosenView)
@@ -945,7 +953,10 @@ export function App() {
   const setPlatform = async (platform: string) => {
     const d = docRef.current
     if (!d) return
-    d.meta = applyPatch(d.meta, { platform })
+    const patch: MetaPatch = { platform }
+    // A new, empty piece takes its new kind's document defaults (and gives back the old kind's).
+    if (fresh === d.path && !d.body.trim()) Object.assign(patch, kindSwitchPatch(d.meta, findKind(kinds(), d.meta.platform ?? '')?.doc, findKind(kinds(), platform)?.doc))
+    d.meta = applyPatch(d.meta, patch)
     syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
     saver.edited()
@@ -1085,6 +1096,10 @@ export function App() {
         refreshVoices()
         notify(`Moved to ${folder.split('/').pop()}`, () => fileActions.move(next, rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''))
       }).catch(failed('move')),
+    layout: async (rel) => {
+      if (docRef.current?.path !== rel) await openDoc(rel)
+      setLayoutFor(rel)
+    },
     duplicate: async (rel) => {
       const next = await op(async () => (await api.duplicate(rel)).path).catch(failed('duplicate'))
       if (!next) return
@@ -1196,6 +1211,7 @@ export function App() {
     setFiles((fs) => fs.map((f) => (f.path === prev ? { ...f, path: next, folder: next.includes('/') ? next.slice(0, next.lastIndexOf('/')) : '' } : f)))
     setLoaded((l) => (l ? { ...l, path: next } : l))
     setFresh((f) => (f === prev ? next : f))
+    setLayoutFor((f) => (f === prev ? next : f))
     setPath(next)
   }
 
@@ -1416,6 +1432,10 @@ export function App() {
       outline: () => openTab('outline'),
       history: () => openTab('history'),
       piece: () => openTab('piece'),
+      documentLayout: () => {
+        const d = docRef.current
+        if (d) setLayoutFor((f) => (f === d.path ? null : d.path))
+      },
       versions: () => {
         openTab('history')
         setHistorySeg('versions')
@@ -1469,6 +1489,19 @@ export function App() {
   // promise text they won't write. Not in the Markdown view, where help doesn't run.
   const [caretTipSeen, setCaretTipSeen] = usePref('tip.helpAtCaret', false)
   const showCaretTip = !caretTipSeen && !!loaded && !voiceView && livePreview && isNew && words >= 4
+  // Document mode: page view, style and length target, all from the piece's own front matter.
+  const docSet = docOf(loaded?.meta ?? {})
+  const docKind = findKind(kinds(), platform)
+  const sheet = !!loaded && !voiceView && !ideasView && livePreview && docSet.page
+  const layoutOpen = !!loaded && layoutFor === loaded.path
+  const showDocButton = !!loaded && (usesDocument(loaded.meta, docKind) || layoutOpen)
+  // A piece being written to a brief doesn't count its Works Cited or References: not in the total, the
+  // selection, or the panel. LimitStatus counts the file's text by the same rule.
+  const skipReferences = !!loaded && (usesDocument(loaded.meta, docKind) || !!loaded.meta.target?.trim())
+  const counted = skipReferences ? countable(blocks) : { words, excluded: [] }
+  const selectedCounted = (format?.selectedWords ?? 0) - (skipReferences ? (format?.selectedReferenceWords ?? 0) : 0)
+  const due = dueLabel(loaded?.meta.due)
+  const profile = useMemo(() => ({ name: settings?.profileName ?? '', institution: settings?.profileInstitution ?? '' }), [settings?.profileName, settings?.profileInstitution])
   const templateItems = useMemo(() => ({ list: () => templatesRef.current, insert: (t: TemplateInfo) => insertAtCaretRef.current(t), browse: () => setPicker('insert') }), [])
   const insertAtCaretRef = useRef(insertAtCaret)
   insertAtCaretRef.current = insertAtCaret
@@ -1589,7 +1622,9 @@ export function App() {
   )
 
   return (
-    <div className={`app${focus ? ' is-focus' : ''}${panelOpen ? ' has-panel' : ''}${sidebarOpen ? ' has-sidebar' : ''}${settings?.paragraphFocus === false ? ' no-para-focus' : ''}`}>
+    <div
+      className={`app${focus ? ' is-focus' : ''}${panelOpen ? ' has-panel' : ''}${sidebarOpen ? ' has-sidebar' : ''}${settings?.paragraphFocus === false ? ' no-para-focus' : ''}${sheet ? ' has-sheet' : ''}`}
+    >
       <header className="titlebar">
         <div className="crumb">
           {current?.folder ? <span className="muted">{current.folder} / </span> : null}
@@ -1710,7 +1745,7 @@ export function App() {
           />
         )}
         {loaded && !voiceView && !ideasView && (
-          <div className="page">
+          <div className={`page${sheet ? ' is-sheet' : ''}`}>
             <div className="doc-meta">
               <label className="platform">
                 <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Kind of writing">
@@ -1725,53 +1760,85 @@ export function App() {
                 </svg>
               </label>
               <span className="muted">· {loaded.meta.status ?? 'draft'}</span>
+              {due && <span className={`doc-due${/^(Overdue|Due yesterday)/.test(due) ? ' is-late' : ' is-soon'}`}>· {due}</span>}
+              {showDocButton && (
+                <button
+                  className="doc-btn"
+                  aria-haspopup="dialog"
+                  aria-expanded={layoutOpen}
+                  title={titled('Document layout', 'documentLayout')}
+                  onClick={() => setLayoutFor(layoutOpen ? null : loaded.path)}
+                >
+                  Document
+                </button>
+              )}
+              {layoutOpen && (
+                <DocumentPanel
+                  meta={loaded.meta}
+                  profile={profile}
+                  defaultStyle={settings?.defaultStyle ?? 'mla'}
+                  setMeta={(patch) => setMetaOf(loaded.path, patch)}
+                  onClose={() => setLayoutFor(null)}
+                />
+              )}
               <span className="muted path">{loaded.path}</span>
             </div>
-            <TitleField
-              key={'title:' + loaded.key}
-              spellcheck={spellcheck}
-              value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)}
-              autoFocus={isNew && loaded.caret == null}
-              onCommit={setTitle}
-              onHelp={(level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } }))}
-            />
-            {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
-            {isNew && bodyEmpty && templates.length > 0 && (
-              <StartFrom templates={templates} platform={platform} preferred={findKind(kinds(), platform)?.template} onApply={startFrom} onAll={() => setPicker('draft')} />
-            )}
-            {livePreview ? (
-              <Editor
-                // Back from the Markdown view, the page is read afresh from what was written there.
-                key={loaded.key}
-                docKey={loaded.key}
-                // Opened to pin a brief: the paste box keeps the focus.
-                autoFocus={!isNew && !briefEditing && !(caret.current && Date.now() - caret.current.at < 2000)}
-                caret={loaded.caret}
-                templates={templateItems}
-                initial={docRef.current?.body ?? loaded.body}
-                onChange={onChange}
-                {...editorProps}
-                record={record}
-                snapshot={snapshotNow}
-                openDoc={openDoc}
-                onWordCount={setWords}
-                onParagraph={onParagraph}
-                pages={() => pagesRef.current}
-                openPage={openPage}
-                saveImage={saveImage}
-                assetUrl={assetUrl}
-                onEditor={onEditor}
-                onFormat={setFormat}
-                onOutline={setOutline}
+            <DocumentMode
+              on={sheet}
+              meta={loaded.meta}
+              title={title}
+              profile={profile}
+              onPages={setSheetPages}
+              onSheetClick={() => editor?.commands.focus('end')}
+              onEdit={() => setLayoutFor(loaded.path)}
+            >
+              <TitleField
+                key={'title:' + loaded.key}
                 spellcheck={spellcheck}
-                lang={() => docRef.current?.meta.lang}
-                onReadUnavailable={() => notify('This browser has no voices to read aloud with. Settings → Writing explains.')}
-                edgeCurrent={edgeCurrent}
-                acceptEdge={acceptEdge}
+                value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)}
+                autoFocus={isNew && loaded.caret == null}
+                onCommit={setTitle}
+                onHelp={(level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } }))}
               />
-            ) : (
-              <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} onPageView={() => chooseView(true)} spellcheck={spellcheck} />
-            )}
+              {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
+              {isNew && bodyEmpty && templates.length > 0 && (
+                <StartFrom templates={templates} platform={platform} preferred={findKind(kinds(), platform)?.template} onApply={startFrom} onAll={() => setPicker('draft')} />
+              )}
+              {livePreview ? (
+                <Editor
+                  // Back from the Markdown view, the page is read afresh from what was written there.
+                  key={loaded.key}
+                  docKey={loaded.key}
+                  // Opened to pin a brief: the paste box keeps the focus.
+                  autoFocus={!isNew && !briefEditing && !(caret.current && Date.now() - caret.current.at < 2000)}
+                  caret={loaded.caret}
+                  templates={templateItems}
+                  initial={docRef.current?.body ?? loaded.body}
+                  onChange={onChange}
+                  {...editorProps}
+                  record={record}
+                  snapshot={snapshotNow}
+                  openDoc={openDoc}
+                  onWordCount={setWords}
+                  onBlocks={setBlocks}
+                  onParagraph={onParagraph}
+                  pages={() => pagesRef.current}
+                  openPage={openPage}
+                  saveImage={saveImage}
+                  assetUrl={assetUrl}
+                  onEditor={onEditor}
+                  onFormat={setFormat}
+                  onOutline={setOutline}
+                  spellcheck={spellcheck}
+                  lang={() => docRef.current?.meta.lang}
+                  onReadUnavailable={() => notify('This browser has no voices to read aloud with. Settings → Writing explains.')}
+                  edgeCurrent={edgeCurrent}
+                  acceptEdge={acceptEdge}
+                />
+              ) : (
+                <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} onPageView={() => chooseView(true)} spellcheck={spellcheck} />
+              )}
+            </DocumentMode>
           </div>
         )}
         {focus && <div className="focus-hint">esc or ⌘. to exit focus</div>}
@@ -1786,7 +1853,7 @@ export function App() {
           onTab={setPanelTab}
           onClose={() => setPanelOpen(false)}
           history={history}
-          words={words}
+          words={counted.words}
           platform={platform}
           ceiling={ceiling}
           onCeiling={(ceiling) => changeSettings({ ceiling })}
@@ -1923,10 +1990,12 @@ export function App() {
                         key={loaded.key}
                         store={fileText}
                         target={loaded.meta.target ?? ''}
-                        selectedWords={format?.selectedWords ?? 0}
+                        selectedWords={selectedCounted}
+                        skipReferences={skipReferences}
+                        pages={sheet ? sheetPages : null}
                         ceiling={ceiling}
                         mod={mod}
-                        paper={loaded.meta.paper === 'a4' ? 'a4' : 'letter'}
+                        paper={docSet.paper}
                         page={pageFor}
                         // Bound to this file: a limit saved as the sheet closes lands here even if another file is opening.
                         onTarget={(target) => setMetaOf(loaded.path, { target })}

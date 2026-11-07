@@ -38,6 +38,8 @@ export interface FileActions {
   move: (path: string, folder: string) => void
   duplicate: (path: string) => void
   remove: (path: string) => void
+  /** Open the page's Document layout: page view, style, header, target. */
+  layout: (path: string) => void
   /** Open the page with its brief's paste box (or its pinned brief, to edit). */
   pinBrief: (path: string) => void
   /** Whether the page has a brief pinned, as far as the app knows. */
@@ -313,6 +315,9 @@ function FileRow({
           </button>
           <button role="menuitem" onClick={act(() => actions.duplicate(f.path))}>
             Duplicate
+          </button>
+          <button role="menuitem" onClick={act(() => actions.layout(f.path))}>
+            Document layout…
           </button>
           <button role="menuitem" onClick={act(() => onStar(f.path))}>
             {f.exemplar ? 'Un-star' : 'Star as exemplar'}

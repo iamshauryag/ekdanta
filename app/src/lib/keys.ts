@@ -52,6 +52,7 @@ const COMMAND_LIST = [
   { id: 'piece', label: 'Panel: Piece', group: 'App', key: 'Ctrl-Alt-4' },
   { id: 'brief', label: 'Pin a brief', group: 'App', key: '' },
   { id: 'settings', label: 'Settings', group: 'App', key: 'Alt-,' },
+  { id: 'documentLayout', label: 'Document layout…', group: 'App', key: '' },
   { id: 'saveVersion', label: 'Save version…', group: 'App', key: '' },
   { id: 'versions', label: 'Version history', group: 'App', key: '' },
   // The help ladder's own dismiss key, here so it also works from the panel or a card's buttons.

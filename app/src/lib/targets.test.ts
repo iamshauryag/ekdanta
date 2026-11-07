@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { countable, formatTarget, isReferencesHeading, pagesFromHeight, pagesFromWords, parseTarget, presetOf, PRESETS, progress, unitLabel, type Target } from './targets.ts'
+import { docDefaults, docOf, dueLabel, formatDate, headerOf, kindSwitchPatch, pageCss, runningHead, surname, usesDocument } from './docstyle.ts'
 
 const t = (raw: string) => parseTarget(raw) as Target
 
@@ -87,6 +88,73 @@ test('pages, estimated and measured', () => {
   assert.equal(pagesFromHeight(10, 864), 1)
   assert.equal(pagesFromHeight(864, 864), 1)
   assert.equal(pagesFromHeight(870, 864), 2)
+})
+
+test('document settings come from flat front matter', () => {
+  assert.deepEqual(docOf({ layout: 'page', style: 'MLA', paper: 'a4', target: '1500', due: '2026-11-09' }), { page: true, style: 'mla', paper: 'a4', target: '1500', due: '2026-11-09' })
+  assert.deepEqual(docOf({}), { page: false, style: null, paper: 'letter', target: '', due: '' })
+  assert.equal(docOf({ style: 'harvard' }).style, 'none')
+  assert.equal(usesDocument({}), false)
+  assert.equal(usesDocument({ platform: 'linkedin', target: '200' }), false)
+  assert.equal(usesDocument({ style: 'apa' }), true)
+  assert.equal(usesDocument({}, { id: 'paper', name: 'Paper', folder: 'papers', guidance: '', words: 1, doc: { style: 'mla' } }), true)
+})
+
+test('a new piece takes its kind’s defaults, and gives them back when its kind changes', () => {
+  const mla = { layout: 'page' as const, style: 'mla' as const, target: '1500' }
+  assert.deepEqual(docDefaults(mla), { layout: 'page', style: 'mla', target: '1500' })
+  assert.deepEqual(kindSwitchPatch({ platform: 'essay' }, undefined, mla), { layout: 'page', style: 'mla', target: '1500' })
+  assert.deepEqual(kindSwitchPatch({ layout: 'page', style: 'mla', target: '1500' }, mla, undefined), { layout: null, style: null, target: null })
+  // What the writer changed stays.
+  assert.deepEqual(kindSwitchPatch({ layout: 'page', style: 'apa', target: '1500' }, mla, undefined), { layout: null, target: null })
+  assert.deepEqual(kindSwitchPatch({ layout: 'page', style: 'mla' }, mla, { layout: 'page', style: 'apa' }), { style: 'apa' })
+})
+
+test('dates are written the way each style writes them', () => {
+  const now = new Date(2026, 10, 6)
+  assert.equal(formatDate(undefined, 'mla', now), '6 November 2026')
+  assert.equal(formatDate('2026-11-06', 'apa', now), 'November 6, 2026')
+  assert.equal(formatDate('2026-02-30', 'mla', now), '2026-02-30')
+  assert.equal(formatDate('Spring term', 'mla', now), 'Spring term')
+  assert.equal(dueLabel('2026-11-09', now), 'Due in 3 days')
+  assert.equal(dueLabel('2026-11-06', now), 'Due today')
+  assert.equal(dueLabel('2026-11-07', now), 'Due tomorrow')
+  assert.equal(dueLabel('2026-11-05', now), 'Due yesterday')
+  assert.equal(dueLabel('2026-11-01', now), 'Overdue by 5 days')
+  assert.equal(dueLabel('next week', now), null)
+  assert.equal(dueLabel('', now), null)
+})
+
+test('headers leave out missing lines', () => {
+  const now = new Date(2026, 10, 6)
+  assert.deepEqual(headerOf('mla', { author: 'Jane Smith', instructor: 'Professor Ortiz', course: 'English 101' }, 'On Walls', now), {
+    type: 'block',
+    lines: ['Jane Smith', 'Professor Ortiz', 'English 101', '6 November 2026'],
+  })
+  assert.deepEqual(headerOf('mla', { author: ' ' }, 'T', now), { type: 'block', lines: ['6 November 2026'] })
+  assert.deepEqual(headerOf('apa', { author: 'Jane Smith', institution: 'State University' }, 'On Walls', now), {
+    type: 'title-page',
+    title: 'On Walls',
+    lines: ['Jane Smith', 'State University', 'November 6, 2026'],
+  })
+  assert.equal(headerOf('none', {}, 'T', now), null)
+  assert.equal(headerOf(null, {}, 'T', now), null)
+})
+
+test('running heads and print rules', () => {
+  assert.equal(surname('Jane Q. Smith'), 'Smith')
+  assert.equal(surname('Smith, Jane; Doe, John'), 'Smith')
+  assert.equal(surname('Martin Luther King Jr.'), 'King')
+  assert.equal(surname(''), '')
+  assert.deepEqual(runningHead('mla', 'Jane Smith'), { prefix: 'Smith ', onFirst: true })
+  assert.deepEqual(runningHead('mla', ''), { prefix: '', onFirst: true })
+  assert.deepEqual(runningHead('chicago', 'Jane Smith'), { prefix: '', onFirst: false })
+  assert.equal(runningHead('none', 'Jane'), null)
+  const css = pageCss('mla', 'a4', 'Jane "JJ" O\\Brien', 'serif')
+  assert.match(css, /size: A4/)
+  assert.match(css, /content: "O\\\\Brien " counter\(page\)/)
+  assert.match(pageCss('chicago', 'letter', 'X', 'serif'), /@page :first \{ @top-right \{ content: none; \} \}/)
+  assert.doesNotMatch(pageCss('none', 'letter', 'X', 'serif'), /top-right/)
 })
 
 // ---- Character limits ----------------------------------------------------------------------

@@ -51,6 +51,9 @@ export interface Settings extends Appearance {
   /** Shortcuts the writer changed: command id → key ('' to unbind). */
   keys: Record<string, string>
   kinds: Kind[]
+  profileName: string
+  profileInstitution: string
+  defaultStyle: 'mla' | 'apa' | 'chicago' | 'none'
   /** Folders (vault-relative) left out of Recall and voice, besides the special ones. */
   excludedFolders: string[]
 }

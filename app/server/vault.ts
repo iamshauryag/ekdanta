@@ -5,6 +5,7 @@ import { constants, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
 import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
+import { docDefaults } from '../src/lib/docstyle.ts'
 import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 import { docSlug, sameName, slug } from '../src/lib/slug.ts'
 import { createFileCache, type FileStat } from './cache.ts'
@@ -382,8 +383,11 @@ export async function freePath(folder: string, name: string) {
 export async function createDoc(kinds: Kind[], folder: string, platform?: string) {
   folder = folder.replace(/^\/+|\/+$/g, '')
   const guess = kindOfFolder(kinds, folder.split('/').pop()!)?.id ?? kinds[0]?.id ?? 'essay'
+  const kind = platform ?? guess
+  // A kind with document defaults (an academic essay in MLA, say) passes them on to its new pieces.
+  const meta = { title: '', platform: kind, status: 'draft', created: today(), ...docDefaults(findKind(kinds, kind)?.doc) }
   const rel = await freePath(folder, 'untitled')
-  await writeDoc(rel, `---\ntitle: \nplatform: ${platform ?? guess}\nstatus: draft\ncreated: ${today()}\n---\n\n`, { reason: 'create' })
+  await writeDoc(rel, joinFrontMatter('', meta, ''), { reason: 'create' })
   return rel
 }
 

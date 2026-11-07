@@ -1,7 +1,7 @@
 // Every row of Settings, declared as data: which tab it's on, what it's called, the words it can be
 // found by, and whether it's an advanced option. Search and the "Show advanced settings" switch work
 // on this list, so a new setting is one entry here.
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, type Settings as S, type Status } from '../lib/api.ts'
 import { AUTOSAVE, TEXT_SIZE, kindsInExcluded } from '../lib/appearance.ts'
 import { helpMod } from '../editor/help.ts'
@@ -10,6 +10,7 @@ import { KeyMap } from './KeyMap.tsx'
 import { Kinds } from './Kinds.tsx'
 import { RATES, listedVoices, readPrefs, sample, saveReadPrefs, useSpeechVoices } from './ReadAloudBar.tsx'
 import { isOnlineVoice, pickVoice, voiceLabel } from '../lib/speak.ts'
+import { STYLES } from '../lib/docstyle.ts'
 
 export const TABS = [
   { id: 'writing', label: 'Writing' },
@@ -122,6 +123,29 @@ export const ROWS: SettingRow[] = [
     advanced: true,
     hint: ({ s }) => (s.openLast ? 'Ekdanta opens where you left off.' : 'Ekdanta starts on a fresh draft.'),
     render: ({ s, onChange }) => <Switch on={s.openLast} onFlip={(openLast) => onChange({ openLast })} />,
+  },
+
+  {
+    tab: 'writing',
+    id: 'profile',
+    label: 'You',
+    keywords: 'name author institution school university profile page view document style mla apa chicago heading title page',
+    full: true,
+    render: ({ s, onChange }) => (
+      <details className="you">
+        <summary>You</summary>
+        <p className="sheet-note">For the heading or title page of a piece in page view. A piece’s own author and institution come first.</p>
+        <Row label="Name">
+          <TextSetting value={s.profileName ?? ''} placeholder="Your name" maxLength={120} onCommit={(profileName) => onChange({ profileName })} />
+        </Row>
+        <Row label="Institution" hint="For APA title pages.">
+          <TextSetting value={s.profileInstitution ?? ''} placeholder="School or university" maxLength={160} onCommit={(profileInstitution) => onChange({ profileInstitution })} />
+        </Row>
+        <Row label="Default style" hint="When you turn on page view for a piece that has none.">
+          <Seg value={s.defaultStyle ?? 'mla'} options={STYLES.map((x) => x.id)} label={(v) => STYLES.find((x) => x.id === v)?.label ?? v} onPick={(defaultStyle) => onChange({ defaultStyle })} />
+        </Row>
+      </details>
+    ),
   },
 
   // ---- Appearance
@@ -611,6 +635,38 @@ function Excluded({ s, folders, onChange }: RowCtx) {
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * A line of text that saves when you leave it, press Return, or close Settings while typing.
+ * Escape puts back what was saved.
+ */
+function TextSetting({ value, placeholder, maxLength, onCommit }: { value: string; placeholder: string; maxLength: number; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  const latest = useRef({ draft, value, onCommit })
+  latest.current = { draft, value, onCommit }
+  const commit = () => {
+    const { draft, value, onCommit } = latest.current
+    if (draft.trim() !== value) onCommit(draft.trim())
+  }
+  // Closing Settings can take the field away before it blurs: what was typed is still kept.
+  useEffect(() => commit, [])
+  return (
+    <input
+      className="kind-input"
+      value={draft}
+      placeholder={placeholder}
+      aria-label={placeholder}
+      maxLength={maxLength}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur()
+        else if (e.key === 'Escape') setDraft((latest.current.draft = value))
+      }}
+    />
   )
 }
 

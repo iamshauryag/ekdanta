@@ -303,6 +303,18 @@ test('polling a 5,000-file vault reads no file contents', async () => {
   assert.equal(reads, 0)
 })
 
+test('a new piece of a kind with document defaults starts with them in its front matter', async () => {
+  const kinds = [
+    ...DEFAULT_KINDS,
+    { id: 'academic-essay', name: 'Academic essay', folder: 'academic-essays', guidance: '', words: 1500, doc: { layout: 'page' as const, style: 'mla' as const, target: '<=1500' } },
+  ]
+  const rel = await vault.createDoc(kinds, 'academic-essays')
+  const text = await fs.readFile(path.join(root, rel), 'utf8')
+  assert.match(text, /^---\ntitle: \nplatform: academic-essay\nstatus: draft\ncreated: \d{4}-\d{2}-\d{2}\nlayout: page\nstyle: mla\ntarget: <=1500\n---\n\n$/)
+  const plain = await fs.readFile(path.join(root, await vault.createDoc(kinds, 'linkedin')), 'utf8')
+  assert.doesNotMatch(plain, /layout|style|target/)
+})
+
 // ---- Names in any script, and renaming a folder ----
 
 const today = () => {

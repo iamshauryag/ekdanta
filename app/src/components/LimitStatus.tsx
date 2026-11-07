@@ -3,7 +3,7 @@
 // without a limit, is formText(): the same text "Copy for a form" copies, so template prompts and
 // Markdown never count and setting a limit never changes the number.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { countChars, countWords, formText } from '../lib/count.ts'
+import { countChars, countWords, countedWords, formText } from '../lib/count.ts'
 import { formatTarget, parseTarget, pagesFromWords, presetOf, PRESETS, progress, unitLabel, type Target } from '../lib/targets.ts'
 
 /** The open piece's whole file, kept outside React state so typing re-renders only the count. */
@@ -29,8 +29,12 @@ interface Props {
   store: TextStore
   /** The target as written in front matter, or '' for none. */
   target: string
-  /** Words selected in the editor, or 0. */
+  /** Words selected in the editor, or 0 (less any in a Works Cited section when those aren't counted). */
   selectedWords: number
+  /** Leave a Works Cited, References or Bibliography section out of the word count (a piece written to a brief). */
+  skipReferences?: boolean
+  /** Pages measured in page view: all of them, and those after a title page. Null when page view is off. */
+  pages?: { total: number; body: number } | null
   /** The help ceiling: the ⌘5 hint only shows when Passage help is allowed. */
   ceiling: number
   mod: string
@@ -41,17 +45,21 @@ interface Props {
 }
 
 const n = (x: number) => x.toLocaleString('en-US')
+const PAGES_NOTE = 'Approximate. Print preview shows exact pages'
 /** Big pieces are counted after a short pause, so typing never waits on the count. */
 const BIG = 60_000
 
-/** How many units a target's count is, from the text a form receives. */
-export function measure(text: string, t: Target, paper: 'letter' | 'a4') {
+/**
+ * How many units a target's count is, from the text a form receives. `words` is the count toward a
+ * limit (without a Works Cited section, when that's left out); `pages` are measured in page view, and
+ * a title page isn't one of them.
+ */
+export function measure(text: string, t: Target, paper: 'letter' | 'a4', words = countWords(text), pages: number | null = null) {
   if (t.unit === 'characters') return countChars(text, { noSpaces: t.noSpaces })
-  const words = countWords(text)
-  return t.unit === 'pages' ? pagesFromWords(words, paper) : words
+  return t.unit === 'pages' ? (pages ?? pagesFromWords(words, paper)) : words
 }
 
-export function LimitStatus({ store, target, selectedWords, ceiling, mod, paper, page, onTarget }: Props) {
+export function LimitStatus({ store, target, selectedWords, skipReferences = false, pages = null, ceiling, mod, paper, page, onTarget }: Props) {
   const content = useSyncExternalStore(store.subscribe, store.get)
   const [open, setOpen] = useState(false)
   const t = parseTarget(target)
@@ -67,15 +75,22 @@ export function LimitStatus({ store, target, selectedWords, ceiling, mod, paper,
   const pageRef = useRef(page)
   pageRef.current = page
   const text = useMemo(() => formText(content.length < BIG ? content : settled, (x) => pageRef.current(x)), [content, settled])
-  const words = useMemo(() => countWords(text), [text])
-  const count = live ? (live.unit === 'words' ? words : measure(text, live, paper)) : 0
+  const source = content.length < BIG ? content : settled
+  const counted = useMemo(() => (skipReferences ? countedWords(source, (x) => pageRef.current(x)) : null), [source, skipReferences])
+  const allWords = useMemo(() => countWords(text), [text])
+  const words = counted?.words ?? allWords
+  const count = live ? (live.unit === 'words' ? words : measure(text, live, paper, words, pages?.body ?? null)) : 0
   const p = live ? progress(count, live) : null
 
   let label: string
-  if (selectedWords && (!live || live.unit !== 'characters')) label = `${n(selectedWords)} of ${n(words)} words`
+  if (selectedWords && (!live || live.unit !== 'characters')) label = `${n(Math.min(selectedWords, words))} of ${n(words)} words`
   else if (!live) label = t === 'invalid' ? `${n(words)} words / ?` : `${n(words)} words`
-  else if (live.unit === 'pages') label = `≈ ${n(count)} / ${formatTarget(live)} pages`
+  else if (live.unit === 'pages') label = `≈ ${n(count)} / ${formatTarget(live)} ${live.max === 1 ? 'page' : 'pages'}`
   else label = `${n(count)} / ${formatTarget(live)} ${unitLabel(live)}`
+  // In page view, how many sheets the piece fills, unless the limit already says so.
+  const sheets = pages && live?.unit !== 'pages' ? ` · ≈ ${n(pages.total)} ${pages.total === 1 ? 'page' : 'pages'}` : ''
+  const notCounted = counted?.excluded.length && live?.unit !== 'characters' ? `\nNot counted: ${counted.excluded.map((x) => `${x.heading} (${n(x.words)} words)`).join(', ')}` : ''
+  const pagesNote = pages || live?.unit === 'pages' ? `\n${live?.unit === 'pages' && !pages ? 'Pages are estimated from the word count. ' : ''}${PAGES_NOTE}` : ''
 
   const over = p?.state === 'over'
   const title =
@@ -89,8 +104,14 @@ export function LimitStatus({ store, target, selectedWords, ceiling, mod, paper,
 
   return (
     <span className="lm">
-      <button className={`lm-count${p ? ` is-${p.state}${live?.unit === 'characters' ? ' is-hard' : ''}` : ''}`} title={title} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button
+        className={`lm-count${p ? ` is-${p.state}${live?.unit === 'characters' ? ' is-hard' : ''}` : ''}`}
+        title={title + notCounted + pagesNote}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
         {label}
+        {sheets}
         {p && (
           <span className="lm-progress" aria-hidden="true">
             <i style={{ width: `${p.fill * 100}%` }} />

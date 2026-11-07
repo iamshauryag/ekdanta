@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { countChars, countWords, formText, graphemes, plainQuotes } from './count.ts'
+import { countChars, countWords, countedWords, formText, graphemes, plainQuotes } from './count.ts'
 
 test('characters are counted as people see them', () => {
   assert.equal(graphemes(''), 0)
@@ -56,4 +56,19 @@ test('lists and headings keep their shape as plain text', () => {
 
 test('quotes are straightened', () => {
   assert.equal(plainQuotes('‘a’ “b” c d'), '\'a\' "b" c d')
+})
+
+test('a word limit leaves out a Works Cited section, up to the next heading of its level', () => {
+  const file = '---\ntarget: 1500\n---\n\n# On walls\n\nOne two three four.\n\n## Works Cited\n\nSmith, Jane. *Walls*. 2020.\n\n- Doe, John. Fences.\n\n## Appendix\n\nFive six.\n'
+  const all = countWords(formText(file))
+  const { words, excluded } = countedWords(file)
+  assert.deepEqual(excluded, [{ heading: 'Works Cited', words: 9 }])
+  assert.equal(words, all - 9)
+  assert.equal(words, 9) // On walls, the four words, Appendix, five six
+  // A higher heading ends the section too, and a setext heading or a heading in bold is still found.
+  assert.equal(countedWords('Text here.\n\nReferences\n----------\n\nA source.\n\n# Next part\n\nMore.\n').words, 5)
+  assert.equal(countedWords('Text.\n\n## **Bibliography:**\n\nA B C\n').excluded[0].heading, 'Bibliography:')
+  // Nothing to leave out: the same count as the form's text, and a heading that only mentions references stays.
+  assert.deepEqual(countedWords('# References to the sea\n\nWaves.\n'), { words: 5, excluded: [] })
+  assert.deepEqual(countedWords('Plain words only.'), { words: 3, excluded: [] })
 })

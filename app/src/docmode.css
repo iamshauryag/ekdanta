@@ -1,0 +1,597 @@
+/* Document mode: the piece as white sheets on a grey desk, in MLA, APA or Chicago style, and printed
+   without the app around it. Styles are CSS variables per [data-style]. */
+
+:root {
+  --desk: #e6e4df;
+  --sheet-line: rgba(40, 35, 25, 0.12);
+  --guide: rgba(47, 79, 143, 0.28);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --desk: #191817;
+    --sheet-line: rgba(0, 0, 0, 0.5);
+  }
+}
+:root[data-theme='dark'] {
+  --desk: #191817;
+  --sheet-line: rgba(0, 0, 0, 0.5);
+}
+
+/* Off: the wrappers take no space, so the title and text sit in the usual column. */
+.dm:not(.is-on),
+.dm:not(.is-on) .dm-fit,
+.dm:not(.is-on) .dm-scaler,
+.dm:not(.is-on) .dm-sheet,
+.dm:not(.is-on) .dm-content {
+  display: contents;
+}
+
+/* ---- The desk ------------------------------------------------------------------------------ */
+.app.has-sheet .page-area {
+  background: var(--desk);
+}
+.page.is-sheet {
+  width: auto;
+  margin: 0;
+  padding: 20px 16px 30vh;
+}
+.page.is-sheet > .doc-meta {
+  max-width: 8.5in;
+  margin: 0 auto 14px;
+}
+.dm.is-on {
+  /* Style presets. MLA is the default; APA and Chicago change only what differs. */
+  --dm-size: 12pt;
+  --dm-leading: 2;
+  --dm-indent: 0.5in;
+  --dm-gap: 0;
+  --dm-title-weight: 400;
+  --dm-h1-align: left;
+  --dm-h1-weight: 400;
+  --dm-h1-style: normal;
+  --dm-h2-align: left;
+  --dm-h2-weight: 400;
+  --dm-h2-style: normal;
+  --dm-h3-align: left;
+  --dm-h3-weight: 400;
+  --dm-h3-style: italic;
+  width: 100%;
+}
+.dm.is-on[data-style='apa'] {
+  --dm-title-weight: 700;
+  --dm-h1-align: center;
+  --dm-h1-weight: 700;
+  --dm-h2-weight: 700;
+  --dm-h3-weight: 700;
+  --dm-h3-style: italic;
+}
+.dm.is-on[data-style='chicago'] {
+  --dm-h1-align: center;
+  --dm-h1-weight: 700;
+  --dm-h2-align: center;
+  --dm-h3-weight: 700;
+  --dm-h3-style: normal;
+}
+.dm.is-on[data-style='none'] {
+  --dm-leading: 1.5;
+  --dm-indent: 0;
+  --dm-gap: 0.75em;
+  --dm-title-weight: 700;
+  --dm-h1-weight: 700;
+  --dm-h2-weight: 700;
+  --dm-h3-weight: 700;
+  --dm-h3-style: normal;
+}
+
+.dm-fit {
+  margin: 0 auto;
+}
+/* At the smallest scale a narrow window scrolls the desk sideways rather than shrinking the text further. */
+.dm.is-on {
+  overflow-x: auto;
+}
+.dm-scaler {
+  width: var(--sheet-w);
+  transform-origin: top left;
+}
+
+/* ---- The sheet: always white paper, in either theme ------------------------------------------- */
+.dm.is-on .dm-sheet {
+  --page: #ffffff;
+  --chrome: #f3f2ef;
+  --chrome-2: #eeede9;
+  --line: #e2e0db;
+  --line-2: #d0cdc6;
+  --ink: #111111;
+  --ink-2: #333333;
+  --ink-3: #6b6760;
+  --ink-4: #b0aca4;
+  --accent: #2f4f8f;
+  --accent-soft: rgba(47, 79, 143, 0.14);
+  --accent-line: rgba(47, 79, 143, 0.35);
+  --hl: rgba(246, 205, 70, 0.5);
+  color-scheme: light;
+  position: relative;
+  display: block;
+  width: var(--sheet-w);
+  min-height: var(--sheet-h);
+  padding: 1in;
+  background: #fff;
+  color: var(--ink);
+  box-shadow:
+    0 1px 3px var(--sheet-line),
+    0 6px 24px rgba(40, 35, 25, 0.08);
+  font: var(--dm-size) / var(--dm-leading) var(--page-font);
+  cursor: text;
+}
+.dm.is-on .dm-sheet + .dm-sheet {
+  margin-top: 24px;
+}
+.dm-content {
+  display: flow-root;
+}
+
+/* The page-number guides: where each page's text block would end. An estimate, labelled as one. */
+.dm-guide {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--guide);
+  pointer-events: none;
+}
+.dm-guide span {
+  position: absolute;
+  right: 8px;
+  top: 2px;
+  font: 10px/1 var(--sans);
+  color: var(--ink-4);
+}
+.dm-runhead {
+  position: absolute;
+  top: 0.5in;
+  right: 1in;
+  line-height: 1;
+  transform: translateY(-50%);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* ---- The heading block and the title page ---------------------------------------------------- */
+.dm-heading,
+.dm-titlepage-body {
+  cursor: default;
+  user-select: none;
+}
+.dm-heading div,
+.dm-tp-lines div {
+  overflow-wrap: anywhere;
+}
+.dm-titlepage {
+  display: flex;
+  flex-direction: column;
+}
+.dm-titlepage-body {
+  text-align: center;
+  /* APA: three or four lines down from the top margin. */
+  padding-top: calc(3 * var(--dm-size) * var(--dm-leading));
+}
+.dm-tp-title {
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  margin-bottom: calc(var(--dm-size) * var(--dm-leading));
+}
+.dm-tp-title.is-empty {
+  color: var(--ink-4);
+}
+/* Chicago: the title a third of the way down, the rest lower on the page. */
+.dm[data-style='chicago'] .dm-titlepage-body {
+  padding-top: 2.6in;
+}
+.dm[data-style='chicago'] .dm-tp-lines {
+  margin-top: 2.4in;
+}
+
+/* ---- The title and the text, in the style ------------------------------------------------------ */
+.dm.is-on .doc-title {
+  font: var(--dm-title-weight) var(--dm-size) / var(--dm-leading) var(--page-font);
+  letter-spacing: 0;
+  text-align: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow-wrap: anywhere;
+}
+.dm.is-on .platform-picker {
+  margin: 0 0 8px;
+  justify-content: center;
+  font-family: var(--sans);
+  line-height: 1.4;
+}
+.dm.is-on .editor .pm {
+  font: inherit;
+  color: var(--ink);
+  min-height: 0;
+}
+.dm.is-on .pm > * + * {
+  margin-top: var(--dm-gap);
+}
+.dm.is-on .pm p {
+  text-indent: var(--dm-indent);
+}
+.dm.is-on .pm li p,
+.dm.is-on .pm blockquote p,
+.dm.is-on .pm td p,
+.dm.is-on .pm th p {
+  text-indent: 0;
+}
+.dm.is-on .pm h1,
+.dm.is-on .pm h2,
+.dm.is-on .pm h3,
+.dm.is-on .pm h4,
+.dm.is-on .pm h5,
+.dm.is-on .pm h6 {
+  font: inherit;
+  margin: 0;
+  letter-spacing: 0;
+}
+.dm.is-on .pm > * + :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: var(--dm-gap);
+}
+.dm.is-on .pm h1 {
+  text-align: var(--dm-h1-align);
+  font-weight: var(--dm-h1-weight);
+  font-style: var(--dm-h1-style);
+}
+.dm.is-on .pm h2 {
+  text-align: var(--dm-h2-align);
+  font-weight: var(--dm-h2-weight);
+  font-style: var(--dm-h2-style);
+}
+.dm.is-on .pm h3,
+.dm.is-on .pm h4,
+.dm.is-on .pm h5,
+.dm.is-on .pm h6 {
+  text-align: var(--dm-h3-align);
+  font-weight: var(--dm-h3-weight);
+  font-style: var(--dm-h3-style);
+}
+.dm.is-on .pm blockquote {
+  margin: 0;
+  padding: 0 0 0 0.5in;
+  border: 0;
+  color: inherit;
+}
+.dm.is-on .pm ul,
+.dm.is-on .pm ol {
+  padding-left: 0.5in;
+}
+.dm.is-on .pm li + li,
+.dm.is-on .pm li > * + * {
+  margin-top: 0;
+}
+/* Tables and images stay inside the text block. */
+.dm.is-on .pm img {
+  max-width: 100%;
+  max-height: 7in;
+  border-radius: 0;
+}
+.dm.is-on .pm table {
+  font: inherit;
+  line-height: 1.4;
+  max-width: 100%;
+}
+.dm.is-on .pm .tableWrapper {
+  max-width: 100%;
+}
+.dm.is-on .pm pre {
+  font-size: 10pt;
+  line-height: 1.4;
+}
+
+/* Focus mode: the desk goes, the sheet stays. */
+.app.is-focus.has-sheet .page-area {
+  background: var(--page);
+}
+.app.is-focus .dm.is-on .dm-sheet {
+  box-shadow: 0 0 0 1px var(--sheet-line);
+}
+
+/* ---- The Document button, popover and due date ------------------------------------------------ */
+.doc-meta {
+  position: relative;
+}
+.doc-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 20px;
+  font: 500 12px/1 var(--sans);
+  color: var(--ink-2);
+}
+.doc-btn:hover,
+.doc-btn[aria-expanded='true'] {
+  color: var(--ink);
+  border-color: var(--ink-4);
+  background: var(--chrome);
+}
+.doc-due.is-soon {
+  color: var(--ink-2);
+}
+.doc-due.is-late {
+  color: var(--del-ink);
+}
+.dm-panel {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  max-height: 70vh;
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  font: 13px/1.4 var(--sans);
+  color: var(--ink);
+}
+.dm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.dm-label,
+.dm-field > span,
+.dm-legend {
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.dm-panel .seg-text button {
+  width: auto;
+  padding: 3px 9px;
+}
+.dm-fields {
+  margin: 4px 0 10px;
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.dm-legend {
+  margin-bottom: 6px;
+  color: var(--ink-3);
+}
+.dm-field {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  align-items: center;
+  gap: 2px 8px;
+  margin-bottom: 6px;
+}
+.dm-field small {
+  grid-column: 2;
+  font-size: 11px;
+}
+.dm-from {
+  color: var(--ink-3);
+}
+.dm-bad {
+  color: var(--del-ink);
+}
+.dm-input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  font: 13px var(--sans);
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  outline: none;
+}
+.dm-input:focus {
+  border-color: var(--accent-line);
+}
+.dm-input::placeholder {
+  color: var(--ink-4);
+}
+.dm-print {
+  width: 100%;
+}
+
+/* ---- The count in the status bar --------------------------------------------------------------- */
+.dm-count {
+  position: relative;
+  font: inherit;
+  color: inherit;
+  padding: 0 0 3px;
+  margin-bottom: -3px;
+}
+.dm-count:hover {
+  color: var(--ink);
+}
+.dm-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--line);
+  overflow: hidden;
+}
+.dm-progress i {
+  display: block;
+  height: 100%;
+  background: var(--ink-4);
+  transition: width 0.2s;
+}
+.dm-count.is-in .dm-progress i {
+  background: #3f8f5a;
+}
+.dm-count.is-over .dm-progress i {
+  background: #c98a1b;
+}
+.dm-count.is-over {
+  color: #a8700f;
+}
+.dm-target-input {
+  width: 180px;
+  padding: 1px 6px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--accent-line);
+  border-radius: 4px;
+  outline: none;
+}
+.dm-pages {
+  cursor: help;
+}
+
+/* ---- Print: only the sheets ------------------------------------------------------------------- */
+@media print {
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+  .app {
+    display: block !important;
+    height: auto !important;
+  }
+  .titlebar,
+  .rail,
+  .sidebar,
+  .panel,
+  .statusbar,
+  .toolbar,
+  .doc-meta,
+  .platform-picker,
+  .focus-hint,
+  .toast,
+  .find-bar,
+  .fmt-bar,
+  .link-card,
+  .link-editor,
+  .dm-panel,
+  .dm-guide,
+  .dm-runhead,
+  .hl-card,
+  .hl-bar,
+  .hl-ghost,
+  .hl-nudge,
+  .hl-dot,
+  .hl-controls,
+  .hl-sbs,
+  .hl-line,
+  .hl-word-wrap,
+  .pm-menu,
+  .read-bar,
+  .start-from,
+  .lm-sheet {
+    display: none !important;
+  }
+  /* Only the piece prints: whatever else sits beside it (sheets, overlays, cards) stays on screen. */
+  .app > :not(.page-area),
+  .page-area:has(> .page) > :not(.page),
+  .page > :not(.dm) {
+    display: none !important;
+  }
+  /* The empty paragraph the editor keeps at the end would otherwise spill onto a page of its own. */
+  .pm > p:last-child:has(> br.ProseMirror-trailingBreak:only-child),
+  .pm > p:last-child:empty {
+    display: none !important;
+  }
+  .page-area {
+    overflow: visible !important;
+    background: #fff !important;
+  }
+  .page,
+  .page.is-sheet {
+    width: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .doc-title:empty::before {
+    content: none;
+  }
+  .dm.is-on .dm-fit {
+    width: auto !important;
+    height: auto !important;
+  }
+  .dm.is-on .dm-scaler {
+    width: auto;
+    transform: none !important;
+  }
+  .dm.is-on .dm-sheet {
+    width: auto;
+    min-height: 0 !important;
+    padding: 0;
+    box-shadow: none;
+    margin: 0 !important;
+  }
+  /* The title page is a page of its own. */
+  .dm.is-on .dm-titlepage {
+    break-after: page;
+    min-height: calc(var(--sheet-h) - 2in);
+  }
+  .dm.is-on .pm h1,
+  .dm.is-on .pm h2,
+  .dm.is-on .pm h3 {
+    break-after: avoid;
+  }
+  .dm.is-on .pm p {
+    orphans: 2;
+    widows: 2;
+  }
+}
+
+/* ---- Settings: You, and a kind's document defaults ---------------------------------------------- */
+.you {
+  border-bottom: 1px solid var(--line);
+}
+.you > summary {
+  padding: 10px 0;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--ink);
+}
+.you[open] > summary {
+  padding-bottom: 4px;
+}
+.you .row:last-child {
+  border-bottom: 0;
+}
+.you .kind-input {
+  width: 220px;
+}
+.kind-more {
+  position: relative;
+  display: inline-flex;
+}
+.kind-doc-editor {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--chrome);
+}
+.kind-doc-editor .seg-text button {
+  width: auto;
+  padding: 3px 9px;
+}
+.kind-doc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+.kind-academic {
+  display: block;
+  margin: 12px 0 8px;
+}

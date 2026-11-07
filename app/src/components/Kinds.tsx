@@ -1,8 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.ts'
-import { DEFAULT_KINDS, doubledFolder, kindTaken, nameTakenBy, newKind, type Kind } from '../lib/kinds.ts'
+import { DEFAULT_KINDS, doubledFolder, kindTaken, nameTakenBy, newKind, type Kind, type KindDoc } from '../lib/kinds.ts'
 import { isSpecialPath } from '../lib/special.ts'
 import type { TemplateInfo } from '../lib/templates.ts'
+import { PAPER, STYLES, type DocStyle, type Paper } from '../lib/docstyle.ts'
+import { parseTarget } from '../lib/targets.ts'
+
+/** Offered, not built in: an essay handed in for a class, in MLA on the page. */
+const ACADEMIC = {
+  name: 'Academic essay',
+  guidance: 'formal and argued: a clear thesis, evidence from sources, cited as you go',
+  words: 1500,
+  doc: { layout: 'page', style: 'mla', target: '1500' } as KindDoc,
+}
 
 interface Props {
   kinds: Kind[]
@@ -17,6 +27,8 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
   // The singular the writer chose themselves, when the one worked out from the name isn't right.
   const [named, setNamed] = useState<string | null>(null)
   const [removed, setRemoved] = useState<{ kind: Kind; at: number } | null>(null)
+  const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [docFor, setDocFor] = useState<string | null>(null)
   // A rename that would collide with another kind: the old name stays, and this says why.
   const [renameClash, setRenameClash] = useState<{ id: string; name: string } | null>(null)
   const [templates, setTemplates] = useState<TemplateInfo[] | null>(null)
@@ -84,6 +96,11 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
     if (!removed) return
     onChange([...kinds.slice(0, removed.at), removed.kind, ...kinds.slice(removed.at)])
     setRemoved(null)
+  }
+  const addAcademic = () => {
+    const kind = newKind(ACADEMIC.name, kinds)
+    if (!kind) return
+    onChange([...kinds, { ...kind, guidance: ACADEMIC.guidance, words: ACADEMIC.words, doc: ACADEMIC.doc }])
   }
   const move = (i: number, by: number) => {
     const next = [...kinds]
@@ -178,6 +195,13 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
                 words
               </label>
               <span className="kind-tools">
+                <KindMenu
+                  open={menuFor === k.id}
+                  name={k.name}
+                  onToggle={() => setMenuFor(menuFor === k.id ? null : k.id)}
+                  onClose={() => setMenuFor(null)}
+                  onDoc={() => setDocFor(docFor === k.id ? null : k.id)}
+                />
                 <button className="icon-btn small" title="Move up" aria-label={`Move ${k.name} up`} disabled={i === 0} onClick={() => move(i, -1)}>
                   ↑
                 </button>
@@ -208,11 +232,28 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
               {isSpecialPath(k.folder) && <>, a folder Recall and voice leave out (pieces you star still shape your voice)</>}
               {!!templates?.length && <TemplateSelect kind={k} templates={templates} onChange={(template) => edit(k.id, { template })} />}
             </small>
+            {docFor === k.id ? (
+              <KindDocEditor kind={k} onChange={(doc) => edit(k.id, { doc })} onDone={() => setDocFor(null)} />
+            ) : (
+              k.doc && (
+                <small className="kind-folder kind-doc">
+                  New pieces start with {docSummary(k.doc)}.{' '}
+                  <button className="link-btn" onClick={() => setDocFor(k.id)}>
+                    Change
+                  </button>
+                </small>
+              )
+            )}
             {onRenameFolder && <FolderFix kind={k} onRename={onRenameFolder} />}
           </li>
         ))}
       </ul>
 
+      {!kinds.some((k) => k.id === 'academic-essay') && (
+        <button className="btn kind-academic" onClick={addAcademic} title="A kind for essays handed in for a class: MLA, page view, 1,500 words">
+          Add Academic essay kind
+        </button>
+      )}
       {missing.length > 0 && (
         <button className="link-btn" onClick={() => onChange([...kinds, ...missing])}>
           Bring back {missing.map((m) => m.name).join(', ')}
@@ -232,6 +273,117 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
       </div>
       {seeded && <p className="sheet-note kind-seeded">{seeded}</p>}
     </>
+  )
+}
+
+const styleName = (s: DocStyle) => STYLES.find((x) => x.id === s)?.label ?? s
+
+/** "MLA · page view · target 1500 · A4". */
+const docSummary = (d: KindDoc) => [d.style && styleName(d.style), d.layout === 'page' && 'page view', d.target && `target ${d.target}`, d.paper === 'a4' && 'A4'].filter(Boolean).join(' · ')
+
+/** A kind's ⋯ menu. */
+function KindMenu({ open, name, onToggle, onClose, onDoc }: { open: boolean; name: string; onToggle: () => void; onClose: () => void; onDoc: () => void }) {
+  const box = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && onClose()
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && (e.stopPropagation(), onClose())
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc, true)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', esc, true)
+    }
+  }, [open, onClose])
+  return (
+    <span className="kind-more" ref={box}>
+      <button className="icon-btn small" title="More" aria-label={`More for ${name}`} aria-haspopup="menu" aria-expanded={open} onClick={onToggle}>
+        ⋯
+      </button>
+      {open && (
+        <div className="menu" role="menu">
+          <button
+            role="menuitem"
+            onClick={() => {
+              onClose()
+              onDoc()
+            }}
+          >
+            Document defaults…
+          </button>
+        </div>
+      )}
+    </span>
+  )
+}
+
+/** How new pieces of a kind are laid out: page view, style, paper and a length target. Existing pieces keep their own. */
+function KindDocEditor({ kind, onChange, onDone }: { kind: Kind; onChange: (doc: KindDoc | undefined) => void; onDone: () => void }) {
+  const d = kind.doc ?? {}
+  const set = (patch: Partial<KindDoc>) => {
+    const next: KindDoc = { ...d, ...patch }
+    for (const k of Object.keys(next) as (keyof KindDoc)[]) if (next[k] === undefined) delete next[k]
+    onChange(Object.keys(next).length ? next : undefined)
+  }
+  const [target, setTarget] = useState(d.target ?? '')
+  const bad = parseTarget(target) === 'invalid'
+  return (
+    <div className="kind-doc-editor" role="group" aria-label={`Document defaults for ${kind.name}`}>
+      <div className="dm-row">
+        <span className="dm-label">Page view</span>
+        <button
+          role="switch"
+          aria-checked={d.layout === 'page'}
+          aria-label="Page view"
+          className={`switch${d.layout === 'page' ? ' is-on' : ''}`}
+          onClick={() => set({ layout: d.layout === 'page' ? undefined : 'page' })}
+        />
+      </div>
+      <div className="dm-row">
+        <span className="dm-label">Style</span>
+        <div className="seg seg-text" role="radiogroup" aria-label="Style">
+          {STYLES.map((s) => (
+            <button key={s.id} role="radio" aria-checked={d.style === s.id} className={d.style === s.id ? 'is-on' : ''} onClick={() => set({ style: d.style === s.id ? undefined : s.id })}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="dm-row">
+        <span className="dm-label">Paper</span>
+        <div className="seg seg-text" role="radiogroup" aria-label="Paper">
+          {(Object.keys(PAPER) as Paper[]).map((p) => (
+            <button
+              key={p}
+              role="radio"
+              aria-checked={(d.paper ?? 'letter') === p}
+              className={(d.paper ?? 'letter') === p ? 'is-on' : ''}
+              onClick={() => set({ paper: p === 'letter' ? undefined : p })}
+            >
+              {PAPER[p].label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <label className="dm-field">
+        <span>Target</span>
+        <input
+          className="dm-input"
+          value={target}
+          placeholder="1500, 1500–2000, ≤750, 5 pages"
+          onChange={(e) => setTarget(e.target.value)}
+          onBlur={() => target.trim() !== (d.target ?? '') && set({ target: target.trim() || undefined })}
+          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+        />
+        {bad && <small className="dm-bad">Not understood. Try 1500, 1500-2000, &lt;=750 or 5 pages</small>}
+      </label>
+      <div className="kind-doc-foot">
+        <small className="kind-folder">New {kind.name} pieces start with these; pieces you already have keep their own.</small>
+        <button className="btn" onClick={onDone}>
+          Done
+        </button>
+      </div>
+    </div>
   )
 }
 

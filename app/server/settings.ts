@@ -29,6 +29,12 @@ export interface Settings extends Appearance {
   kinds: Kind[]
   /** Folders (vault-relative) left out of Recall, voice profiles and filing, besides the special ones. */
   excludedFolders: string[]
+  /** The writer's name, for a document's header when the piece doesn't name its author. */
+  profileName: string
+  /** Their school or institution, for an APA title page. */
+  profileInstitution: string
+  /** The style a piece takes when the writer turns on page view without choosing one. */
+  defaultStyle: 'mla' | 'apa' | 'chicago' | 'none'
 }
 
 const env = process.env
@@ -46,6 +52,9 @@ export const DEFAULTS: Settings = {
   keys: {},
   kinds: DEFAULT_KINDS,
   excludedFolders: [],
+  profileName: '',
+  profileInstitution: '',
+  defaultStyle: 'mla',
   ...APPEARANCE_DEFAULTS,
 }
 
@@ -117,6 +126,9 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   next.ceiling = Math.max(0, Math.min(5, Math.round(next.ceiling)))
   next.kinds = await settleFolders(cleanKinds(next.kinds) ?? prev.kinds)
   next.excludedFolders = cleanFolders(next.excludedFolders)
+  next.profileName = typeof next.profileName === 'string' ? next.profileName.trim().slice(0, 120) : ''
+  next.profileInstitution = typeof next.profileInstitution === 'string' ? next.profileInstitution.trim().slice(0, 160) : ''
+  if (!['mla', 'apa', 'chicago', 'none'].includes(next.defaultStyle)) next.defaultStyle = DEFAULTS.defaultStyle
   Object.assign(next, cleanAppearance(next))
   next.keys = Object.fromEntries(Object.entries(next.keys ?? {}).filter(([k, v]) => /^[\w.-]+$/.test(k) && typeof v === 'string' && v.length < 40))
   current = next

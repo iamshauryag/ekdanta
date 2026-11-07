@@ -16,6 +16,7 @@ import { parseMarkdown, serializeMarkdown, type Source } from './markdown.ts'
 import { PageLinkMenu, SlashMenu, type PageRef, type TemplateItems } from './menus.ts'
 import { caretFor, isPromptSelected, promptPlugin, promptRanges } from './prompts.ts'
 import { extensions, resolver } from './schema.ts'
+import { isReferencesHeading, type Block as CountBlock } from '../lib/targets.ts'
 import { readAloudPlugin } from './readAloud.ts'
 import { ReadAloudBar, canReadAloud, readAloud, useReadAloud } from '../components/ReadAloudBar.tsx'
 import { replaceAll, replaceCurrent, searchPlugin, searchState, setSearch, step } from './search.ts'
@@ -32,6 +33,8 @@ export interface EditorFormat {
   canUndo: boolean
   canRedo: boolean
   selectedWords: number
+  /** Of the selected words, those in a Works Cited or References section, which a length limit leaves out. */
+  selectedReferenceWords: number
   inTable: boolean
 }
 
@@ -52,6 +55,8 @@ interface Props {
   snapshot?: (reason: string) => void
   openDoc: (path: string) => void
   onWordCount: (n: number) => void
+  /** The top-level blocks with their word counts, so a word limit can leave out a Works Cited section. */
+  onBlocks?: (blocks: CountBlock[]) => void
   autoFocus?: boolean
   /** Where the caret starts: an offset into `initial` (a template's {{cursor}}). */
   caret?: number | null
@@ -86,11 +91,35 @@ const EDITOR_COMMANDS = COMMANDS.filter((c) => c.group !== 'App' && c.id !== 'sa
 export const countWords = (text: string) => text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length
 
 /** Words between two positions, leaving out a template's prompts: they aren't the writer's words. */
-function wordsOutsidePrompts(doc: PMNode, from: number, to: number) {
-  const prompts = promptRanges(doc)
-    .filter((r) => r.from >= from && r.to <= to)
-    .reduce((n, r) => n + countWords(textOf(doc, r.from, r.to)), 0)
+function wordsOutsidePrompts(doc: PMNode, from: number, to: number, ranges = promptRanges(doc)) {
+  const prompts = ranges.filter((r) => r.from >= from && r.to <= to).reduce((n, r) => n + countWords(textOf(doc, r.from, r.to)), 0)
   return countWords(textOf(doc, from, to)) - prompts
+}
+
+/** Selected words that sit in a references section. */
+function referenceWords(doc: PMNode, from: number, to: number) {
+  const ranges = referenceRanges(doc).filter((r) => r.from < to && r.to > from)
+  if (!ranges.length) return 0
+  const prompts = promptRanges(doc)
+  return ranges.reduce((n, r) => n + wordsOutsidePrompts(doc, Math.max(from, r.from), Math.min(to, r.to), prompts), 0)
+}
+
+/**
+ * Where a Works Cited, References or Bibliography section sits: from its heading up to the next heading
+ * of the same or a higher level, as countable() in lib/targets.ts reads the same blocks.
+ */
+function referenceRanges(doc: PMNode) {
+  const ranges: { from: number; to: number }[] = []
+  let level = 0
+  doc.forEach((n, pos) => {
+    const heading = n.type.name === 'heading' ? (n.attrs.level as number) : 0
+    if (heading && level && heading <= level) level = 0
+    if (heading && !level && isReferencesHeading(n.textContent)) {
+      level = heading
+      ranges.push({ from: pos, to: pos + n.nodeSize })
+    } else if (level) ranges[ranges.length - 1].to = pos + n.nodeSize
+  })
+  return ranges
 }
 
 function readAsBase64(file: File) {
@@ -122,7 +151,7 @@ export function Editor(props: Props) {
   const controller = useRef<HelpController | null>(null)
   const source = useRef<Source | undefined>(undefined)
   const lastHelp = useRef<Help | null>(null)
-  const lastReport = useRef({ format: '', outline: '' })
+  const lastReport = useRef({ format: '', outline: '', blocks: '' })
   const editorRef = useRef<TiptapEditor | null>(null)
   const [find, setFind] = useState(false)
   const [link, setLink] = useState<{ href: string; x: number; y: number } | null>(null)
@@ -253,7 +282,12 @@ export function Editor(props: Props) {
       const c = caretFor(editor.schema, editor.state.doc, 0, p().initial, caret)
       editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, c.from, c.to)).scrollIntoView())
       editor.view.focus()
-    } else if (p().autoFocus !== false) editor.commands.focus('start')
+    } else if (p().autoFocus !== false) {
+      // A piece opens at its top. Scrolling to the first line instead would pass over what sits above it
+      // in page view: an APA or Chicago title page.
+      editor.commands.focus('start', { scrollIntoView: false })
+      editor.view.dom.closest('.page-area')?.scrollTo({ top: 0 })
+    }
     return () => {
       if (editorRef.current === editor) editorRef.current = null
       controller.current = null
@@ -264,7 +298,18 @@ export function Editor(props: Props) {
 
   function report(ed: TiptapEditor) {
     const doc = ed.state.doc
-    p().onWordCount(wordsOutsidePrompts(doc, 0, doc.content.size))
+    // Counted block by block (prompts left out, block boundaries are spaces either way), so the total and the parts agree.
+    const prompts = promptRanges(doc)
+    const blocks: CountBlock[] = []
+    doc.forEach((n, pos) =>
+      blocks.push({ heading: n.type.name === 'heading' ? n.attrs.level : 0, text: n.type.name === 'heading' ? n.textContent : '', words: wordsOutsidePrompts(doc, pos, pos + n.nodeSize, prompts) }),
+    )
+    p().onWordCount(blocks.reduce((sum, b) => sum + b.words, 0))
+    const blocksKey = JSON.stringify(blocks)
+    if (blocksKey !== lastReport.current.blocks) {
+      lastReport.current.blocks = blocksKey
+      p().onBlocks?.(blocks)
+    }
     const outline: Heading[] = []
     doc.descendants((n, pos) => {
       if (n.type.name === 'heading') outline.push({ level: n.attrs.level, text: n.textContent, pos })
@@ -285,6 +330,7 @@ export function Editor(props: Props) {
       canUndo: undoDepth(ed.state) > 0,
       canRedo: redoDepth(ed.state) > 0,
       selectedWords: sel.empty ? 0 : wordsOutsidePrompts(ed.state.doc, sel.from, sel.to),
+      selectedReferenceWords: sel.empty ? 0 : referenceWords(ed.state.doc, sel.from, sel.to),
       inTable: ed.isActive('table'),
     }
     // Only when something the toolbar shows has changed, not on every keystroke.
