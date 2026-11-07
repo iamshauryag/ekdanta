@@ -1,11 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, type Settings as S, type Status } from '../lib/api.ts'
-import { helpMod } from '../editor/help.ts'
-import { SPECIAL_FOLDERS } from '../lib/special.ts'
-import { KeyMap } from './KeyMap.tsx'
-import { Kinds } from './Kinds.tsx'
-import { RATES, listedVoices, readPrefs, sample, saveReadPrefs, useSpeechVoices } from './ReadAloudBar.tsx'
-import { isOnlineVoice, pickVoice, voiceLabel } from '../lib/speak.ts'
+import { searchRows } from '../lib/appearance.ts'
+import { ROWS, RowName, Switch, TABS, tabLabel, type RowCtx, type SettingRow, type Tab } from './settingsRows.tsx'
 
 interface Props {
   settings: S
@@ -13,29 +9,35 @@ interface Props {
   onChange: (patch: Partial<S>) => void
   onClose: () => void
   onRenameKindFolder?: (id: string) => Promise<void>
+  /** Every folder in the vault, for the folder pickers. */
+  folders: string[]
+  /** Why the chosen CSS snippet isn't applied, if it isn't. */
+  snippetNote: string | null
 }
 
-const CLAUDE_MODELS = ['haiku', 'sonnet', 'opus']
-
-const TABS = [
-  { id: 'writing', label: 'Writing' },
-  { id: 'kinds', label: 'Kinds' },
-  { id: 'models', label: 'Models' },
-  { id: 'vault', label: 'Vault' },
-  { id: 'keys', label: 'Shortcuts' },
-] as const
-type Tab = (typeof TABS)[number]['id']
 // Reopening Settings returns to the tab you left.
 let lastTab: Tab = 'writing'
 
-export function Settings({ settings: s, status, onChange, onClose, onRenameKindFolder }: Props) {
+export function Settings({ settings: s, status, onChange, onClose, onRenameKindFolder, folders, snippetNote }: Props) {
   const sheet = useRef<HTMLDivElement>(null)
+  const body = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const [index, setIndex] = useState<string | null>(null)
+  const [snippets, setSnippets] = useState<string[] | null>(null)
   const [tab, setTabState] = useState<Tab>(lastTab)
+  const [query, setQuery] = useState('')
+  // Advanced rows a search led to stay in view until you move to another tab.
+  const [revealed, setRevealed] = useState<Set<string>>(new Set())
+  const [flash, setFlash] = useState<string | null>(null)
   const setTab = (t: Tab) => {
     lastTab = t
     setTabState(t)
   }
+  const pickTab = (t: Tab) => {
+    if (t !== tab) setRevealed(new Set())
+    setTab(t)
+  }
+
   const tabsRef = useRef<HTMLDivElement>(null)
   // Arrow keys move between tabs, as in any tab list.
   const onTabKey = (e: React.KeyboardEvent) => {
@@ -44,15 +46,25 @@ export function Settings({ settings: s, status, onChange, onClose, onRenameKindF
     if (to === null) return
     e.preventDefault()
     const next = TABS[(to + TABS.length) % TABS.length].id
-    setTab(next)
+    pickTab(next)
     tabsRef.current?.querySelector<HTMLElement>(`#settings-tab-${next}`)?.focus()
   }
+  // The sheet takes the keyboard once, when it opens. Focusing it again on a later render would pull
+  // the keyboard off the slider or switch being used, so this effect must not depend on anything.
   useEffect(() => {
     sheet.current?.focus()
+  }, [])
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+  useEffect(() => {
+    api
+      .snippets()
+      .then(setSnippets)
+      .catch(() => setSnippets([]))
+  }, [])
 
   const rebuild = async () => {
     setIndex('Rebuilding…')
@@ -60,47 +72,74 @@ export function Settings({ settings: s, status, onChange, onClose, onRenameKindF
     setIndex(`${r.paragraphs} paragraphs from ${r.files} documents`)
   }
 
-  const st = status
-  const generators = st?.ollamaModels.filter((m) => !/embed/.test(m)) ?? []
-  const providers: {
-    id: S['provider']
-    name: string
-    note: string
-    ok: boolean
-  }[] = st
-    ? [
-        {
-          id: 'auto',
-          name: 'Automatic',
-          note: `The best one available${st.strong ? `: now ${providerName(st.strong)}` : ''}`,
-          ok: true,
-        },
-        {
-          id: 'claude-cli',
-          name: 'Claude CLI',
-          note: st.claudeCli ? 'Signed in. Uses your Claude plan' : 'Not found. Install Claude Code and sign in',
-          ok: st.claudeCli,
-        },
-        {
-          id: 'anthropic-api',
-          name: 'Anthropic API',
-          note: st.anthropicApi ? 'ANTHROPIC_API_KEY is set. Billed per request' : 'Set ANTHROPIC_API_KEY to use',
-          ok: st.anthropicApi,
-        },
-        {
-          id: 'ollama',
-          name: 'Local model',
-          note: st.ollama ? `Ollama · ${s.ollamaModel}` : 'Ollama isn’t running',
-          ok: st.ollama && generators.length > 0,
-        },
-      ]
-    : []
+  const ctx: RowCtx = { s, status, onChange, folders, snippets, snippetNote, index, rebuild, onRenameFolder: onRenameKindFolder }
+  const offered = ROWS.filter((r) => !r.when || r.when(ctx))
+  const hits = useMemo(() => searchRows(offered, tabLabel, query), [offered.map((r) => r.id).join(), query]) // eslint-disable-line react-hooks/exhaustive-deps
+  const searching = query.trim().length > 0
+  const hitTabs = new Set(hits.map((h) => h.tab))
+
+  // Searching jumps to the tab of the best match, unless the tab you're on has one too.
+  useEffect(() => {
+    if (hits.length && !hitTabs.has(tab)) setTab(hits[0].tab)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hits])
+
+  // Keep the open tab in view where the tab strip scrolls (on a phone).
+  useEffect(() => {
+    tabsRef.current?.querySelector('.is-on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [tab])
+
+  // Bring a highlighted row into view.
+  const firstHit = searching ? hits.find((h) => h.tab === tab)?.id : flash
+  useEffect(() => {
+    if (!firstHit) return
+    body.current?.querySelector(`[data-row="${firstHit}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [firstHit, tab])
+  useEffect(() => {
+    if (!flash) return
+    const t = window.setTimeout(() => setFlash(null), 1600)
+    return () => window.clearTimeout(t)
+  }, [flash])
+
+  /** Leave the search where it led: its rows stay revealed in their tab, and the first is highlighted. */
+  const choose = () => {
+    const here = hits.filter((h) => h.tab === tab)
+    if (here.length) {
+      setRevealed(new Set(here.filter((h) => h.advanced).map((h) => h.id)))
+      setFlash(here[0].id)
+    }
+    setQuery('')
+  }
+  const onSearchKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape' && query) {
+      e.stopPropagation() // clears the search; a second Esc closes Settings
+      choose()
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      choose()
+    }
+  }
+
+  const shown = (r: SettingRow) => !r.advanced || s.showAdvanced || revealed.has(r.id) || !!r.showAnyway?.(ctx)
+  const visible = (r: SettingRow) => r.tab === tab && (searching ? hits.includes(r) : shown(r))
+  const rows = offered.filter(visible)
+  const hiddenHere = !searching && !s.showAdvanced ? offered.filter((r) => r.tab === tab && !shown(r)).length : 0
 
   return (
     <div className="sheet-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="sheet" role="dialog" aria-label="Settings" tabIndex={-1} ref={sheet}>
         <header className="sheet-head">
           <h2>Settings</h2>
+          <input
+            ref={searchRef}
+            className="input sheet-search"
+            type="search"
+            placeholder="Search settings"
+            aria-label="Search settings"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onSearchKey}
+          />
           <button className="icon-btn" aria-label="Close" title="Close (Esc)" onClick={onClose}>
             ✕
           </button>
@@ -114,220 +153,69 @@ export function Settings({ settings: s, status, onChange, onClose, onRenameKindF
               aria-selected={tab === t.id}
               aria-controls="settings-panel"
               tabIndex={tab === t.id ? 0 : -1}
-              className={`sheet-tab${tab === t.id ? ' is-on' : ''}`}
-              onClick={() => setTab(t.id)}
+              className={`sheet-tab${tab === t.id ? ' is-on' : ''}${searching && !hitTabs.has(t.id) ? ' is-dim' : ''}`}
+              onClick={() => pickTab(t.id)}
             >
               {t.label}
+              {searching && hitTabs.has(t.id) && <span className="tab-count">{hits.filter((h) => h.tab === t.id).length}</span>}
             </button>
           ))}
         </div>
 
-        <div className="sheet-body" id="settings-panel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`}>
-          {tab === 'writing' && (
+        <div className="sheet-body" id="settings-panel" role="tabpanel" aria-labelledby={`settings-tab-${tab}`} ref={body}>
+          {searching && !hits.length ? (
+            <p className="sheet-empty">
+              Nothing matches “{query.trim()}”. <span className="muted">Esc clears the search.</span>
+            </p>
+          ) : searching && !rows.length ? (
+            <p className="sheet-empty">Nothing on this tab matches “{query.trim()}”.</p>
+          ) : (
             <section>
-              <Row label="Help ceiling" hint="The highest help level that works with one press. Above it, press twice.">
-                <Seg value={s.ceiling} options={[0, 1, 2, 3, 4, 5]} onPick={(ceiling) => onChange({ ceiling })} />
-              </Row>
-              <Row label="Recall dot" hint="A faint dot in the margin when your notes have something for this paragraph.">
-                <Switch on={s.recallDot} onFlip={(recallDot) => onChange({ recallDot })} />
-              </Row>
-              <Row label="Paragraph focus" hint="In Focus mode, dim every paragraph but the one you’re in.">
-                <Switch on={s.paragraphFocus} onFlip={(paragraphFocus) => onChange({ paragraphFocus })} />
-              </Row>
-              <Row label="Appearance">
-                <Seg value={s.theme} options={['system', 'light', 'dark']} label={cap} onPick={(theme) => onChange({ theme })} />
-              </Row>
-              <ReadAloudRows />
-            </section>
-          )}
-
-          {tab === 'kinds' && (
-            <section>
-              <p className="sheet-note">What you write. Each kind files its pieces in its own folder, learns its own voice profile, and tells the help levels how the piece should read.</p>
-              <Kinds kinds={s.kinds} onChange={(kinds) => onChange({ kinds })} onRenameFolder={onRenameKindFolder} />
-            </section>
-          )}
-
-          {tab === 'models' && (
-            <section>
-              <p className="sheet-note">Recall runs on this machine. The other levels use whichever model you already have.</p>
-              <div className="choices" role="radiogroup" aria-label="Help answered by">
-                {providers.map((p) => (
-                  <button
-                    key={p.id}
-                    role="radio"
-                    aria-checked={s.provider === p.id}
-                    disabled={!p.ok}
-                    className={`choice${s.provider === p.id ? ' is-on' : ''}`}
-                    onClick={() => onChange({ provider: p.id })}
-                  >
-                    <span className="dot" />
-                    <span>
-                      <b>{p.name}</b>
-                      <small>{p.note}</small>
-                    </span>
-                  </button>
-                ))}
-              </div>
-              {st?.claudeCli && (
-                <>
-                  <Row label={`${helpMod}3 Word`} hint="A small model keeps word options quick.">
-                    <Seg value={s.claudeFastModel} options={CLAUDE_MODELS} label={cap} onPick={(claudeFastModel) => onChange({ claudeFastModel })} />
-                  </Row>
-                  <Row label={`${helpMod}2 ${helpMod}4 ${helpMod}5`} hint="Nudge, Sentence and Passage.">
-                    <Seg value={s.claudeModel} options={CLAUDE_MODELS} label={cap} onPick={(claudeModel) => onChange({ claudeModel })} />
-                  </Row>
-                </>
+              {rows.map((r) => {
+                const cls = `${searching ? ' is-hit' : ''}${flash === r.id ? ' is-flash' : ''}`
+                const tag = r.advanced && !s.showAdvanced ? <em className="adv-tag">Advanced</em> : null
+                return r.full ? (
+                  <div key={r.id} className={`row-full${cls}`} data-row={r.id}>
+                    {tag}
+                    <RowName.Provider value={r.label}>{r.render(ctx)}</RowName.Provider>
+                  </div>
+                ) : (
+                  <div key={r.id} className={`row${cls}`} data-row={r.id}>
+                    <div className="row-label">
+                      <span>
+                        {r.label}
+                        {tag}
+                      </span>
+                      {r.hint && hintOf(r, ctx)}
+                    </div>
+                    <div className="row-control">
+                      <RowName.Provider value={r.label}>{r.render(ctx)}</RowName.Provider>
+                    </div>
+                  </div>
+                )
+              })}
+              {hiddenHere > 0 && (
+                <p className="sheet-more">
+                  {hiddenHere} more {hiddenHere === 1 ? 'setting' : 'settings'} under Show advanced settings.
+                </p>
               )}
-              {generators.length > 0 && (
-                <>
-                  <Row label="Local model">
-                    <select className="select" value={s.ollamaModel} onChange={(e) => onChange({ ollamaModel: e.target.value })}>
-                      {[...new Set([s.ollamaModel, ...generators])].map((m) => (
-                        <option key={m} value={m}>
-                          {m}
-                        </option>
-                      ))}
-                    </select>
-                  </Row>
-                  <Row label={`Local ${helpMod}3`} hint="Answer Word with the local model, even when another one answers the rest.">
-                    <Switch on={s.wordLocal} onFlip={(wordLocal) => onChange({ wordLocal })} />
-                  </Row>
-                </>
-              )}
-              <Row label={`${helpMod}1 Recall`} hint="Switching rebuilds the index of your writing.">
-                <Seg
-                  value={s.embedder}
-                  options={st?.ollamaModels.some((m) => /embed/.test(m)) ? ['builtin', 'ollama'] : ['builtin']}
-                  label={(v) => (v === 'builtin' ? 'Built in' : 'Ollama')}
-                  onPick={(embedder) => onChange({ embedder })}
-                />
-              </Row>
-            </section>
-          )}
-
-          {tab === 'vault' && (
-            <section>
-              <Row label="Folder" hint="Start Ekdanta with EKDANTA_VAULT set to use another folder.">
-                <span className="path">{st?.vault ?? '…'}</span>
-              </Row>
-              <Row label="Recall index" hint={index ?? 'Kept up to date as you write. Rebuild if Recall seems stale.'}>
-                <button className="btn" onClick={rebuild}>
-                  Rebuild
-                </button>
-              </Row>
-              <Row label="Left out" hint="Top-level folders of material, not your own finished writing. Recall and voice skip them.">
-                <span className="path folders">
-                  {SPECIAL_FOLDERS.map((f) => (
-                    <span key={f}>{f}/</span>
-                  ))}
-                </span>
-              </Row>
-            </section>
-          )}
-
-          {tab === 'keys' && (
-            <section>
-              <p className="sheet-note">Click a shortcut and press the keys you want. Changes apply at once.</p>
-              <KeyMap overrides={s.keys ?? {}} onChange={(keys) => onChange({ keys })} />
             </section>
           )}
         </div>
+
+        <footer className="sheet-foot">
+          <label className="sheet-advanced">
+            <Switch on={s.showAdvanced} label="Show advanced settings" onFlip={(showAdvanced) => onChange({ showAdvanced })} />
+            <span>Show advanced settings</span>
+          </label>
+          <small>Hidden settings keep their values.</small>
+        </footer>
       </div>
     </div>
   )
 }
 
-/** Read aloud's voice and speed. Kept on this computer: each computer has its own voices. */
-function ReadAloudRows() {
-  const voices = useSpeechVoices()
-  const [prefs, setPrefs] = useState(readPrefs)
-  const change = (patch: Partial<typeof prefs>) => {
-    saveReadPrefs(patch)
-    setPrefs(readPrefs())
-  }
-  if (!('speechSynthesis' in window) || !voices.length)
-    return (
-      <Row
-        label="Read aloud"
-        hint={
-          'speechSynthesis' in window
-            ? 'This browser has no voices installed, so Read aloud is hidden. Add a voice in your computer’s speech or accessibility settings, then reload.'
-            : 'This browser can’t speak, so Read aloud is hidden. Chrome, Edge and Safari can.'
-        }
-      >
-        <span className="muted">Unavailable</span>
-      </Row>
-    )
-  const listed = listedVoices(voices)
-  const chosen = listed.find((v) => v.voiceURI === prefs.voice)
-  const used = chosen ?? pickVoice(voices, { systemLang: navigator.language })
-  return (
-    <>
-      <Row
-        label="Read aloud voice"
-        hint={
-          isOnlineVoice(used)
-            ? chosen
-              ? 'This voice sends the text it reads to an online service.'
-              : 'This computer has no voices of its own, so Automatic uses an online one: it sends the text it reads to an online service.'
-            : 'Voices on this computer work offline. A document with a lang property is read in that language when this computer has a voice for it.'
-        }
-      >
-        <select className="select read-voice" aria-label="Read aloud voice" value={chosen ? prefs.voice : ''} onChange={(e) => change({ voice: e.target.value })}>
-          <option value="">Automatic</option>
-          {listed.map((v) => (
-            <option key={v.voiceURI} value={v.voiceURI}>
-              {voiceLabel(v)}
-            </option>
-          ))}
-        </select>
-      </Row>
-      <Row label="Read aloud speed">
-        <div className="read-speed">
-          <Seg value={prefs.rate as (typeof RATES)[number]} options={[...RATES]} label={(r) => (r === 1 ? 'Normal' : `${r}×`)} onPick={(rate) => change({ rate })} />
-          <button className="btn" title="Hear a sample" onClick={() => sample(used, prefs.rate)}>
-            Try
-          </button>
-        </div>
-      </Row>
-    </>
-  )
-}
-
-const cap = (v: string | number) => {
-  const t = String(v)
-  return t[0].toUpperCase() + t.slice(1)
-}
-
-function providerName(p: string) {
-  return p === 'claude-cli' ? 'Claude CLI' : p === 'anthropic-api' ? 'Anthropic API' : 'Local model'
-}
-
-function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div className="row">
-      <div className="row-label">
-        <span>{label}</span>
-        {hint && <small>{hint}</small>}
-      </div>
-      <div className="row-control">{children}</div>
-    </div>
-  )
-}
-
-function Seg<T extends string | number>({ value, options, label = String, onPick }: { value: T; options: T[]; label?: (v: T) => string; onPick: (v: T) => void }) {
-  return (
-    <div className="seg seg-text" role="radiogroup">
-      {options.map((o) => (
-        <button key={String(o)} role="radio" aria-checked={o === value} className={o === value ? 'is-on' : ''} onClick={() => onPick(o)}>
-          {label(o)}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function Switch({ on, onFlip }: { on: boolean; onFlip: (v: boolean) => void }) {
-  return <button role="switch" aria-checked={on} className={`switch${on ? ' is-on' : ''}`} onClick={() => onFlip(!on)} />
+function hintOf(r: SettingRow, ctx: RowCtx) {
+  const h = r.hint?.(ctx)
+  return h ? <small>{h}</small> : null
 }

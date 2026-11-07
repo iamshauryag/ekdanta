@@ -1,5 +1,6 @@
 import type { Kind } from './kinds.ts'
 import type { TemplateInfo } from './templates.ts'
+import type { Appearance } from './appearance.ts'
 import type { EdgeCandidate, EdgeSlot } from './edge.ts'
 import type { VersionEntry, VersionRow } from './versions.ts'
 // Thin client for the local server in server/api.ts.
@@ -35,7 +36,7 @@ export interface Trashed {
   deleted: string
 }
 
-export interface Settings {
+export interface Settings extends Appearance {
   provider: 'auto' | 'claude-cli' | 'anthropic-api' | 'ollama'
   wordLocal: boolean
   claudeModel: string
@@ -49,6 +50,8 @@ export interface Settings {
   /** Shortcuts the writer changed: command id → key ('' to unbind). */
   keys: Record<string, string>
   kinds: Kind[]
+  /** Folders (vault-relative) left out of Recall and voice, besides the special ones. */
+  excludedFolders: string[]
 }
 
 export interface VoiceSummary {
@@ -121,6 +124,8 @@ export const api = {
   status: () => fetch('/api/status').then(json<Status>),
   settings: () => fetch('/api/settings').then(json<Settings>),
   saveSettings: (patch: Partial<Settings>) => fetch('/api/settings', send('PUT', patch)).then(json<Settings>),
+  snippets: () => fetch('/api/snippets').then(json<string[]>),
+  snippet: (path: string) => fetch('/api/snippet?path=' + encodeURIComponent(path)).then(json<{ css: string; error?: string }>),
   files: () => fetch('/api/files').then(json<FileEntry[]>),
   read: (path: string) =>
     fetch('/api/file?path=' + encodeURIComponent(path))

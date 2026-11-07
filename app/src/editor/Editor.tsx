@@ -64,6 +64,8 @@ interface Props {
   onEditor?: (editor: TiptapEditor | null) => void
   onFormat?: (f: EditorFormat) => void
   onOutline?: (h: Heading[]) => void
+  /** The browser's spelling check on the page (Settings · Appearance). */
+  spellcheck?: boolean
   /** The document's language (front matter `lang`), so read-aloud picks a voice for it. */
   lang?: () => string | undefined
   /** Read aloud was asked for, but this browser has no voices to read with. */
@@ -153,7 +155,8 @@ export function Editor(props: Props) {
         PageLinkMenu.configure({ pages: () => p().pages() }),
       ],
       editorProps: {
-        attributes: { class: 'pm', spellcheck: 'true', 'aria-label': 'Document' },
+        // A function, so a change in Settings reaches the page without remaking the editor (see below).
+        attributes: () => ({ class: 'pm', spellcheck: p().spellcheck === false ? 'false' : 'true', 'aria-label': 'Document' }),
         handlePaste: (_view, e) => {
           const images = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith('image/'))
           if (!images.length) return false
@@ -215,6 +218,11 @@ export function Editor(props: Props) {
   )
   const editor = useEditor(options, [props.docKey])
   const reading = useReadAloud(editor, { lang: () => p().lang?.(), onUnavailable: () => p().onReadUnavailable?.() })
+
+  // ProseMirror sets the editor's attributes whenever its state updates; ask it to, now.
+  useEffect(() => {
+    if (editor && !editor.isDestroyed) editor.view.updateState(editor.view.state)
+  }, [editor, props.spellcheck])
 
   // Everything is tied to the editor actually on the page. (In development React mounts components
   // twice, so an editor created first may already be gone.)

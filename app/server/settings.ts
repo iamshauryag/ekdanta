@@ -4,10 +4,12 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { META_DIR, VAULT } from './paths.ts'
 import { cleanKinds, DEFAULT_KINDS, doubledFolder, type Kind } from '../src/lib/kinds.ts'
+import { APPEARANCE_DEFAULTS, cleanAppearance, type Appearance } from '../src/lib/appearance.ts'
 
 export type ProviderChoice = 'auto' | 'claude-cli' | 'anthropic-api' | 'ollama'
 
-export interface Settings {
+/** Appearance, editor and vault options (font, text size, autosave, where new notes go…) are in Appearance. */
+export interface Settings extends Appearance {
   /** Who answers ⌘2, ⌘4 and ⌘5 (and ⌘3, unless `wordLocal`). */
   provider: ProviderChoice
   /** Answer ⌘3 Word with the local model, when one is installed. */
@@ -44,6 +46,7 @@ export const DEFAULTS: Settings = {
   keys: {},
   kinds: DEFAULT_KINDS,
   excludedFolders: [],
+  ...APPEARANCE_DEFAULTS,
 }
 
 const FILE = path.join(META_DIR, 'settings.json')
@@ -53,7 +56,7 @@ export async function loadSettings(): Promise<Settings> {
   if (current) return current
   try {
     const saved = JSON.parse(await fs.readFile(FILE, 'utf8')) as Partial<Settings>
-    current = { ...DEFAULTS, ...saved, kinds: await settleFolders(cleanKinds(saved.kinds) ?? DEFAULTS.kinds), excludedFolders: cleanFolders(saved.excludedFolders) }
+    current = { ...DEFAULTS, ...saved, kinds: await settleFolders(cleanKinds(saved.kinds) ?? DEFAULTS.kinds), excludedFolders: cleanFolders(saved.excludedFolders), ...cleanAppearance(saved) }
   } catch {
     current = { ...DEFAULTS }
   }
@@ -114,6 +117,7 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   next.ceiling = Math.max(0, Math.min(5, Math.round(next.ceiling)))
   next.kinds = await settleFolders(cleanKinds(next.kinds) ?? prev.kinds)
   next.excludedFolders = cleanFolders(next.excludedFolders)
+  Object.assign(next, cleanAppearance(next))
   next.keys = Object.fromEntries(Object.entries(next.keys ?? {}).filter(([k, v]) => /^[\w.-]+$/.test(k) && typeof v === 'string' && v.length < 40))
   current = next
   await fs.mkdir(META_DIR, { recursive: true })

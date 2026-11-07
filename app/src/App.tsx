@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Editor as TiptapEditor } from '@tiptap/core'
 import { Editor, helpLevel, type EditorFormat, type Heading } from './editor/Editor.tsx'
 import type { PageRef } from './editor/menus.ts'
@@ -28,6 +28,7 @@ import { isSpecialPath } from './lib/special.ts'
 import { authorOf, templateBody, templateMeta, type TemplateInfo } from './lib/templates.ts'
 import { StartFrom, TemplatePicker } from './components/TemplatePicker.tsx'
 import { insertTemplate, replacePlaceholder } from './editor/prompts.ts'
+import { APPEARANCE_DEFAULTS, appearanceVars, newNoteFolder } from './lib/appearance.ts'
 import { READ_WPM, readingTimes } from './lib/sentences.ts'
 
 function usePref<T>(key: string, initial: T) {
@@ -60,6 +61,9 @@ export function App() {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [status, setStatus] = useState<Status | null>(null)
   const [path, setPath] = usePref<string | null>('lastDoc', null)
+  const remembered = useRef(path) // the document open when Ekdanta was last closed
+  // Nothing is read until the settings say where to start (see "Where Ekdanta starts").
+  const [started, setStarted] = useState(false)
   // What's on screen. `key` changes only when a different document opens, not when one is renamed.
   const [loaded, setLoaded] = useState<(Doc & { key: string; caret?: number | null }) | null>(null)
   // The open document has nothing in its body yet (a new draft can start from a template).
@@ -80,7 +84,18 @@ export function App() {
   const [preview, setPreview] = useState<VersionRow | null>(null)
   const bumpVersions = useCallback(() => setVersionsTick((t) => t + 1), [])
   const [focus, setFocus] = useState(false)
-  const [livePreview, setLivePreview] = usePref('livePreview', true)
+  // The writer's own Page/Markdown choice, remembered between sessions, and the view on screen now.
+  // A new draft may open in the other view (Settings · Writing · New documents open in); opening an
+  // existing document comes back to the writer's choice, so the new-draft view never becomes the view for everything.
+  const [chosenView, setChosenView] = usePref('livePreview', true)
+  const [livePreview, setLivePreview] = useState(chosenView)
+  const chooseView = useCallback(
+    (on: boolean) => {
+      setChosenView(on)
+      setLivePreview(on)
+    },
+    [setChosenView],
+  )
   const [editor, setEditor] = useState<TiptapEditor | null>(null)
   const [format, setFormat] = useState<EditorFormat | null>(null)
   const [outline, setOutline] = useState<Heading[]>([])
@@ -148,10 +163,14 @@ export function App() {
   const materialTimer = useRef<number | undefined>(undefined)
   const ceiling = settings?.ceiling ?? 5
   const recallDot = settings?.recallDot ?? true
+  // Changes show at once; the server's cleaned copy replaces them only if no newer change was made
+  // meanwhile (dragging the text size sends many), or an older reply would undo the newer change.
+  const settingsSeq = useRef(0)
   const changeSettings = useCallback((patch: Partial<SettingsT>) => {
     setSettings((s) => (s ? { ...s, ...patch } : s))
+    const seq = ++settingsSeq.current
     api.saveSettings(patch).then((next) => {
-      setSettings(next)
+      if (seq === settingsSeq.current) setSettings(next)
       // Provider or model changes show up in the Piece module's Models list.
       if ('provider' in patch || 'wordLocal' in patch || 'embedder' in patch || /Model$/.test(Object.keys(patch)[0])) api.status().then(setStatus)
     })
@@ -176,6 +195,8 @@ export function App() {
     fileText.set(d ? joinFrontMatter(d.rawMeta, d.meta, d.body) : '')
   }, [fileText])
   const saveTimer = useRef<number | undefined>(undefined)
+  const autosaveMs = useRef(APPEARANCE_DEFAULTS.autosaveMs)
+  autosaveMs.current = settings?.autosaveMs ?? APPEARANCE_DEFAULTS.autosaveMs
   const renamed = useRef<string | null>(null)
   const opened = useRef(0)
 
@@ -227,6 +248,62 @@ export function App() {
     else document.documentElement.dataset.theme = theme
   }, [settings?.theme])
 
+  // Font, text size, line width and spacing: custom properties on :root, which the page's styles read.
+  // The text reflows, so the line at the caret (or at the top of the view) is kept where it was on screen.
+  const a = settings ?? APPEARANCE_DEFAULTS
+  const vars = appearanceVars({ ...APPEARANCE_DEFAULTS, ...a })
+  const varsKey = JSON.stringify(vars) + a.lineWidth
+  useLayoutEffect(() => {
+    const root = document.documentElement
+    const anchor = scrollAnchor()
+    for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
+    if (a.lineWidth === 'full') root.dataset.measure = 'full'
+    else delete root.dataset.measure
+    anchor?.restore()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [varsKey])
+
+  // A CSS snippet from the vault, added as a <style>. Re-read when the window comes back, so edits made
+  // in another app show up. One that's missing or has no rules we can read is left out, with a notice.
+  const [snippetNote, setSnippetNote] = useState<string | null>(null)
+  const snippet = settings?.cssSnippet ?? ''
+  useEffect(() => {
+    let cancelled = false
+    const apply = async () => {
+      let css = ''
+      let note: string | null = null
+      if (snippet) {
+        try {
+          const got = await api.snippet(snippet)
+          css = got.css
+          if (got.error) note = `${snippet} couldn’t be loaded (${got.error.toLowerCase()}), so it isn’t applied.`
+          else if (css.trim() && !cssRules(css)) {
+            note = `${snippet} has no rules that could be read, so it isn’t applied.`
+            css = ''
+          }
+        } catch (e) {
+          note = `${snippet} couldn’t be loaded (${(e as Error).message.toLowerCase()}), so it isn’t applied.`
+        }
+      }
+      if (cancelled) return
+      setSnippetNote(note)
+      let el = document.getElementById('ekdanta-snippet')
+      if (!css) return el?.remove()
+      if (!el) {
+        el = document.createElement('style')
+        el.id = 'ekdanta-snippet'
+        document.head.append(el)
+      }
+      if (el.textContent !== css) el.textContent = css
+    }
+    apply()
+    window.addEventListener('focus', apply)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', apply)
+    }
+  }, [snippet])
+
   // Open the remembered document, or the first one in the vault.
   useEffect(() => {
     if (!files.length) return
@@ -234,7 +311,7 @@ export function App() {
   }, [files, path, setPath])
 
   useEffect(() => {
-    if (!path) return
+    if (!path || !started) return
     if (renamed.current === path) {
       renamed.current = null // same document under a new name: nothing to reload
       return
@@ -269,7 +346,7 @@ export function App() {
     return () => {
       cancelled = true
     }
-  }, [path])
+  }, [path, started])
 
   // The open page's brief: only while it belongs to the page on screen (every switch re-renders).
   const openBrief = brief && brief.doc === docRef.current ? brief : null
@@ -293,7 +370,7 @@ export function App() {
       syncText()
       setSaved('unsaved')
       window.clearTimeout(saveTimer.current)
-      saveTimer.current = window.setTimeout(save, 800)
+      saveTimer.current = window.setTimeout(save, autosaveMs.current)
     },
     [save, syncText],
   )
@@ -350,7 +427,7 @@ export function App() {
 
   /** Switch documents: finish any pending save first, and drop a new draft that was left empty. */
   const openDoc = useCallback(
-    async (next: string) => {
+    async (next: string, newly = false) => {
       const d = docRef.current
       if (d && d.path !== next) {
         if (saveTimer.current !== undefined) await save()
@@ -362,21 +439,50 @@ export function App() {
       setFresh((f) => (f === next ? f : null))
       setVoiceView(null)
       setIdeasView(false)
+      if (!newly) setLivePreview(chosenView)
       setPath(next)
     },
-    [save, refreshFiles, setPath],
+    [save, refreshFiles, setPath, chosenView],
   )
 
   const newDraft = useCallback(
     async (folder?: string) => {
-      const target = folder ?? files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
+      const currentFolder = files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
+      const target = folder ?? newNoteFolder(settings ?? APPEARANCE_DEFAULTS, { currentFolder, platform: docRef.current?.meta.platform?.toLowerCase(), kinds: kinds() })
       const { path: rel } = await api.create(target)
       await refreshFiles()
       setFresh(rel)
-      await openDoc(rel)
+      if (settings) setLivePreview(settings.newDocView !== 'markdown')
+      await openDoc(rel, true)
     },
-    [files, openDoc, refreshFiles],
+    [files, openDoc, refreshFiles, settings],
   )
+
+  // Where Ekdanta starts: the document open last, or, if the writer turned that off, a fresh draft.
+  // An empty draft left from last time is used again rather than piling up untitled files.
+  const starting = useRef(false)
+  useEffect(() => {
+    if (!settings || starting.current) return
+    starting.current = true
+    const last = remembered.current
+    if (settings.openLast) return setStarted(true)
+    ;(async () => {
+      try {
+        if (last && /(^|\/)untitled(-\d+)?\.md$/.test(last)) {
+          const { meta, body } = splitFrontMatter(await api.read(last).catch(() => ''))
+          if (!meta.title?.trim() && !body.trim() && (await api.files()).some((f) => f.path === last)) {
+            setFresh(last)
+            if (settings) setLivePreview(settings.newDocView !== 'markdown')
+            setPath(last)
+            return
+          }
+        }
+        await newDraft()
+      } finally {
+        setStarted(true)
+      }
+    })()
+  }, [settings, newDraft, setPath])
 
   const setMeta = (patch: MetaPatch) => {
     const d = docRef.current
@@ -1031,6 +1137,11 @@ export function App() {
     }),
     [path, ceiling, recallDot, focus],
   )
+  const spellcheck = settings?.spellcheck ?? true
+  const folders = useMemo(
+    () => [...new Set(files.flatMap((f) => f.folder.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/'))).filter(Boolean))].sort((x, y) => x.localeCompare(y)),
+    [files],
+  )
 
   return (
     <div className={`app${focus ? ' is-focus' : ''}${panelOpen ? ' has-panel' : ''}${sidebarOpen ? ' has-sidebar' : ''}${settings?.paragraphFocus === false ? ' no-para-focus' : ''}`}>
@@ -1101,7 +1212,7 @@ export function App() {
       <main className="page-area">
         {voiceView && <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />}
         {ideasView && !voiceView && <IdeasPage version={ideasVersion} onCapture={captureIdea} onStart={startIdea} onOpenDoc={openDoc} />}
-        {loaded && !voiceView && !ideasView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={setLivePreview} />}
+        {loaded && !voiceView && !ideasView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={chooseView} />}
         {loaded && !voiceView && !ideasView && (
           <div className="page">
             <div className="doc-meta">
@@ -1122,6 +1233,7 @@ export function App() {
             </div>
             <TitleField
               key={'title:' + loaded.key}
+              spellcheck={spellcheck}
               value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)}
               autoFocus={isNew && loaded.caret == null}
               onCommit={setTitle}
@@ -1155,13 +1267,14 @@ export function App() {
                 onEditor={setEditor}
                 onFormat={setFormat}
                 onOutline={setOutline}
+                spellcheck={spellcheck}
                 lang={() => docRef.current?.meta.lang}
                 onReadUnavailable={() => notify('This browser has no voices to read aloud with. Settings → Writing explains.')}
                 edgeCurrent={edgeCurrent}
                 acceptEdge={acceptEdge}
               />
             ) : (
-              <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} />
+              <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} spellcheck={spellcheck} />
             )}
           </div>
         )}
@@ -1251,32 +1364,48 @@ export function App() {
         />
       )}
 
-      {settingsOpen && settings && <Settings settings={settings} status={status} onChange={changeSettings} onClose={() => setSettingsOpen(false)} onRenameKindFolder={renameKindFolder} />}
+      {settingsOpen && settings && (
+        <Settings
+          settings={settings}
+          status={status}
+          onChange={changeSettings}
+          onClose={() => setSettingsOpen(false)}
+          onRenameKindFolder={renameKindFolder}
+          folders={folders}
+          snippetNote={snippetNote}
+        />
+      )}
 
       <footer className="statusbar">
         <span>
-          {platformLabel(platform)} · Ceiling {ceiling} ·{' '}
-          <span className="word-count" title={readingTimes(format?.selectedWords || words) || undefined}>
-            {loaded && !voiceView ? (
-              <LimitStatus
-                key={loaded.key}
-                store={fileText}
-                target={loaded.meta.target ?? ''}
-                selectedWords={format?.selectedWords ?? 0}
-                ceiling={ceiling}
-                mod={mod}
-                paper={loaded.meta.paper === 'a4' ? 'a4' : 'letter'}
-                page={pageFor}
-                // Bound to this file: a limit saved as the sheet closes lands here even if another file is opening.
-                onTarget={(target) => setMetaOf(loaded.path, { target })}
-              />
-            ) : format?.selectedWords ? (
-              `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words`
-            ) : (
-              `${words.toLocaleString()} words`
-            )}
-            {words >= 60 && ` · ${Math.max(1, Math.round(words / READ_WPM))} min read`}
-          </span>
+          {platformLabel(platform)} · Ceiling {ceiling}
+          {/* The count is the writer's to hide (Settings · Appearance), but a limit they set themselves stays, so they can still see when they're over it. */}
+          {(settings?.wordCount !== false || !!loaded?.meta.target) && (
+            <>
+              {' · '}
+              <span className="word-count" title={readingTimes(format?.selectedWords || words) || undefined}>
+                {loaded && !voiceView ? (
+                  <LimitStatus
+                    key={loaded.key}
+                    store={fileText}
+                    target={loaded.meta.target ?? ''}
+                    selectedWords={format?.selectedWords ?? 0}
+                    ceiling={ceiling}
+                    mod={mod}
+                    paper={loaded.meta.paper === 'a4' ? 'a4' : 'letter'}
+                    page={pageFor}
+                    // Bound to this file: a limit saved as the sheet closes lands here even if another file is opening.
+                    onTarget={(target) => setMetaOf(loaded.path, { target })}
+                  />
+                ) : format?.selectedWords ? (
+                  `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words`
+                ) : (
+                  `${words.toLocaleString()} words`
+                )}
+                {settings?.wordCount !== false && words >= 60 && ` · ${Math.max(1, Math.round(words / READ_WPM))} min read`}
+              </span>
+            </>
+          )}
         </span>
         <span className="muted">
           {mod}1 Recall · {mod}2 Nudge · {mod}3 Word · {mod}4 Sentence · {mod}5 Passage
@@ -1289,7 +1418,7 @@ export function App() {
 const platformLabel = (p: string) => kindName(kinds(), p)
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */
-function TitleField({ value, autoFocus, onCommit, onHelp }: { value: string; autoFocus: boolean; onCommit: (t: string) => void; onHelp?: (level: number) => void }) {
+function TitleField({ value, autoFocus, spellcheck, onCommit, onHelp }: { value: string; autoFocus: boolean; spellcheck: boolean; onCommit: (t: string) => void; onHelp?: (level: number) => void }) {
   const ref = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -1308,6 +1437,7 @@ function TitleField({ value, autoFocus, onCommit, onHelp }: { value: string; aut
       ref={ref}
       className="doc-title"
       contentEditable="plaintext-only"
+      spellCheck={spellcheck}
       suppressContentEditableWarning
       role="textbox"
       aria-label="Title"
@@ -1353,4 +1483,56 @@ function PlatformPicker({ value, onPick }: { value: string; onPick: (p: string) 
       ))}
     </div>
   )
+}
+
+/**
+ * Where the text under the caret (or at the top of the view) sits on screen, and a way to put it
+ * back there after the page reflows, so a new text size or column width doesn't throw you elsewhere.
+ */
+function scrollAnchor() {
+  const area = document.querySelector<HTMLElement>('.page-area')
+  if (!area) return null
+  const view = area.getBoundingClientRect()
+  const inView = (y: number) => y >= view.top && y <= view.bottom
+  // The caret itself, when it's on screen: its line is what the writer is looking at.
+  let measure: (() => number | null) | null = null
+  const sel = window.getSelection()
+  if (sel?.rangeCount && area.contains(sel.focusNode)) {
+    const range = sel.getRangeAt(0).cloneRange()
+    range.collapse(false)
+    const caretTop = () => {
+      const r = range.getClientRects()[0] ?? range.getBoundingClientRect()
+      return r && (r.top || r.bottom) ? r.top : null
+    }
+    const top = caretTop()
+    if (top !== null && inView(top)) measure = caretTop
+  }
+  if (!measure) {
+    // Otherwise the first block at the top of the view.
+    for (const b of area.querySelectorAll('.pm > *, .cm-line')) {
+      if (b.getBoundingClientRect().bottom > view.top) {
+        measure = () => (b.isConnected ? b.getBoundingClientRect().top : null)
+        break
+      }
+    }
+  }
+  const before = measure?.()
+  if (!measure || before == null) return null
+  return {
+    restore() {
+      const after = measure() // reading this lays out the page with the new values
+      if (after != null && Math.abs(after - before) > 0.5) area.scrollTop += after - before
+    },
+  }
+}
+
+/** How many rules the browser reads from a stylesheet's text (0 when none of it is CSS). */
+function cssRules(css: string) {
+  try {
+    const sheet = new CSSStyleSheet()
+    sheet.replaceSync(css)
+    return sheet.cssRules.length
+  } catch {
+    return 1 // can't tell here: let the browser apply what it can
+  }
 }

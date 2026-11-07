@@ -21,6 +21,7 @@ import { isSameOrigin, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
 import { applyTemplateTo, listTemplates, seedTemplates } from './templates.ts'
+import { listSnippets, readSnippet } from './snippets.ts'
 import {
   VAULT,
   appendHistory,
@@ -68,6 +69,13 @@ const routes: Record<string, Handler> = {
     if (JSON.stringify(next.excludedFolders) !== JSON.stringify(prev.excludedFolders)) refresh().catch(() => {})
     return next
   },
+  'GET /api/snippets': async () => listSnippets(),
+  // A missing or unreadable snippet is an expected state the app shows in Settings, not a failed request.
+  'GET /api/snippet': async (_req, url) =>
+    readSnippet(url.searchParams.get('path') ?? '').then(
+      (css) => ({ css }),
+      (e: Error) => ({ css: '', error: e.message }),
+    ),
   'GET /api/files': async () => markBriefs(await listFiles()),
   'GET /api/file': async (_req, url) => {
     const path = url.searchParams.get('path') ?? ''
