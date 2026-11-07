@@ -463,6 +463,29 @@ kbd {
   font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
+/* Ideas: a heading like a folder's, that opens the Ideas page. */
+.ideas-head {
+  gap: 4px;
+  border-radius: 6px;
+}
+.ideas-head:hover {
+  background: var(--chrome-2);
+}
+.ideas-head.is-current {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.ideas-open {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  min-width: 0;
+  padding: 2px 0;
+  text-align: left;
+  color: inherit;
+  font-weight: inherit;
+}
 .file.is-untitled {
   font-style: italic;
   color: var(--ink-3);

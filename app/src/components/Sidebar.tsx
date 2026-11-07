@@ -4,6 +4,8 @@ import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
 import { briefLabel } from '../lib/brief.ts'
 import { helpMod } from '../editor/help.ts'
+import { titled } from '../lib/keys.ts'
+import { IDEAS_FILE, isSpecialFile } from '../lib/special.ts'
 
 export type SidebarMode = 'vault' | 'exemplars' | 'voice'
 
@@ -20,6 +22,12 @@ interface Props {
   actions: FileActions
   trash: Trashed[]
   onRestore: (id: string) => void
+  /** Whether the Ideas page fills the page. */
+  ideasOpen: boolean
+  /** How many ideas ideas.md holds; null until it's been read. */
+  ideaCount: number | null
+  onIdeas: () => void
+  onCaptureIdea: () => void
 }
 
 /** What a page's ⋯ menu can do to it. */
@@ -45,12 +53,26 @@ export function Sidebar(p: Props) {
   )
 }
 
-function Vault({ files, current, onOpen, onCreate, onStar, actions, trash, onRestore }: Props) {
+function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, onRestore, ideasOpen, ideaCount, onIdeas, onCaptureIdea }: Props) {
+  // ideas.md has its own row at the top, so it isn't listed again among the pages.
+  const files = all.filter((f) => !isSpecialFile(f.path))
   const folders = [...new Set(files.map((f) => f.folder))].sort()
   const [showTrash, setShowTrash] = useState(false)
+  const ideasCurrent = ideasOpen || current?.toLowerCase() === IDEAS_FILE
   return (
     <>
       <div className="section-label">Vault</div>
+      <div className="folder ideas">
+        <div className={`folder-name ideas-head${ideasCurrent ? ' is-current' : ''}`}>
+          <button className="ideas-open" aria-current={ideasCurrent ? 'page' : undefined} onClick={onIdeas}>
+            <span>Ideas</span>
+            {ideaCount !== null && <span className="count">{ideaCount}</span>}
+          </button>
+          <button className="icon-btn small" title={titled('Capture idea', 'captureIdea')} onClick={onCaptureIdea}>
+            <Icon name="plus" />
+          </button>
+        </div>
+      </div>
       {folders.map((folder) => (
         <div key={folder} className="folder">
           <div className="folder-name">
@@ -127,7 +149,13 @@ function Voices({ voices, voiceView, onVoice }: Props) {
   return (
     <>
       <div className="section-label">Voice</div>
-      <p className="sidebar-note">How you write each kind of piece, learned from your exemplars. <span className="nowrap">{helpMod}3–{helpMod}5</span> follow it.</p>
+      <p className="sidebar-note">
+        How you write each kind of piece, learned from your exemplars.{' '}
+        <span className="nowrap">
+          {helpMod}3–{helpMod}5
+        </span>{' '}
+        follow it.
+      </p>
       {voices.map((v) => (
         <button key={v.platform} className={`voice-row${voiceView === v.platform ? ' is-current' : ''}`} onClick={() => onVoice(v.platform)}>
           <span>{platformLabel(v.platform)}</span>

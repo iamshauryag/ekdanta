@@ -17,7 +17,6 @@ import { Icon } from './components/Icon.tsx'
 import { LimitStatus, textStore } from './components/LimitStatus.tsx'
 import { helpMod, noteCmdWorks } from './editor/help.ts'
 import { fieldSlot, type EdgeSlot } from './lib/edge.ts'
-import { MoreMenu } from './components/MoreMenu.tsx'
 import { CaptureBox } from './components/CaptureBox.tsx'
 import { IdeasPage } from './components/IdeasPage.tsx'
 import { IDEAS_FILE } from './lib/special.ts'
@@ -95,6 +94,23 @@ export function App() {
       .run()
   }, [editor])
   const [ideasVersion, setIdeasVersion] = useState(0)
+  // How many ideas ideas.md holds, for the Vault's Ideas row: read again after a capture, on switching pages, and on coming back to the app.
+  const [ideaCount, setIdeaCount] = useState<number | null>(null)
+  const refreshIdeaCount = useCallback(
+    () =>
+      api
+        .ideas()
+        .then((d) => setIdeaCount(d.ideas.length))
+        .catch(() => {}),
+    [],
+  )
+  useEffect(() => {
+    refreshIdeaCount()
+  }, [refreshIdeaCount, ideasVersion, ideasView, path])
+  useEffect(() => {
+    window.addEventListener('focus', refreshIdeaCount)
+    return () => window.removeEventListener('focus', refreshIdeaCount)
+  }, [refreshIdeaCount])
   const [trash, setTrash] = useState<Trashed[]>([])
   const refreshTrash = useCallback(() => api.trash().then(setTrash), [])
   const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null)
@@ -702,12 +718,6 @@ export function App() {
     [files, openDoc, refreshFiles],
   )
 
-  // The rail's ⋯ More menu: things that don't need a button of their own.
-  const moreItems = [
-    { id: 'ideas', label: 'Ideas', run: openIdeas },
-    { id: 'captureIdea', label: 'Capture idea', run: () => setCaptureOpen(true) },
-  ]
-
   /** Images are linked relative to the document, and served from the vault. */
   const assetUrl = useCallback((src: string) => {
     if (/^(https?:|data:)/i.test(src)) return src
@@ -778,6 +788,9 @@ export function App() {
         <button className="rail-btn" title={titled('New draft', 'newDraft')} onClick={() => newDraft()}>
           <Icon name="compose" />
         </button>
+        <button className="rail-btn" title={titled('Capture idea', 'captureIdea')} onClick={() => setCaptureOpen((o) => !o)}>
+          <Icon name="idea" />
+        </button>
         <span className="rail-sep" />
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'vault' ? ' is-on' : ''}`} title="Vault" onClick={() => showSidebar('vault')}>
           <Icon name="folder" />
@@ -788,7 +801,6 @@ export function App() {
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'voice' ? ' is-on' : ''}`} title="Voice" onClick={() => showSidebar('voice')}>
           <Icon name="voice" />
         </button>
-        <MoreMenu items={moreItems} />
         <div className="rail-spacer" />
         <button className="rail-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
           <Icon name="focus" />
@@ -806,6 +818,10 @@ export function App() {
           voiceView={voiceView}
           onVoice={openVoice}
           current={voiceView || ideasView ? null : path}
+          ideasOpen={ideasView && !voiceView}
+          ideaCount={ideaCount}
+          onIdeas={openIdeas}
+          onCaptureIdea={() => setCaptureOpen(true)}
           onOpen={openDoc}
           onCreate={newDraft}
           onStar={toggleExemplar}
