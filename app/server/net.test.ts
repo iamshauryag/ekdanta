@@ -18,8 +18,8 @@ test('the app itself, on this machine, is local', () => {
 
 test('a tailnet host is refused, even through a proxy on loopback', () => {
   // `tailscale serve` connects from loopback but keeps the browser's Host and Origin.
-  assert.equal(isLocalRequest(req('127.0.0.1', { host: 'mac.tail1234.ts.net', origin: 'https://mac.tail1234.ts.net' })), false)
-  assert.equal(isLocalRequest(req('127.0.0.1', { host: 'mac.tail1234.ts.net' })), false)
+  assert.equal(isLocalRequest(req('127.0.0.1', { host: 'laptop.example', origin: 'https://laptop.example' })), false)
+  assert.equal(isLocalRequest(req('127.0.0.1', { host: 'laptop.example' })), false)
   assert.equal(isLocalRequest(req('127.0.0.1', { host: 'localhost:5317', 'x-forwarded-for': '100.64.0.7' })), false)
   assert.equal(isLocalRequest(req('127.0.0.1', { host: 'localhost:5317', forwarded: 'for=100.64.0.7' })), false)
   assert.equal(isLocalRequest(req('100.64.0.7', { host: '127.0.0.1:5317' })), false)
@@ -56,7 +56,7 @@ test('the app is answered on whatever host the writer opened, the tailnet includ
   assert.equal(isSameOrigin(req('127.0.0.1', { host: '[::1]:5317', origin: 'http://[::1]:5317' }, 'PUT')), true)
   // Writing from the writer's phone over `tailscale serve` is still the app: local() refuses that
   // host, and routes the whole vault depends on must not.
-  const phone = req('100.64.0.7', { host: 'mac.tail1234.ts.net', origin: 'https://mac.tail1234.ts.net' }, 'PUT')
+  const phone = req('100.64.0.7', { host: 'laptop.example', origin: 'https://laptop.example' }, 'PUT')
   assert.equal(isSameOrigin(phone), true)
   assert.equal(isLocalRequest(phone), false)
 })
@@ -69,7 +69,7 @@ test('another site is refused, whichever host it aims at', () => {
     { host: 'localhost:5317', origin: 'null' },
     { host: 'localhost:5317', 'sec-fetch-site': 'cross-site' },
     { host: 'localhost:5317', 'sec-fetch-site': 'same-site' },
-    { host: 'mac.tail1234.ts.net', origin: 'https://evil.example' },
+    { host: 'laptop.example', origin: 'https://evil.example' },
   ]
   for (const headers of sites) {
     assert.equal(isSameOrigin(req('127.0.0.1', headers, 'PUT')), false, JSON.stringify(headers))
@@ -88,10 +88,7 @@ test('local() lets this machine through and answers anyone else with 403', async
   const route = local(async (r: { headers: Record<string, string> }, url: URL) => `ran ${url.pathname}`)
   const url = new URL('http://localhost:5317/api/reveal')
   assert.equal(await route(req('127.0.0.1', { host: 'localhost:5317', origin: 'http://localhost:5317' }, 'POST'), url), 'ran /api/reveal')
-  for (const r of [
-    req('127.0.0.1', { host: 'mac.tail1234.ts.net', origin: 'https://mac.tail1234.ts.net' }, 'POST'),
-    req('127.0.0.1', { host: 'localhost:5317', 'sec-fetch-site': 'cross-site' }, 'GET'),
-  ]) {
+  for (const r of [req('127.0.0.1', { host: 'laptop.example', origin: 'https://laptop.example' }, 'POST'), req('127.0.0.1', { host: 'localhost:5317', 'sec-fetch-site': 'cross-site' }, 'GET')]) {
     let err: unknown
     try {
       await route(r, url)
