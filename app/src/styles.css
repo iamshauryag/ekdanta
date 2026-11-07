@@ -4442,3 +4442,414 @@ p.row-warn {
 .reader-actions .muted {
   color: var(--ink-3);
 }
+
+/* feature: onboarding-import */
+/* An empty vault's welcome card, and the card for a vault that can't be opened. */
+.welcome {
+  max-width: 520px;
+  margin: 14vh auto 0;
+  padding: 0 24px 40px;
+}
+.welcome h1 {
+  font: 500 30px/1.2 var(--serif);
+  margin: 0 0 10px;
+}
+.welcome-lede {
+  color: var(--ink-2);
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 0 0 12px;
+}
+.welcome-path {
+  font: 12px var(--mono);
+  color: var(--ink-3);
+  word-break: break-all;
+  margin: 0 0 22px;
+}
+.welcome-actions,
+.welcome-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.welcome .btn {
+  padding: 6px 14px;
+}
+.welcome-kinds {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.welcome-back {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.welcome-back:hover {
+  color: var(--ink);
+}
+.welcome-confirm p {
+  margin: 0 0 12px;
+  color: var(--ink-2);
+}
+.welcome-error {
+  margin: 14px 0 0;
+  color: var(--del-ink);
+}
+.welcome.is-error h1 {
+  color: var(--del-ink);
+}
+.welcome .muted {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 18px;
+}
+.welcome code,
+.import-empty code {
+  font: 12px var(--mono);
+}
+
+/* A request the server couldn't do. */
+.app-error {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px 8px 16px;
+  font-size: 13px;
+  color: var(--del-ink);
+  background: color-mix(in srgb, var(--del-bg) 100%, var(--page));
+  border-bottom: 1px solid var(--line);
+}
+.status-progress {
+  color: var(--accent);
+}
+
+/* The Vault header's ⋯ menu, and files dragged over the sidebar. */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+.section-menu {
+  position: relative;
+}
+.section-menu .more {
+  position: static;
+  opacity: 0.7;
+  margin: -4px -2px -4px 0;
+}
+.section-menu .more:hover,
+.section-menu .more[aria-expanded='true'] {
+  opacity: 1;
+}
+.section-menu .menu {
+  top: calc(100% + 2px);
+  right: 0;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+.sidebar.is-dropping {
+  box-shadow: inset 0 0 0 2px var(--accent-line);
+  background: color-mix(in srgb, var(--accent-soft) 40%, var(--chrome));
+}
+
+/* The Import sheet: rows on the left, a preview of the selected one on the right. */
+.sheet.import-sheet {
+  width: min(940px, 100%);
+  height: min(680px, 86vh);
+}
+.import-sheet.is-dragging {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    var(--shadow);
+}
+.import-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.import-confirm,
+.import-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 24px 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+.import-confirm {
+  flex-wrap: wrap;
+  background: var(--accent-soft);
+}
+.import-confirm span {
+  flex: 1 1 260px;
+}
+.import-error {
+  justify-content: space-between;
+  color: var(--del-ink);
+  background: var(--del-bg);
+}
+.import-empty {
+  flex: 1;
+  padding: 40px 24px;
+  text-align: center;
+}
+.import-empty p {
+  max-width: 460px;
+  margin: 0 auto 10px;
+}
+.import-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  border-top: 1px solid var(--line);
+}
+.import-list {
+  overflow-y: auto;
+  padding: 6px 8px 12px;
+  border-right: 1px solid var(--line);
+}
+.import-all {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.import-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: default;
+}
+.import-row:hover {
+  background: var(--chrome);
+}
+.import-row.is-on {
+  background: var(--accent-soft);
+}
+.import-row > input[type='checkbox'],
+.import-all input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+.import-type {
+  flex: none;
+  width: 38px;
+  padding: 2px 0;
+  text-align: center;
+  font: 600 9.5px/1.4 var(--sans);
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+  background: var(--chrome-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.import-type.is-docx,
+.import-type.is-doc,
+.import-type.is-rtf {
+  color: var(--accent);
+}
+.import-main {
+  flex: 1;
+  min-width: 0;
+}
+.import-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 20px;
+}
+.import-line.muted {
+  font-size: 12px;
+  margin-top: 2px;
+}
+.import-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-status {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.import-status.is-converted,
+.import-status.is-done {
+  color: var(--accent);
+}
+.import-status.is-review,
+.import-status.is-unsupported {
+  color: #9a6b12;
+}
+.import-status.is-failed {
+  color: var(--del-ink);
+}
+.import-reason,
+.import-where {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-where {
+  font: 11.5px var(--mono);
+}
+.import-dest {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.import-dest select,
+.import-dest input {
+  font: 12px var(--sans);
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  padding: 1px 4px;
+  height: 22px;
+}
+.import-dest select {
+  max-width: 108px;
+}
+.import-dest input {
+  width: 96px;
+}
+.import-row.is-done .import-name,
+.import-row.is-waiting .import-name {
+  color: var(--ink-3);
+}
+.import-preview {
+  overflow-y: auto;
+  padding: 14px 20px 24px;
+  font-size: 13.5px;
+}
+.import-notes {
+  margin: 0 0 12px;
+  padding: 8px 12px 8px 26px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: var(--chrome);
+  border-radius: 8px;
+}
+.import-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0 0 14px;
+  padding-bottom: 12px;
+  font: 11.5px/1.5 var(--mono);
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--line);
+}
+.import-meta div {
+  display: contents;
+}
+.import-meta dd {
+  margin: 0;
+  color: var(--ink-2);
+  word-break: break-word;
+}
+.import-md {
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.import-md h1,
+.import-md h2,
+.import-md h3 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1.1em 0 0.4em;
+}
+.import-md h1 {
+  font-size: 21px;
+}
+.import-md h2 {
+  font-size: 18px;
+}
+.import-md h3 {
+  font-size: 16px;
+}
+.import-md table {
+  border-collapse: collapse;
+  font: 12.5px var(--sans);
+}
+.import-md th,
+.import-md td {
+  border: 1px solid var(--line-2);
+  padding: 3px 8px;
+}
+.import-md img {
+  max-width: 100%;
+}
+.import-md pre {
+  white-space: pre-wrap;
+  font: 12px/1.5 var(--mono);
+  padding: 8px 10px;
+  background: var(--chrome);
+  border-radius: 6px;
+}
+.import-pic {
+  display: inline-block;
+  padding: 2px 8px;
+  font: 12px var(--sans);
+  color: var(--ink-3);
+  background: var(--chrome);
+  border-radius: 4px;
+}
+.import-preview-note p {
+  color: var(--ink-2);
+}
+.import-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--line);
+}
+.import-busy {
+  font-size: 12px;
+}
+.import-foot-actions {
+  display: flex;
+  gap: 8px;
+}
+@media (max-width: 720px) {
+  .import-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 0.8fr);
+  }
+  .import-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .import-line {
+    flex-wrap: wrap;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .import-status.is-review,
+  :root:not([data-theme='light']) .import-status.is-unsupported {
+    color: #d8ad5a;
+  }
+}
+:root[data-theme='dark'] .import-status.is-review,
+:root[data-theme='dark'] .import-status.is-unsupported {
+  color: #d8ad5a;
+}

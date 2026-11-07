@@ -22,6 +22,8 @@ interface Props {
   actions: FileActions
   trash: Trashed[]
   onRestore: (id: string) => void
+  /** Bring files in: the file chooser, or files dropped on the sidebar. */
+  onImport: (files?: File[]) => void
   /** Whether the Ideas page fills the page. */
   ideasOpen: boolean
   /** How many ideas ideas.md holds; null until it's been read. */
@@ -46,14 +48,32 @@ export interface FileActions {
 const ENOUGH = 3
 
 export function Sidebar(p: Props) {
+  const [dropping, setDropping] = useState(false)
   return (
-    <aside className="sidebar" aria-label={p.mode === 'vault' ? 'Vault' : p.mode === 'exemplars' ? 'Exemplars' : 'Voice'}>
+    <aside
+      className={`sidebar${dropping ? ' is-dropping' : ''}`}
+      aria-label={p.mode === 'vault' ? 'Vault' : p.mode === 'exemplars' ? 'Exemplars' : 'Voice'}
+      // Files dropped here are imported (after review).
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+        setDropping(true)
+      }}
+      onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setDropping(false)}
+      onDrop={(e) => {
+        setDropping(false)
+        if (!e.dataTransfer.files.length) return
+        e.preventDefault()
+        p.onImport([...e.dataTransfer.files])
+      }}
+    >
       {p.mode === 'vault' ? <Vault {...p} /> : p.mode === 'exemplars' ? <Exemplars {...p} /> : <Voices {...p} />}
     </aside>
   )
 }
 
-function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, onRestore, ideasOpen, ideaCount, onIdeas, onCaptureIdea }: Props) {
+function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, onRestore, onImport, ideasOpen, ideaCount, onIdeas, onCaptureIdea }: Props) {
   // ideas.md has its own row at the top, so it isn't listed again among the pages.
   const files = all.filter((f) => !isSpecialFile(f.path))
   const folders = [...new Set(files.map((f) => f.folder))].sort()
@@ -61,7 +81,10 @@ function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, 
   const ideasCurrent = ideasOpen || current?.toLowerCase() === IDEAS_FILE
   return (
     <>
-      <div className="section-label">Vault</div>
+      <div className="section-label section-head">
+        <span>Vault</span>
+        <VaultMenu onImport={onImport} />
+      </div>
       <div className="folder ideas">
         <div className={`folder-name ideas-head${ideasCurrent ? ' is-current' : ''}`}>
           <button className="ideas-open" aria-current={ideasCurrent ? 'page' : undefined} aria-label={ideaCount !== null ? `Ideas, ${ideaCount}` : 'Ideas'} onClick={onIdeas}>
@@ -114,6 +137,44 @@ function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, 
         </div>
       )}
     </>
+  )
+}
+
+/** The Vault header's ⋯ menu. */
+function VaultMenu({ onImport }: { onImport: () => void }) {
+  const [open, setOpen] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false)
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
+    document.addEventListener('mousedown', away)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', away)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [open])
+  return (
+    <div ref={box} className="section-menu">
+      <button className="more" title="More" aria-label="Vault menu" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <Icon name="more" />
+      </button>
+      {open && (
+        <div className="menu" role="menu">
+          <button
+            role="menuitem"
+            title={titled('Import files', 'import')}
+            onClick={() => {
+              setOpen(false)
+              onImport()
+            }}
+          >
+            Import…
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 

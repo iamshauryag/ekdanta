@@ -1,10 +1,10 @@
 // Reading and writing the vault: a plain folder of Markdown files.
 import { createHash } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { constants, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
 import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
-import { isSpecialPath } from '../src/lib/special.ts'
+import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 import { docSlug, sameName, slug } from '../src/lib/slug.ts'
 import { createFileCache, type FileStat } from './cache.ts'
 import { META_DIR, VAULT } from './paths.ts'
@@ -43,8 +43,11 @@ const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
   }
 })
 
-/** Every document in the vault, sorted by path. Only files changed since the last call are read. */
-export const listFiles = (): Promise<FileEntry[]> => cache.list()
+/**
+ * Every document in the vault, sorted by path. Only files changed since the last call are read.
+ * Files waiting in _inbox/ aren't documents yet (the Import sheet picks them up), so they're left out.
+ */
+export const listFiles = async (): Promise<FileEntry[]> => (await cache.list()).filter((f) => !/^_inbox\//i.test(f.path))
 
 /** Every document's path, mtime and size, from stats alone: cheap enough to poll. */
 export const statAll = (): Promise<FileStat[]> => cache.statAll()
@@ -200,7 +203,7 @@ export function isUntitled(rel: string) {
 export const slugify = (title: string) => docSlug(title, today())
 
 /** `folder/name.md`, or `folder/name-2.md` and so on if that's taken. */
-async function freePath(folder: string, name: string) {
+export async function freePath(folder: string, name: string) {
   for (let n = 1; ; n++) {
     const rel = `${folder ? folder + '/' : ''}${name}${n > 1 ? '-' + n : ''}.md`
     try {
@@ -506,11 +509,72 @@ export async function discardIfEmpty(rel: string) {
   // Thinking already done for it counts as content, and so does anything else the writer put beside it.
   if (await exists(resolveInVault(canvasOf(rel)))) return false
   for (const s of sidecarList) if (s.content && (await exists(s.of(rel)))) return false
+  await deleteDoc(rel)
+  return true
+}
+
+/**
+ * Remove a document for good, with its sidecars, so a later file of the same name doesn't inherit
+ * them. Only for documents with nothing of the writer's in them (an empty draft, an untouched import).
+ */
+export async function deleteDoc(rel: string) {
   await fs.unlink(resolveInVault(rel))
   cache.invalidate(rel)
-  // Its sidecars go too, so the next untitled.md doesn't inherit them.
   for (const [abs] of sidecarsOf(rel)) await fs.rm(abs, { recursive: true, force: true }).catch(() => {})
-  return true
+}
+
+// ---- The vault folder itself ----------------------------------------------------------------
+
+/** Why the vault can't be used (missing and can't be made, a file, not writable), or null if it's fine. */
+export async function vaultProblem(): Promise<string | null> {
+  try {
+    await fs.mkdir(VAULT, { recursive: true })
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    if (code === 'EEXIST' || code === 'ENOTDIR') return 'It’s a file, not a folder'
+    if (code === 'EACCES' || code === 'EPERM') return 'Ekdanta isn’t allowed to create it'
+    return (e as Error).message
+  }
+  const stat = await fs.stat(VAULT).catch(() => null)
+  if (!stat?.isDirectory()) return 'It’s a file, not a folder'
+  try {
+    await fs.access(VAULT, constants.R_OK | constants.W_OK | constants.X_OK)
+  } catch {
+    return 'Ekdanta isn’t allowed to read and write it'
+  }
+  return null
+}
+
+/**
+ * Is there nothing in the vault yet? Ekdanta's own .ekdanta folder and other dot-files don't count,
+ * nor do empty folders, nor the app's own material files (ideas.md): a vault whose only file is an
+ * idea list has no writing in it.
+ */
+export async function vaultIsEmpty(): Promise<boolean> {
+  async function empty(dir: string, rel: string): Promise<boolean> {
+    for (const e of await fs.readdir(dir, { withFileTypes: true })) {
+      if (e.name.startsWith('.')) continue
+      const child = rel ? `${rel}/${e.name}` : e.name
+      if (!e.isDirectory() && isSpecialFile(child)) continue
+      if (!e.isDirectory() || !(await empty(path.join(dir, e.name), child))) return false
+    }
+    return true
+  }
+  return empty(VAULT, '')
+}
+
+/** Fill an empty vault with a copy of the sample vault. Refuses if the vault has anything in it. */
+export async function copySampleVault(from: string) {
+  const src = path.resolve(from)
+  if (src === VAULT) throw new Error('This is the sample vault')
+  if (!(await vaultIsEmpty())) throw new Error('The vault isn’t empty, so the samples weren’t added')
+  // Only the writing: not the sample vault's own settings, index or history (dot-folders).
+  const visible = (abs: string) => !path.basename(abs).startsWith('.')
+  for (const e of await fs.readdir(src, { withFileTypes: true })) {
+    if (!visible(e.name)) continue
+    await fs.cp(path.join(src, e.name), path.join(VAULT, e.name), { recursive: true, errorOnExist: true, force: false, filter: visible })
+  }
+  return (await listFiles()).length
 }
 
 /** Minimal YAML front-matter: flat `key: value` pairs, which is all Ekdanta writes. */

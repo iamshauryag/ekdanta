@@ -6,7 +6,7 @@ import { SourceEditor } from './editor/Source.tsx'
 import { findKind, kindName, kinds, setKinds } from './lib/kinds.ts'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
-import { api, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Trashed, type VoiceSummary } from './lib/api.ts'
+import { api, ApiError, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Trashed, type VoiceSummary } from './lib/api.ts'
 import { applyPatch, joinFrontMatter, splitFrontMatter, type Meta, type MetaPatch } from './lib/frontmatter.ts'
 import { Panel, type HistorySeg, type PanelTab } from './components/Panel.tsx'
 import { VersionPreview } from './components/VersionPreview.tsx'
@@ -16,12 +16,14 @@ import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
+import { ImportSheet } from './components/ImportSheet.tsx'
+import { VaultError, Welcome } from './components/Welcome.tsx'
 import { LimitStatus, textStore } from './components/LimitStatus.tsx'
 import { dismissHelp, helpMod, helpShowing, noteCmdWorks } from './editor/help.ts'
 import { fieldSlot, type EdgeSlot } from './lib/edge.ts'
 import { CaptureBox } from './components/CaptureBox.tsx'
 import { IdeasPage } from './components/IdeasPage.tsx'
-import { IDEAS_FILE } from './lib/special.ts'
+import { IDEAS_FILE, isSpecialFile } from './lib/special.ts'
 import type { Reading } from './components/ReaderList.tsx'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, isMac as isMacKeys, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
@@ -60,6 +62,8 @@ interface Doc {
 
 export function App() {
   const [files, setFiles] = useState<FileEntry[]>([])
+  // The pages the writer sees in the vault, without the app's own material files (ideas.md).
+  const pages = useMemo(() => files.filter((f) => !isSpecialFile(f.path)), [files])
   const [status, setStatus] = useState<Status | null>(null)
   const [path, setPath] = usePref<string | null>('lastDoc', null)
   const remembered = useRef(path) // the document open when Ekdanta was last closed
@@ -104,9 +108,12 @@ export function App() {
   // Set during render, so everything below sees the current kinds of writing.
   setKinds(settings?.kinds)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Something the server couldn't do, shown in a banner over the page until dismissed.
+  const [error, setError] = useState<string | null>(null)
+  const fail = useCallback((e: unknown) => setError(e instanceof Error ? e.message : String(e)), [])
   const [voices, setVoices] = useState<VoiceSummary[]>([])
   const [voiceView, setVoiceView] = useState<string | null>(null) // a platform whose profile fills the page
-  const refreshVoices = useCallback(() => api.voice().then(setVoices), [])
+  const refreshVoices = useCallback(() => api.voice().then(setVoices).catch(fail), [fail])
   // Ideas: the full-page list, the one-line capture box, and a counter that tells the list to re-read.
   const [ideasView, setIdeasView] = useState(false)
   const [captureOpen, setCaptureOpen] = useState(false)
@@ -142,7 +149,7 @@ export function App() {
     return () => window.removeEventListener('focus', refreshIdeaCount)
   }, [refreshIdeaCount])
   const [trash, setTrash] = useState<Trashed[]>([])
-  const refreshTrash = useCallback(() => api.trash().then(setTrash), [])
+  const refreshTrash = useCallback(() => api.trash().then(setTrash).catch(fail), [fail])
   const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
   const notify = useCallback((text: string, undo?: () => void) => {
@@ -171,15 +178,21 @@ export function App() {
   // Changes show at once; the server's cleaned copy replaces them only if no newer change was made
   // meanwhile (dragging the text size sends many), or an older reply would undo the newer change.
   const settingsSeq = useRef(0)
-  const changeSettings = useCallback((patch: Partial<SettingsT>) => {
-    setSettings((s) => (s ? { ...s, ...patch } : s))
-    const seq = ++settingsSeq.current
-    api.saveSettings(patch).then((next) => {
-      if (seq === settingsSeq.current) setSettings(next)
-      // Provider or model changes show up in the Piece module's Models list.
-      if ('provider' in patch || 'wordLocal' in patch || 'embedder' in patch || /Model$/.test(Object.keys(patch)[0])) api.status().then(setStatus)
-    })
-  }, [])
+  const changeSettings = useCallback(
+    (patch: Partial<SettingsT>) => {
+      setSettings((s) => (s ? { ...s, ...patch } : s))
+      const seq = ++settingsSeq.current
+      api
+        .saveSettings(patch)
+        .then((next) => {
+          if (seq === settingsSeq.current) setSettings(next)
+          // Provider or model changes show up in the Piece module's Models list.
+          if ('provider' in patch || 'wordLocal' in patch || 'embedder' in patch || /Model$/.test(Object.keys(patch)[0])) api.status().then(setStatus).catch(fail)
+        })
+        .catch(fail)
+    },
+    [fail],
+  )
 
   // Re-render labels once we learn ⌘+number reaches the page.
   const [mod, setMod] = useState(helpMod)
@@ -205,7 +218,21 @@ export function App() {
   const renamed = useRef<string | null>(null)
   const opened = useRef(0)
 
-  const refreshFiles = useCallback(() => api.files().then(setFiles), [])
+  // The vault's documents. Until the first listing arrives, neither the welcome card nor a page shows.
+  const [filesLoaded, setFilesLoaded] = useState(false)
+  const [vaultError, setVaultError] = useState<string | null>(null)
+  const refreshFiles = useCallback(
+    () =>
+      api
+        .files()
+        .then((list) => {
+          setFiles(list)
+          setFilesLoaded(true)
+          setVaultError(null)
+        })
+        .catch((e) => (e instanceof ApiError && e.code === 'VAULT_UNAVAILABLE' ? setVaultError(e.message) : fail(e))),
+    [fail],
+  )
   // The vault's templates. Re-read when the files change (a template may have been added or edited).
   const [templates, setTemplates] = useState<TemplateInfo[]>([])
   const templatesRef = useRef<TemplateInfo[]>([])
@@ -233,11 +260,11 @@ export function App() {
   const pendingCaret = useRef<{ path: string; caret: number | null } | null>(null)
   useEffect(() => {
     refreshFiles()
-    api.status().then(setStatus)
-    api.settings().then(setSettings)
+    api.status().then(setStatus).catch(fail)
+    api.settings().then(setSettings).catch(fail)
     refreshVoices()
     refreshTrash()
-  }, [refreshFiles, refreshVoices, refreshTrash])
+  }, [refreshFiles, refreshVoices, refreshTrash, fail])
 
   // The writer's own shortcuts, from Settings.
   const [, setKeysVersion] = useState(0)
@@ -309,11 +336,13 @@ export function App() {
     }
   }, [snippet])
 
-  // Open the remembered document, or the first one in the vault.
+  // Once started (see "Where Ekdanta starts"), the open page stays a real one: when it goes (deleted, or an
+  // import undone) the first page opens, never ideas.md, which is material rather than a page; with no
+  // pages left the welcome card shows. A page that has gone is never read, which would be an error banner.
   useEffect(() => {
-    if (!files.length) return
-    if (!path || !files.some((f) => f.path === path)) setPath(files[0].path)
-  }, [files, path, setPath])
+    if (!started || (path && files.some((f) => f.path === path))) return
+    setPath(pages.length ? pages[0].path : null)
+  }, [started, files, pages, path, setPath])
 
   useEffect(() => {
     if (!path || !started) return
@@ -326,32 +355,40 @@ export function App() {
     setBrief(null)
     setBriefEditing(false)
     // The page and its brief arrive together (a brief that can't be read stays null: nothing to edit or overwrite).
-    Promise.all([api.read(path), api.brief(path).catch(() => null)]).then(([content, b]) => {
-      if (cancelled) return
-      const { meta, body, raw } = splitFrontMatter(content)
-      const d = (docRef.current = { path, meta, body, rawMeta: raw })
-      const caret = pendingCaret.current?.path === path ? pendingCaret.current.caret : null
-      pendingCaret.current = null
-      syncText()
-      // A fresh key for every opening: a new untitled.md can reuse the name of a draft just titled and renamed.
-      setLoaded({ ...d, key: `${path}#${++opened.current}`, caret })
-      setBodyEmpty(!body.trim())
-      setSaved('saved')
-      if (b !== null) setBrief({ doc: d, text: b })
-      // Opened from its ⋯ menu to pin a brief (asked for before or while it loaded).
-      if (briefFor.current === path) {
-        briefFor.current = null
-        setBriefEditing(b !== null)
-      }
-    })
-    api.history(path).then((h) => !cancelled && setHistory(h as HistoryItem[]))
+    Promise.all([api.read(path), api.brief(path).catch(() => null)])
+      .then(([content, b]) => {
+        if (cancelled) return
+        const { meta, body, raw } = splitFrontMatter(content)
+        const d = (docRef.current = { path, meta, body, rawMeta: raw })
+        const caret = pendingCaret.current?.path === path ? pendingCaret.current.caret : null
+        pendingCaret.current = null
+        syncText()
+        // A fresh key for every opening: a new untitled.md can reuse the name of a draft just titled and renamed.
+        setLoaded({ ...d, key: `${path}#${++opened.current}`, caret })
+        setBodyEmpty(!body.trim())
+        setSaved('saved')
+        if (b !== null) setBrief({ doc: d, text: b })
+        // Opened from its ⋯ menu to pin a brief (asked for before or while it loaded).
+        if (briefFor.current === path) {
+          briefFor.current = null
+          setBriefEditing(b !== null)
+        }
+      })
+      .catch((e) => !cancelled && fail(e))
+    api
+      .history(path)
+      .then((h) => !cancelled && setHistory(h as HistoryItem[]))
+      .catch(() => {}) // no history yet is fine
     setThinking(null)
     setMaterial({ covered: [], nearest: null })
-    api.thinking(path).then((t) => !cancelled && setThinking(t))
+    api
+      .thinking(path)
+      .then((t) => !cancelled && setThinking(t))
+      .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [path, started])
+  }, [path, started, fail])
 
   // The open page's brief: only while it belongs to the page on screen (every switch re-renders).
   const openBrief = brief && brief.doc === docRef.current ? brief : null
@@ -463,31 +500,89 @@ export function App() {
     [files, openDoc, refreshFiles, settings],
   )
 
-  // Where Ekdanta starts: the document open last, or, if the writer turned that off, a fresh draft.
-  // An empty draft left from last time is used again rather than piling up untitled files.
+  // Where Ekdanta starts. One decision, made once, when both the settings and the vault's first listing
+  // have arrived (a vault that can't be used never lists: its card shows and nothing is opened or made):
+  //  1. A remembered page that has gone (deleted, or an import undone) is forgotten rather than read,
+  //     which would be an error banner over the welcome card.
+  //  2. An empty vault (no pages; ideas.md is material, not a page) shows the welcome card: no draft is made.
+  //  3. Open last on: the remembered page, or else the first page. Never ideas.md by itself: the Ideas row opens it.
+  //  4. Open last off: a fresh draft, using again an empty untitled draft left from last time rather than
+  //     piling up untitled files. If the draft can't be made, the page from 3 opens under the error.
   const starting = useRef(false)
   useEffect(() => {
-    if (!settings || starting.current) return
+    if (!settings || !filesLoaded || starting.current) return
     starting.current = true
-    const last = remembered.current
-    if (settings.openLast) return setStarted(true)
+    const last = remembered.current && files.some((f) => f.path === remembered.current) ? remembered.current : null
+    const fallback = last ?? pages[0]?.path ?? null
+    if (!pages.length || settings.openLast) {
+      setPath(pages.length ? fallback : null)
+      setStarted(true)
+      return
+    }
     ;(async () => {
       try {
         if (last && /(^|\/)untitled(-\d+)?\.md$/.test(last)) {
           const { meta, body } = splitFrontMatter(await api.read(last).catch(() => ''))
-          if (!meta.title?.trim() && !body.trim() && (await api.files()).some((f) => f.path === last)) {
+          if (!meta.title?.trim() && !body.trim()) {
             setFresh(last)
-            if (settings) setLivePreview(settings.newDocView !== 'markdown')
+            setLivePreview(settings.newDocView !== 'markdown')
             setPath(last)
             return
           }
         }
         await newDraft()
+      } catch (e) {
+        fail(e)
+        setPath(fallback)
       } finally {
         setStarted(true)
       }
     })()
-  }, [settings, newDraft, setPath])
+  }, [settings, filesLoaded, files, pages, newDraft, setPath, fail])
+
+  /** From the welcome card: a first draft of the chosen kind, in that kind's folder. */
+  const startWriting = async (kind: string) => {
+    const k = kinds().find((x) => x.id === kind)
+    try {
+      const { path: rel } = await api.create(k?.folder ?? '', kind)
+      await refreshFiles()
+      setFresh(rel)
+      await openDoc(rel)
+    } catch (e) {
+      fail(e)
+    }
+  }
+
+  // Import: the sheet, opened with the file chooser, with dropped files, or (from the palette) either.
+  const [importing, setImporting] = useState<{ files?: File[]; pick: boolean } | null>(null)
+  const [importProgress, setImportProgress] = useState<string | null>(null)
+  const startImport = useCallback((files?: File[]) => setImporting((open) => open ?? { files, pick: !files }), [])
+  /** Notes the import just took back out: the open one can't stay open (a save would bring it back). */
+  const importUndone = async (paths: string[]) => {
+    if (docRef.current && paths.includes(docRef.current.path)) {
+      window.clearTimeout(saveTimer.current)
+      saveTimer.current = undefined
+      docRef.current = null
+      setLoaded(null)
+    }
+    await refreshFiles()
+    refreshTrash()
+  }
+  const importDone = async (paths: string[]) => {
+    await refreshFiles()
+    // A vault that was empty opens the first note straight away.
+    if (!docRef.current && paths[0]) openDoc(paths[0])
+  }
+  const importClosed = (batch: string | null, paths: string[]) => {
+    setImporting(null)
+    if (!batch || !paths.length) return
+    notify(`Imported ${paths.length} ${paths.length === 1 ? 'note' : 'notes'}`, () =>
+      api
+        .importUndo(batch)
+        .then(({ removed }) => importUndone(removed))
+        .catch(fail),
+    )
+  }
 
   const setMeta = (patch: MetaPatch) => {
     const d = docRef.current
@@ -495,13 +590,13 @@ export function App() {
     d.meta = applyPatch(d.meta, patch)
     syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
-    save().then(refreshFiles)
+    save().then(refreshFiles).catch(fail)
   }
 
   /** Change front matter of a given file: the open one through the editor's copy, any other on disk. */
   const setMetaOf = async (rel: string, patch: MetaPatch) => {
     if (docRef.current?.path === rel) setMeta(patch)
-    else await api.patchMeta(rel, patch).then(refreshFiles)
+    else await api.patchMeta(rel, patch).then(refreshFiles).catch(fail)
   }
 
   /** A title written for the first time also names the file, and fills a template's {{title}} if it's still there. */
@@ -691,7 +786,9 @@ export function App() {
       setFiles(left)
       if (isOpen) {
         setLoaded(null)
-        if (left.length) openDoc(left[0].path)
+        // The next page, not ideas.md; with no pages left the welcome card takes over.
+        const next = left.find((f) => !isSpecialFile(f.path))
+        if (next) openDoc(next.path)
       }
       refreshTrash()
       refreshVoices()
@@ -954,13 +1051,16 @@ export function App() {
     const d = docRef.current
     if (!d) return
     // Back to drafting, with the fragments beside the page.
-    api.thinking(d.path).then((t) => {
-      setThinking(t)
-      if (t.canvas.nodes.length) {
-        setPanelOpen(true)
-        setPanelTab('material')
-      }
-    })
+    api
+      .thinking(d.path)
+      .then((t) => {
+        setThinking(t)
+        if (t.canvas.nodes.length) {
+          setPanelOpen(true)
+          setPanelTab('material')
+        }
+      })
+      .catch(fail)
   }, [setPanelOpen, setPanelTab])
 
   const record = useCallback((item: HistoryItem) => {
@@ -984,6 +1084,7 @@ export function App() {
       settings: () => setSettingsOpen((o) => !o),
       newDraft: () => newDraft(),
       newFromTemplate: () => setPicker('new'),
+      import: () => startImport(),
       // The Thinking Space closes itself with the same key.
       thinking: () => {
         if (docRef.current && !thinkingOpen) {
@@ -1037,7 +1138,7 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, ceiling, livePreview, notify])
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, ceiling, livePreview, notify, startImport])
 
   const current = files.find((f) => f.path === path)
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
@@ -1161,10 +1262,10 @@ export function App() {
       <header className="titlebar">
         <div className="crumb">
           {current?.folder ? <span className="muted">{current.folder} / </span> : null}
-          <b>{title || 'Untitled'}</b>
+          {(loaded || !filesLoaded || pages.length > 0) && <b>{title || 'Untitled'}</b>}
         </div>
         <div className="titlebar-meta">
-          <span className={`save-state is-${saved}`}>{saved === 'saved' ? 'Saved' : saved === 'saving' ? 'Saving…' : 'Edited'}</span>
+          {loaded && <span className={`save-state is-${saved}`}>{saved === 'saved' ? 'Saved' : saved === 'saving' ? 'Saving…' : 'Edited'}</span>}
           <button className="icon-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
             <Icon name="focus" />
           </button>
@@ -1219,10 +1320,38 @@ export function App() {
           actions={fileActions}
           trash={trash}
           onRestore={restore}
+          onImport={startImport}
         />
       )}
 
       <main className="page-area">
+        {error && (
+          <div className="app-error" role="alert">
+            <span>{error}</span>
+            <button className="icon-btn small" aria-label="Dismiss" title="Dismiss" onClick={() => setError(null)}>
+              ✕
+            </button>
+          </div>
+        )}
+        {vaultError ? (
+          <VaultError vault={status?.vault ?? ''} reason={vaultError} onRetry={refreshFiles} />
+        ) : (
+          filesLoaded &&
+          !pages.length &&
+          !loaded &&
+          !voiceView && (
+            <Welcome
+              vault={status?.vault ?? ''}
+              onStart={startWriting}
+              onImport={() => startImport()}
+              onSample={async () => {
+                await api.useSample()
+                await refreshFiles()
+                refreshVoices()
+              }}
+            />
+          )
+        )}
         {voiceView && <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />}
         {ideasView && !voiceView && <IdeasPage version={ideasVersion} onCapture={captureIdea} onStart={startIdea} onOpenDoc={openDoc} />}
         {loaded && !voiceView && !ideasView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={chooseView} />}
@@ -1382,6 +1511,18 @@ export function App() {
         />
       )}
 
+      {importing && (
+        <ImportSheet
+          files={importing.files}
+          pick={importing.pick}
+          folders={[...new Set(files.map((f) => f.folder))]}
+          onClose={importClosed}
+          onImported={importDone}
+          onUndone={importUndone}
+          onProgress={setImportProgress}
+        />
+      )}
+
       {settingsOpen && settings && (
         <Settings
           settings={settings}
@@ -1396,32 +1537,38 @@ export function App() {
 
       <footer className="statusbar">
         <span>
-          {platformLabel(platform)} · Ceiling {ceiling}
-          {/* The count is the writer's to hide (Settings · Appearance), but a limit they set themselves stays, so they can still see when they're over it. */}
-          {(settings?.wordCount !== false || !!loaded?.meta.target) && (
+          {importProgress && <span className="status-progress">{importProgress}</span>}
+          {importProgress && loaded && ' · '}
+          {loaded && (
             <>
-              {' · '}
-              <span className="word-count" title={readingTimes(format?.selectedWords || words) || undefined}>
-                {loaded && !voiceView ? (
-                  <LimitStatus
-                    key={loaded.key}
-                    store={fileText}
-                    target={loaded.meta.target ?? ''}
-                    selectedWords={format?.selectedWords ?? 0}
-                    ceiling={ceiling}
-                    mod={mod}
-                    paper={loaded.meta.paper === 'a4' ? 'a4' : 'letter'}
-                    page={pageFor}
-                    // Bound to this file: a limit saved as the sheet closes lands here even if another file is opening.
-                    onTarget={(target) => setMetaOf(loaded.path, { target })}
-                  />
-                ) : format?.selectedWords ? (
-                  `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words`
-                ) : (
-                  `${words.toLocaleString()} words`
-                )}
-                {settings?.wordCount !== false && words >= 60 && ` · ${Math.max(1, Math.round(words / READ_WPM))} min read`}
-              </span>
+              {platformLabel(platform)} · Ceiling {ceiling}
+              {/* The count is the writer's to hide (Settings · Appearance), but a limit they set themselves stays, so they can still see when they're over it. */}
+              {(settings?.wordCount !== false || !!loaded.meta.target) && (
+                <>
+                  {' · '}
+                  <span className="word-count" title={readingTimes(format?.selectedWords || words) || undefined}>
+                    {!voiceView ? (
+                      <LimitStatus
+                        key={loaded.key}
+                        store={fileText}
+                        target={loaded.meta.target ?? ''}
+                        selectedWords={format?.selectedWords ?? 0}
+                        ceiling={ceiling}
+                        mod={mod}
+                        paper={loaded.meta.paper === 'a4' ? 'a4' : 'letter'}
+                        page={pageFor}
+                        // Bound to this file: a limit saved as the sheet closes lands here even if another file is opening.
+                        onTarget={(target) => setMetaOf(loaded.path, { target })}
+                      />
+                    ) : format?.selectedWords ? (
+                      `${format.selectedWords.toLocaleString()} of ${words.toLocaleString()} words`
+                    ) : (
+                      `${words.toLocaleString()} words`
+                    )}
+                    {settings?.wordCount !== false && words >= 60 && ` · ${Math.max(1, Math.round(words / READ_WPM))} min read`}
+                  </span>
+                </>
+              )}
             </>
           )}
         </span>

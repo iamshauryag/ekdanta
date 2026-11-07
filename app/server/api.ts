@@ -4,6 +4,7 @@
 // because the server is running. Routes that run programs or write outside the vault want local() as well,
 // which is stricter — this machine only, never the tailnet.
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { fileURLToPath } from 'node:url'
 import type { Plugin } from 'vite'
 import { status } from './ai.ts'
 import { claudePool, closeClaudePools } from './claude-pool.ts'
@@ -18,7 +19,8 @@ import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
 import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
 import { runReader, type ReaderRequest } from './reader.ts'
-import { isSameOrigin, statusOf } from './net.ts'
+import { HttpError, isSameOrigin, local, statusOf } from './net.ts'
+import { addUpload, commit, convert, openBatch, preview, undo } from './import/index.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
 import { applyTemplateTo, listTemplates, seedTemplates } from './templates.ts'
@@ -27,6 +29,8 @@ import {
   VAULT,
   appendHistory,
   clearHistory,
+  copySampleVault,
+  vaultProblem,
   createDoc,
   discardIfEmpty,
   listFiles,
@@ -48,6 +52,22 @@ import {
 } from './vault.ts'
 
 type Handler = (req: IncomingMessage, url: URL) => Promise<unknown>
+
+/** The vault folder is missing and can't be made, is a file, or can't be written: the app shows why. */
+class VaultUnavailable extends HttpError {
+  readonly code = 'VAULT_UNAVAILABLE'
+  constructor(reason: string) {
+    super(503, reason)
+  }
+}
+
+/** The bundled sample vault, wherever the server is started from. */
+const SAMPLE_VAULT = fileURLToPath(new URL('../sample-vault', import.meta.url))
+
+const header = (req: IncomingMessage, name: string) => {
+  const v = req.headers[name]
+  return (Array.isArray(v) ? v[0] : v) ?? ''
+}
 
 async function body<T>(req: IncomingMessage): Promise<T> {
   let raw = ''
@@ -77,7 +97,43 @@ const routes: Record<string, Handler> = {
       (css) => ({ css }),
       (e: Error) => ({ css: '', error: e.message }),
     ),
-  'GET /api/files': async () => markBriefs(await listFiles()),
+  'GET /api/files': async () => {
+    const problem = await vaultProblem()
+    if (problem) throw new VaultUnavailable(problem)
+    return markBriefs(await listFiles())
+  },
+  // Fill an empty vault with the sample pieces (the welcome card offers it).
+  'POST /api/vault/use-sample': local(async () => {
+    try {
+      const files = await copySampleVault(SAMPLE_VAULT)
+      refresh().catch(() => {})
+      return { files }
+    } catch (e) {
+      throw new HttpError(409, (e as Error).message)
+    }
+  }),
+  // Import: a batch per visit to the Import sheet; files arrive one per request as raw bytes.
+  'POST /api/import/batch': local(async () => openBatch()),
+  'POST /api/import/upload': local(async (req) => addUpload(header(req, 'x-batch'), header(req, 'x-filename'), Number(header(req, 'x-mtime')), req)),
+  'POST /api/import/convert': local(async (req) => {
+    const { batch, id } = await body<{ batch: string; id: string }>(req)
+    return convert(batch, id)
+  }),
+  'GET /api/import/preview': local(async (_req, url) => ({
+    content: await preview(url.searchParams.get('batch') ?? '', url.searchParams.get('id') ?? '', url.searchParams.get('platform') ?? undefined),
+  })),
+  'POST /api/import/commit': local(async (req) => {
+    const { batch, id, platform, folder } = await body<{ batch: string; id: string; platform?: string; folder?: string }>(req)
+    const item = await commit(batch, id, { platform, folder })
+    refresh().catch(() => {})
+    return item
+  }),
+  'POST /api/import/undo': local(async (req) => {
+    const { batch } = await body<{ batch: string }>(req)
+    const result = await undo(batch)
+    refresh().catch(() => {})
+    return result
+  }),
   'GET /api/file': async (_req, url) => {
     const path = url.searchParams.get('path') ?? ''
     // Changed outside Ekdanta since we last wrote it? Keep both sides as versions before it's edited.
@@ -284,6 +340,8 @@ export function ekdantaApi(): Plugin {
   return {
     name: 'ekdanta-api',
     configureServer(server) {
+      // A vault folder that doesn't exist yet is made now; one that can't be used is reported by /api/files.
+      vaultProblem().then((problem) => problem && server.config.logger.warn(`Vault ${VAULT} can’t be used: ${problem}`))
       // Load the embedding model and build the Recall index up front, so the first ⌘1 is quick.
       loadSettings()
         .then(() => warmEmbedder())
@@ -322,7 +380,8 @@ export function ekdantaApi(): Plugin {
         } catch (e) {
           res.statusCode = statusOf(e)
           res.setHeader('content-type', 'application/json')
-          res.end(JSON.stringify({ error: (e as Error).message }))
+          const code = e instanceof HttpError && 'code' in e ? e.code : undefined
+          res.end(JSON.stringify({ error: (e as Error).message, code }))
         }
       })
     },

@@ -18,6 +18,18 @@ const meta = path.join(root, '.ekdanta')
 
 test.after(() => fs.rm(root, { recursive: true, force: true }))
 
+test('a vault with nothing but material files in it counts as empty', async () => {
+  assert.equal(await vault.vaultIsEmpty(), true)
+  await fs.mkdir(path.join(root, 'drafts'), { recursive: true })
+  assert.equal(await vault.vaultIsEmpty(), true, 'an empty folder is nothing')
+  await fs.writeFile(path.join(root, 'ideas.md'), '- an idea\n')
+  assert.equal(await vault.vaultIsEmpty(), true, 'ideas.md is material, not the writer’s pages')
+  await fs.writeFile(path.join(root, 'drafts/ideas.md'), '# a page that happens to be called that\n')
+  assert.equal(await vault.vaultIsEmpty(), false, 'special files count only at the top of the vault')
+  await fs.rm(path.join(root, 'ideas.md'))
+  await fs.rm(path.join(root, 'drafts'), { recursive: true, force: true })
+})
+
 test('writeDoc is atomic, returns the mtime and records what it wrote', async () => {
   const { mtime } = await vault.writeDoc('essays/a.md', 'first')
   assert.equal(mtime, (await fs.stat(path.join(root, 'essays/a.md'))).mtimeMs)

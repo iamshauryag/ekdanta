@@ -61,6 +61,7 @@ const COMMAND_LIST = [
   { id: 'captureIdea', label: 'Capture idea', group: 'App', key: isMac ? 'Mod-Shift-i' : 'Mod-Alt-i' },
   { id: 'ideas', label: 'Ideas', group: 'App', key: '' },
   { id: 'readAs', label: 'Read as…', group: 'App', key: '' },
+  { id: 'import', label: 'Import files', group: 'App', key: '' },
 ] as const satisfies readonly Command[]
 
 export const COMMANDS: Command[] = [...COMMAND_LIST]

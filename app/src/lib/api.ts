@@ -100,6 +100,15 @@ export interface Thinking {
 }
 type Frag = { id: string; text: string }
 
+/** A failed request: the server's message, and its code when it gives one (VAULT_UNAVAILABLE). */
+export class ApiError extends Error {
+  readonly code?: string
+  constructor(message: string, code?: string) {
+    super(message)
+    this.code = code
+  }
+}
+
 export interface IdeaRow {
   text: string
   /** As written after it in ideas.md: "6 Nov 2026". */
@@ -110,9 +119,36 @@ export interface IdeaRow {
 }
 
 async function json<T>(r: Response): Promise<T> {
-  const data = await r.json()
-  if (!r.ok) throw new Error((data as { error?: string }).error ?? r.statusText)
+  const data = await r.json().catch(() => ({ error: r.statusText || 'The app’s server didn’t answer' }))
+  if (!r.ok) throw new ApiError((data as { error?: string }).error ?? r.statusText, (data as { code?: string }).code)
   return data as T
+}
+
+export type ImportStatus = 'pending' | 'converted' | 'review' | 'failed' | 'duplicate' | 'unsupported'
+/** One file in an import (server/import/index.ts). */
+export interface ImportItem {
+  id: string
+  name: string
+  type: 'docx' | 'doc' | 'html' | 'text' | 'markdown' | 'rtf' | 'csv' | 'other'
+  size: number
+  sha: string
+  inbox?: string
+  converter?: string
+  status: ImportStatus
+  reason?: string
+  notes: string[]
+  words: number
+  title: string
+  created: string
+  platform?: string
+  folder: string
+  imported?: { path: string; media: string[]; hash: string }
+}
+export interface ImportBatch {
+  batch: string
+  items: ImportItem[]
+  pandoc: boolean
+  inbox: string
 }
 
 const send = (method: string, body: unknown) => ({
@@ -178,6 +214,22 @@ export const api = {
   templates: () => fetch('/api/templates').then(json<TemplateInfo[]>),
   applyTemplate: (path: string, template: string) => fetch('/api/templates/apply', send('POST', { path, template })).then(json<{ cursor: number | null }>),
   seedTemplates: () => fetch('/api/templates/seed', send('POST', {})).then(json<{ added: string[] }>),
+  useSample: () => fetch('/api/vault/use-sample', send('POST', {})).then(json<{ files: number }>),
+  importBatch: () => fetch('/api/import/batch', send('POST', {})).then(json<ImportBatch>),
+  /** One file, sent as it is (not as JSON), so a big one never sits in memory twice. */
+  importUpload: (batch: string, file: File) =>
+    fetch('/api/import/upload', {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream', 'x-batch': batch, 'x-filename': encodeURIComponent(file.name), 'x-mtime': String(file.lastModified || 0) },
+      body: file,
+    }).then(json<ImportItem>),
+  importConvert: (batch: string, id: string) => fetch('/api/import/convert', send('POST', { batch, id })).then(json<ImportItem>),
+  importPreview: (batch: string, id: string, platform: string) =>
+    fetch(`/api/import/preview?batch=${encodeURIComponent(batch)}&id=${encodeURIComponent(id)}&platform=${encodeURIComponent(platform)}`)
+      .then(json<{ content: string }>)
+      .then((d) => d.content),
+  importCommit: (batch: string, id: string, platform: string, folder: string) => fetch('/api/import/commit', send('POST', { batch, id, platform, folder })).then(json<ImportItem>),
+  importUndo: (batch: string) => fetch('/api/import/undo', send('POST', { batch })).then(json<{ removed: string[]; kept: string[] }>),
   brief: (doc: string) =>
     fetch('/api/brief?doc=' + encodeURIComponent(doc))
       .then(json<{ text: string }>)
