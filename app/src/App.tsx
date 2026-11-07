@@ -10,7 +10,9 @@ import { countable, type Block } from './lib/targets.ts'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
 import { api, ApiError, type Changes, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Touched, type Trashed, type VoiceSummary } from './lib/api.ts'
-import { applyPatch, joinFrontMatter, splitFrontMatter, type Meta, type MetaPatch } from './lib/frontmatter.ts'
+import { joinDoc, patchFrontMatter, splitFrontMatter, type FrontMatter, type MetaPatch } from './lib/frontmatter.ts'
+import { docTags, vaultTagCounts } from './lib/tags.ts'
+import { Properties } from './components/Properties.tsx'
 import { Panel, type HistorySeg, type PanelTab } from './components/Panel.tsx'
 import { VersionPreview } from './components/VersionPreview.tsx'
 import type { VersionRow } from './lib/versions.ts'
@@ -79,12 +81,13 @@ function usePref<T>(key: string, initial: T) {
 /** A help card, ghost or proposal is on the page: the palette and switcher wait until it's dealt with. */
 const HELP_OPEN = '.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost'
 
-interface Doc {
+/** The open document: its front matter as parsed (kept so it's written back as it was found) and its body. */
+interface Doc extends FrontMatter {
   path: string
-  meta: Meta
-  body: string
-  rawMeta: string
 }
+
+/** Said when a change would need front matter that Ekdanta reads but can't rewrite. */
+const READONLY_META = "This page's front matter can't be edited in Ekdanta, so it stays exactly as it is. Open Properties to see why."
 
 export function App() {
   const [files, setFiles] = useState<FileEntry[]>([])
@@ -121,6 +124,7 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = usePref('sidebar', true)
   const [sidebarMode, setSidebarMode] = usePref<SidebarMode>('sidebarMode', 'vault')
   const [panelOpen, setPanelOpen] = usePref('panel', true)
+  const [propsOpen, setPropsOpen] = usePref('properties', false)
   const [panelTab, setPanelTab] = usePref<PanelTab>('panelTab', 'piece')
   const [historySeg, setHistorySeg] = usePref<HistorySeg>('historySeg', 'versions')
   // Version history: a counter that tells the list to re-read, one that opens its name field, and the version being previewed.
@@ -256,13 +260,13 @@ export function App() {
   const [fileText] = useState(textStore)
   const syncText = useCallback(() => {
     const d = docRef.current
-    fileText.set(d ? joinFrontMatter(d.rawMeta, d.meta, d.body) : '')
+    fileText.set(d ? joinDoc(d) : '')
   }, [fileText])
   const autosaveMs = useRef(APPEARANCE_DEFAULTS.autosaveMs)
   autosaveMs.current = settings?.autosaveMs ?? APPEARANCE_DEFAULTS.autosaveMs
   const renamed = useRef<string | null>(null)
   const opened = useRef(0)
-  const textOf = (d: Doc) => joinFrontMatter(d.rawMeta, d.meta, d.body)
+  const textOf = (d: Doc) => joinDoc(d)
   const [store] = useState(browserStore)
   // Everything between a keystroke and the disk: autosave, retries, conflicts (see saver.ts).
   const [saver] = useState(
@@ -277,7 +281,15 @@ export function App() {
             else if (state === 'saved' && (was === 'failed' || was === 'conflict' || was === 'gone')) setSaveNews('Saved.')
             return state
           })
-          if (state === 'saved') setVersionsTick((t) => t + 1) // a save can keep a version
+          if (state === 'saved') {
+            setVersionsTick((t) => t + 1) // a save can keep a version
+            // Tags typed into the text show in the sidebar without re-reading the vault.
+            const d = docRef.current
+            if (d) {
+              const tags = docTags(d)
+              setFiles((fs) => (fs.some((f) => f.path === d.path && f.tags?.join('\n') !== tags.join('\n')) ? fs.map((f) => (f.path === d.path ? { ...f, tags } : f)) : fs))
+            }
+          }
         },
         onConflict: setConflict,
         onGone: () => setConflict(null),
@@ -440,14 +452,13 @@ export function App() {
           if (cancelled) return
           // Typed into the page being left while this one loaded: kept in this browser, offered when it opens again.
           if (!saver.base && saver.dirty) saver.close()
-          const { meta, body, raw } = splitFrontMatter(content)
-          const d = (docRef.current = { path, meta, body, rawMeta: raw })
+          const d = (docRef.current = { ...splitFrontMatter(content), path })
           const caret = pendingCaret.current?.path === path ? pendingCaret.current.caret : null
           pendingCaret.current = null
           syncText()
           // A fresh key for every opening: a new untitled.md can reuse the name of a draft just titled and renamed.
           setLoaded({ ...d, key: `${path}#${++opened.current}`, caret })
-          setBodyEmpty(!body.trim())
+          setBodyEmpty(!d.body.trim())
           saver.open(path, mtime, content)
           setConflict(null)
           setOpenFailed(null)
@@ -559,7 +570,7 @@ export function App() {
   /** The open document as it is on screen, front matter included: what a version keeps. */
   const currentText = useCallback(() => {
     const d = docRef.current
-    return d ? joinFrontMatter(d.rawMeta, d.meta, d.body) : ''
+    return d ? joinDoc(d) : ''
   }, [])
 
   /** Keep a version of the text on screen now (before help replaces a lot of it, say). */
@@ -640,14 +651,14 @@ export function App() {
     (content: string) => {
       const d = docRef.current
       if (!d) return
-      const { meta, body, raw } = splitFrontMatter(content)
-      const bodyChanged = body !== d.body
-      d.meta = meta
-      d.rawMeta = raw
-      d.body = body
+      const fm = splitFrontMatter(content)
+      const bodyChanged = fm.body !== d.body
+      // The whole front matter is taken in (raw text, lists, read-only state), so it's written back as found.
+      delete d.problem
+      Object.assign(d, fm)
       syncText()
-      setBodyEmpty(!body.trim())
-      if (!bodyChanged) return setLoaded((l) => (l ? { ...l, meta, rawMeta: raw } : l))
+      setBodyEmpty(!fm.body.trim())
+      if (!bodyChanged) return setLoaded((l) => (l ? { ...l, ...fm, problem: fm.problem } : l))
       const ed = editorRef.current
       caret.current = { from: ed?.state.selection.from ?? 0, to: ed?.state.selection.to ?? 0, focused: !!ed?.isFocused, scroll: document.querySelector('.page-area')?.scrollTop ?? 0, at: Date.now() }
       setLoaded({ ...d, key: `${d.path}#${++opened.current}`, caret: null }) // a new key: the page is read afresh
@@ -950,27 +961,37 @@ export function App() {
   const setMeta = (patch: MetaPatch) => {
     const d = docRef.current
     if (!d) return
-    d.meta = applyPatch(d.meta, patch)
+    // A block Ekdanta can't rewrite stays as it is: say so rather than drop the change.
+    if (d.readonly) return notify(READONLY_META)
+    Object.assign(d, patchFrontMatter(d, patch))
     syncText()
-    setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
+    setLoaded((l) => (l ? { ...l, meta: d.meta, lists: d.lists } : l))
     saver.edited()
     saver.flush().then(refreshFiles)
   }
 
   /** Change front matter of a given file: the open one through the editor's copy, any other on disk. */
   const setMetaOf = async (rel: string, patch: MetaPatch) => {
-    if (docRef.current?.path === rel) setMeta(patch)
-    else
+    if (docRef.current?.path === rel) {
+      // Read-only front matter isn't changed: the listing is read again, so a star shown ahead of it goes back.
+      if (docRef.current.readonly) refreshFiles()
+      setMeta(patch)
+    } else
       await op(async () => {
         await absorb((await api.patchMeta(rel, patch)).touched)
         await refreshFiles()
-      }).catch(failed('change it'))
+      }).catch((e) => {
+        failed('change it')(e)
+        // The listing is read again, so a star shown ahead of the save goes back to what the file says.
+        refreshFiles()
+      })
   }
 
   /** A title written for the first time also names the file, and fills a template's {{title}} if it's still there. */
   const setTitle = async (title: string) => {
     const d = docRef.current
     if (!d) return
+    if (d.readonly) return notify(READONLY_META) // the title field is read-only too; this is the backstop
     if (!d.meta.title?.trim() && title.trim() && d.body.includes('{{title}}')) {
       if (editor && livePreview)
         replacePlaceholder(editor, '{{title}}', title) // the page reports the change, which updates d.body
@@ -979,9 +1000,9 @@ export function App() {
         setLoaded((l) => (l ? { ...l, body: d.body, key: l.key + '~' } : l))
       }
     }
-    d.meta = { ...d.meta, title }
+    Object.assign(d, patchFrontMatter(d, { title }))
     syncText()
-    setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
+    setLoaded((l) => (l ? { ...l, meta: d.meta, lists: d.lists } : l))
     saver.edited()
     await op(async () => {
       if (docRef.current !== d) return
@@ -996,12 +1017,13 @@ export function App() {
   const setPlatform = async (platform: string) => {
     const d = docRef.current
     if (!d) return
+    if (d.readonly) return notify(READONLY_META)
     const patch: MetaPatch = { platform }
     // A new, empty piece takes its new kind's document defaults (and gives back the old kind's).
     if (fresh === d.path && !d.body.trim()) Object.assign(patch, kindSwitchPatch(d.meta, findKind(kinds(), d.meta.platform ?? '')?.doc, findKind(kinds(), platform)?.doc))
-    d.meta = applyPatch(d.meta, patch)
+    Object.assign(d, patchFrontMatter(d, patch))
     syncText()
-    setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
+    setLoaded((l) => (l ? { ...l, meta: d.meta, lists: d.lists } : l))
     saver.edited()
     await op(async () => {
       if (docRef.current !== d) return
@@ -1019,11 +1041,10 @@ export function App() {
     if (!d) return
     const { content, mtime } = await api.readFile(d.path)
     if (docRef.current !== d) return
-    const { meta, body, raw } = splitFrontMatter(content)
-    docRef.current = { path: d.path, meta, body, rawMeta: raw }
+    const next = (docRef.current = { ...splitFrontMatter(content), path: d.path })
     syncText()
-    setLoaded({ ...docRef.current, key: `${d.path}#${++opened.current}`, caret })
-    setBodyEmpty(!body.trim())
+    setLoaded({ ...next, key: `${d.path}#${++opened.current}`, caret })
+    setBodyEmpty(!next.body.trim())
     saver.open(d.path, mtime, content)
   }
 
@@ -1614,6 +1635,7 @@ export function App() {
   const selectedCounted = (format?.selectedWords ?? 0) - (skipReferences ? (format?.selectedReferenceWords ?? 0) : 0)
   const due = dueLabel(loaded?.meta.due)
   const profile = useMemo(() => ({ name: settings?.profileName ?? '', institution: settings?.profileInstitution ?? '' }), [settings?.profileName, settings?.profileInstitution])
+  const vaultTags = useMemo(() => vaultTagCounts(files), [files])
   const templateItems = useMemo(() => ({ list: () => templatesRef.current, insert: (t: TemplateInfo) => insertAtCaretRef.current(t), browse: () => setPicker('insert') }), [])
   const insertAtCaretRef = useRef(insertAtCaret)
   insertAtCaretRef.current = insertAtCaret
@@ -1759,7 +1781,7 @@ export function App() {
     fetch('/api/versions/snapshot', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ doc: d.path, reason, content: joinFrontMatter(d.rawMeta, d.meta, d.body) }),
+      body: JSON.stringify({ doc: d.path, reason, content: joinDoc(d) }),
     })
       .then((r) => {
         if (r.status === 404 || r.status === 501) versions.current = false
@@ -1881,6 +1903,7 @@ export function App() {
             onReveal: openAt,
             onClose: () => setSidebarMode('vault'),
           }}
+          tags={vaultTags}
           onImport={startImport}
         />
       )}
@@ -1943,7 +1966,7 @@ export function App() {
           <div className={`page${sheet ? ' is-sheet' : ''}`}>
             <div className="doc-meta">
               <label className="platform">
-                <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Kind of writing">
+                <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Kind of writing" disabled={loaded.readonly}>
                   {(kinds().some((k) => k.id === platform) ? kinds().map((k) => k.id) : [...kinds().map((k) => k.id), platform]).map((p) => (
                     <option key={p} value={p}>
                       {platformLabel(p)}
@@ -1988,6 +2011,7 @@ export function App() {
               onEdit={() => setLayoutFor(loaded.path)}
             >
               <TitleField
+                readOnly={loaded.readonly}
                 key={'title:' + loaded.key}
                 spellcheck={spellcheck}
                 value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)}
@@ -1995,6 +2019,7 @@ export function App() {
                 onCommit={setTitle}
                 onHelp={(level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } }))}
               />
+              <Properties key={'props:' + loaded.key} fm={loaded} open={propsOpen} onOpen={setPropsOpen} onPatch={setMeta} vaultTags={vaultTags} />
               {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
               {isNew && bodyEmpty && templates.length > 0 && (
                 <StartFrom templates={templates} platform={platform} preferred={findKind(kinds(), platform)?.template} onApply={startFrom} onAll={() => setPicker('draft')} />
@@ -2311,7 +2336,22 @@ function exportKind(platform: string | undefined) {
 }
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */
-function TitleField({ value, autoFocus, spellcheck, onCommit, onHelp }: { value: string; autoFocus: boolean; spellcheck: boolean; onCommit: (t: string) => void; onHelp: (level: Level) => void }) {
+function TitleField({
+  value,
+  autoFocus,
+  spellcheck,
+  readOnly = false,
+  onCommit,
+  onHelp,
+}: {
+  value: string
+  autoFocus: boolean
+  spellcheck: boolean
+  /** The title lives in front matter Ekdanta can't rewrite: shown, not edited. */
+  readOnly?: boolean
+  onCommit: (t: string) => void
+  onHelp: (level: Level) => void
+}) {
   const ref = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -2329,7 +2369,9 @@ function TitleField({ value, autoFocus, spellcheck, onCommit, onHelp }: { value:
     <h1
       ref={ref}
       className="doc-title"
-      contentEditable="plaintext-only"
+      contentEditable={readOnly ? false : 'plaintext-only'}
+      aria-readonly={readOnly || undefined}
+      title={readOnly ? "The title is in front matter Ekdanta can't edit; see Properties" : undefined}
       spellCheck={spellcheck}
       suppressContentEditableWarning
       role="textbox"

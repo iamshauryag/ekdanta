@@ -5719,3 +5719,307 @@ li.hl-ghost-block::marker {
   text-transform: uppercase;
   color: var(--ink-3);
 }
+
+/* feature: properties-and-tags */
+.props {
+  margin: -18px 0 20px;
+  font: 12px/1.4 var(--sans);
+  color: var(--ink-3);
+}
+.app.is-focus .props {
+  display: none;
+}
+.props-toggle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 6px 2px 2px;
+  margin-left: -2px;
+  border-radius: 6px;
+  color: var(--ink-3);
+}
+.props-toggle:hover {
+  color: var(--ink-2);
+}
+.props-toggle:focus-visible {
+  outline: 2px solid var(--accent-line);
+}
+.props-caret {
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.12s ease;
+}
+.props.is-open .props-caret {
+  transform: rotate(90deg);
+}
+.props-table {
+  /* No scroll box of its own: the page scrolls, so the tag suggestions are never clipped. */
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
+}
+.props-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 120px 1fr 22px;
+  align-items: center;
+  min-height: 30px;
+  gap: 8px;
+}
+.props-key {
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.props-value {
+  min-width: 0;
+  color: var(--ink);
+}
+.props-input,
+.props-select {
+  width: 100%;
+  font: 13px var(--sans);
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin-left: -6px;
+}
+.props-select,
+.props-input[type='date'] {
+  width: auto;
+  min-width: 140px;
+}
+.props-input:hover,
+.props-select:hover {
+  background: var(--chrome);
+}
+.props-input:focus,
+.props-select:focus {
+  outline: none;
+  background: var(--pop);
+  border-color: var(--line-2);
+}
+.props-input::placeholder,
+.prop-chips-input::placeholder {
+  color: var(--ink-4);
+}
+.props-remove {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--ink-4);
+  opacity: 0;
+}
+.props-row:hover .props-remove,
+.props-remove:focus-visible {
+  opacity: 1;
+}
+.props-remove:hover {
+  color: var(--ink-2);
+  background: var(--chrome);
+}
+.props-add {
+  margin: 4px 0 2px -6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--ink-3);
+}
+.props-add:hover {
+  color: var(--ink);
+  background: var(--chrome);
+}
+.props-new {
+  grid-template-columns: 220px 1fr;
+}
+.props-hint {
+  color: var(--del-ink);
+}
+.props-readonly {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--chrome);
+  color: var(--ink-2);
+}
+.props-readonly p {
+  margin: 0 0 8px;
+}
+.props-readonly b {
+  color: var(--ink);
+  font-weight: 500;
+}
+.props-readonly pre {
+  margin: 0;
+  max-height: 30vh;
+  overflow: auto;
+  font: 12px/1.5 var(--mono);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+}
+.prop-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  cursor: text;
+}
+.prop-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 2px 1px 8px;
+  border-radius: 20px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+.prop-chip-x {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--accent);
+  opacity: 0.55;
+  line-height: 1;
+}
+.prop-chip-x:hover {
+  opacity: 1;
+  background: var(--accent-soft);
+}
+.prop-chips {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0 6px;
+  margin-left: -7px;
+}
+.prop-chips:hover {
+  background: var(--chrome);
+}
+.prop-chips:focus-within {
+  background: var(--pop);
+  border-color: var(--line-2);
+}
+.prop-chip-x:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent-line);
+}
+.platform select:disabled {
+  color: var(--ink-4);
+  border-style: dashed;
+  cursor: not-allowed;
+}
+.platform select:disabled:hover {
+  color: var(--ink-4);
+  border-color: var(--line-2);
+}
+.doc-title[contenteditable='false'] {
+  cursor: default;
+}
+.prop-chips-field {
+  position: relative;
+  flex: 1;
+  min-width: 80px;
+}
+.prop-chips-input {
+  width: 100%;
+  font: 13px var(--sans);
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: none;
+  padding: 4px 0;
+}
+.prop-chips-menu {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: -4px;
+  min-width: 180px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 4px;
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+}
+.prop-chips-menu button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--ink);
+}
+.prop-chips-menu button.is-on,
+.prop-chips-menu button:hover {
+  background: var(--chrome-2);
+}
+.pm .pm-tag {
+  padding: 0 4px;
+  margin: 0 -1px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 0.86em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.tags-head {
+  width: 100%;
+  color: var(--ink-3);
+}
+.tag-row {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 3px 8px 3px 18px;
+  border-radius: 6px;
+  color: var(--ink-2);
+  text-align: left;
+}
+.tag-row:hover {
+  color: var(--ink);
+}
+.tag-row.is-current {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+.tag-row .count {
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.tag-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: -4px 4px 8px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.tag-filter b {
+  color: var(--accent);
+  font-weight: 500;
+}

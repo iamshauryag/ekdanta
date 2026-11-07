@@ -171,3 +171,13 @@ test('every starter is for a kind the writer already has', () => {
     )
   }
 })
+
+test('template front matter may hold variables and lists; a list stays a list in the piece', () => {
+  const template = '---\ndate: {{date}}\ntags: [essay, "{{kind}}"]\naliases:\n  - {{title}}\n---\n\nBody\n'
+  assert.deepEqual(lib.templateMeta(template, ctx()), { date: '2026-11-06', tags: ['essay', 'Essay'], aliases: ['On Rivers'] })
+  const { content } = lib.applyTemplate('---\r\ntitle: On Rivers\r\n---\r\n\r\n', template, ctx())
+  const fm = splitFrontMatter(content)
+  assert.deepEqual(fm.lists.tags, ['essay', 'Essay'])
+  assert.equal(fm.meta.title, 'On Rivers')
+  assert.equal(fm.eol, '\r\n') // the piece's own line endings are kept
+})

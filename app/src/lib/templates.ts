@@ -3,7 +3,7 @@
 // called (`template-name: LinkedIn post`); its other keys are copied into the new piece. Its text may
 // use {{title}}, {{date}}, {{date:FORMAT}}, {{time}}, {{kind}}, {{author}} and {{cursor}}.
 // Shared by the app and the server, so no DOM here.
-import { joinFrontMatter, splitFrontMatter, type Meta } from './frontmatter.ts'
+import { joinDoc, patchFrontMatter, splitFrontMatter } from './frontmatter.ts'
 import type { Kind } from './kinds.ts'
 
 export interface TemplateInfo {
@@ -123,13 +123,25 @@ export function templateBody(content: string, ctx: TemplateContext) {
   return renderTemplate(body.replace(/^\n+/, ''), ctx)
 }
 
-/** The front-matter keys a template passes on to a new piece, filled in. Its own keys are left behind. */
-export function templateMeta(template: string, ctx: TemplateContext): Meta {
-  const { meta } = splitFrontMatter(template)
-  const out: Meta = {}
+/**
+ * The front-matter keys a template passes on to a new piece, filled in. Its own keys are left behind.
+ * A list (`tags: [essay, draft]`) stays a list, so the piece gets one too.
+ */
+export function templateMeta(template: string, ctx: TemplateContext): Record<string, string | string[]> {
+  // `created: {{date}}` isn't YAML until it's filled in (a bare `{` opens a map), so the front matter is
+  // read with each variable swapped for a plain word, and the word swapped back before filling in.
+  const vars: string[] = []
+  const masked = template.replace(/\{\{[^{}\n]*\}\}/g, (v) => `ekdantatemplatevar${vars.push(v) - 1}x`)
+  const fill = (v: string) =>
+    renderTemplate(
+      v.replace(/ekdantatemplatevar(\d+)x/g, (_, i: string) => vars[Number(i)]),
+      ctx,
+    ).text
+  const { meta, lists } = splitFrontMatter(masked)
+  const out: Record<string, string | string[]> = {}
   for (const [key, value] of Object.entries(meta)) {
     if (NOT_COPIED.includes(key.toLowerCase())) continue
-    out[key] = renderTemplate(value, ctx).text
+    out[key] = key in lists ? lists[key].map(fill) : fill(value)
   }
   return out
 }
@@ -140,10 +152,9 @@ export function templateMeta(template: string, ctx: TemplateContext): Meta {
  * `cursor` is an offset into the body, as splitFrontMatter reads it back.
  */
 export function applyTemplate(doc: string, template: string, ctx: TemplateContext): { content: string; cursor: number | null } {
-  const d = splitFrontMatter(doc)
-  const meta: Meta = { ...d.meta, ...templateMeta(template, ctx) }
   const body = templateBody(template, ctx)
-  return { content: joinFrontMatter(d.raw, meta, body.text), cursor: body.cursor }
+  // The piece's own front matter keeps its bytes, line endings and lists; the template's keys are patched in.
+  return { content: joinDoc({ ...patchFrontMatter(splitFrontMatter(doc), templateMeta(template, ctx)), body: body.text }), cursor: body.cursor }
 }
 
 export interface TemplateGroup {

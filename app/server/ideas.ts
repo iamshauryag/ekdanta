@@ -4,7 +4,7 @@
 // idea's text; which ideas were started is read from the pieces' own `from-idea` front matter.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { applyPatch, joinFrontMatter, splitFrontMatter } from '../src/lib/frontmatter.ts'
+import { joinDoc, patchFrontMatter, splitFrontMatter } from '../src/lib/frontmatter.ts'
 import { findKind, kindName, type Kind } from '../src/lib/kinds.ts'
 import { IDEAS_FILE } from '../src/lib/special.ts'
 import { HttpError } from './net.ts'
@@ -257,13 +257,14 @@ export async function startIdea(kinds: Kind[], text: string, kindId: string): Pr
   const kind = findKind(kinds, kindId)
   if (!kind) throw new HttpError(400, 'Unknown kind of writing')
   const rel = await createDoc(kinds, '', kind.id)
-  const { meta, body, raw } = splitFrontMatter(await readDoc(rel))
+  const fm = splitFrontMatter(await readDoc(rel))
+  const { meta, body } = fm
   let template = ''
   if (kind.template) {
     const tpl = await readDoc(kind.template).catch(() => null)
     if (tpl !== null) template = templateBody(tpl, { date: meta.created ?? '', kind: kindName(kinds, kind.id) })
   }
   const next = [ideaPrompt(idea), template.trim(), body.trim()].filter(Boolean).join('\n\n') + '\n'
-  await writeDoc(rel, joinFrontMatter(raw, applyPatch(meta, { 'from-idea': idea }), next), { reason: 'create' })
+  await writeDoc(rel, joinDoc({ ...patchFrontMatter(fm, { 'from-idea': idea }), body: next }), { reason: 'create' })
   return placeDoc(kinds, rel)
 }

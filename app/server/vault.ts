@@ -3,16 +3,18 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { constants, promises as fs } from 'node:fs'
 import path from 'node:path'
-import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
+import { joinDoc, joinFrontMatter, patchContent, patchFrontMatter, splitFrontMatter, type MetaPatch } from '../src/lib/frontmatter.ts'
+import { docTags } from '../src/lib/tags.ts'
 import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
 import { docDefaults } from '../src/lib/docstyle.ts'
 import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 import { docSlug, sameName, slug } from '../src/lib/slug.ts'
 import { frontMatterList } from '../src/lib/searchQuery.ts'
 import { createFileCache, type FileStat } from './cache.ts'
+import { HttpError } from './net.ts'
 import { META_DIR, VAULT } from './paths.ts'
 
-export { META_DIR, VAULT }
+export { META_DIR, VAULT, splitFrontMatter }
 
 export interface FileEntry {
   path: string // relative to the vault, with forward slashes
@@ -23,6 +25,8 @@ export interface FileEntry {
   mtime: number
   /** Other names for the page, from front-matter `aliases` (the quick switcher finds it by them). */
   aliases?: string[]
+  /** Front-matter and inline tags, as written. */
+  tags: string[]
   /** The idea from ideas.md this piece was started from (front matter `from-idea`). */
   fromIdea?: string
 }
@@ -36,7 +40,8 @@ export function resolveInVault(rel: string): string {
 
 // The vault's files, read once and re-read only when they change (on disk or through Ekdanta).
 const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
-  const { meta, body } = splitFrontMatter(raw)
+  const fm = splitFrontMatter(raw)
+  const { meta, body } = fm
   return {
     path: rel,
     folder: rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '',
@@ -44,6 +49,7 @@ const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
     platform: meta.platform,
     exemplar: meta.exemplar === 'true',
     mtime: stat.mtime,
+    tags: docTags(fm),
     ...(meta['from-idea']?.trim() ? { fromIdea: meta['from-idea'] } : {}),
     ...aliasesOf(raw),
   }
@@ -458,14 +464,24 @@ const today = () => {
 }
 
 async function patchDoc(rel: string, patch: MetaPatch, reason = 'meta') {
-  const { meta, body, raw } = splitFull(await readDoc(rel))
-  await writeDoc(rel, joinFrontMatter(raw, applyPatch(meta, patch), body), { reason })
+  await writeDoc(rel, patchContent(await readDoc(rel), patch), { reason })
+}
+
+/**
+ * A document's front matter, when Ekdanta may change it. A block it can't model is never rewritten,
+ * so renaming, starring or copying such a page would only seem to work: say so instead (409).
+ */
+export async function editableFrontMatter(rel: string, doing: string) {
+  const fm = splitFrontMatter(await readDoc(rel))
+  if (fm.readonly) throw new HttpError(409, `Can't ${doing} “${fm.meta.title || path.posix.basename(rel, '.md')}”: its front matter can't be edited in Ekdanta. ${fm.problem ?? ''}`.trim())
+  return fm
 }
 
 /** Rename a document: its title, its file, and every [[link]] to it in the vault. */
 export async function renameDoc(rel: string, title: string) {
   title = title.trim()
   if (!title) return rel
+  await editableFrontMatter(rel, 'rename')
   await patchDoc(rel, { title }, 'rename')
   const name = slugify(title)
   // macOS may hand back a decomposed (NFD) file name for a title typed composed: still the same name.
@@ -578,21 +594,25 @@ export async function moveToFolder(kinds: Kind[], rel: string, folder: string) {
   if (folder.split('/').some((part) => part.startsWith('.'))) throw new Error('Not a folder for documents')
   resolveInVault(folder || '.')
   if (folder === folderOf(rel)) return rel
-  const next = await moveDoc(rel, await freePath(folder, path.posix.basename(rel, '.md')))
   const platform = kindOfFolder(kinds, folder)?.id
+  // A kind's folder files the page as that kind; one whose front matter can't change can't say so, so it stays put.
+  if (platform && splitFrontMatter(await readDoc(rel)).meta.platform?.toLowerCase() !== platform) await editableFrontMatter(rel, 'move')
+  const next = await moveDoc(rel, await freePath(folder, path.posix.basename(rel, '.md')))
   if (platform) await patchDoc(next, { platform }, 'move')
   return next
 }
 
 /** A copy of a document (and its Thinking Space) to work on separately. */
 export async function duplicateDoc(rel: string) {
-  const { meta, body, raw } = splitFull(await readDoc(rel))
+  // A copy must say it's a copy (and not be starred or published); a block that can't be rewritten can't say that.
+  const fm = await editableFrontMatter(rel, 'duplicate')
+  const { meta } = fm
   const title = `${meta.title || path.posix.basename(rel, '.md')} (copy)`
   const next = await freePath(folderOf(rel), slugify(title))
   // A copy isn't an exemplar or a published piece until the writer says so.
   const patch: MetaPatch = { title, created: today(), exemplar: null }
   if (meta.status) patch.status = 'draft'
-  await writeDoc(next, joinFrontMatter(raw, applyPatch(meta, patch), body), { reason: 'duplicate' })
+  await writeDoc(next, joinDoc(patchFrontMatter(fm, patch)), { reason: 'duplicate' })
   await fs.copyFile(resolveInVault(canvasOf(rel)), resolveInVault(canvasOf(next))).catch(() => {})
   return next
 }
@@ -757,18 +777,6 @@ export async function copySampleVault(from: string) {
   return (await listFiles()).length
 }
 
-/** Minimal YAML front-matter: flat `key: value` pairs, which is all Ekdanta writes. */
-export function splitFrontMatter(raw: string): { meta: Record<string, string>; body: string } {
-  const m = raw.match(/^---\n([\s\S]*?)\n---\n?/)
-  if (!m) return { meta: {}, body: raw }
-  const meta: Record<string, string> = {}
-  for (const line of m[1].split('\n')) {
-    const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/)
-    if (kv) meta[kv[1]] = unquote(kv[2])
-  }
-  return { meta, body: raw.slice(m[0].length) }
-}
-
 function firstHeading(body: string) {
   const h = body.match(/^#\s+(.+)$/m)?.[1]?.trim()
   // A template's `# {{title}}`, still waiting for the title, isn't one.
@@ -816,15 +824,4 @@ export async function readHistory(doc: string): Promise<unknown[]> {
   } catch {
     return []
   }
-}
-
-function unquote(v: string) {
-  if (/^".*"$/.test(v)) {
-    try {
-      return JSON.parse(v) as string
-    } catch {
-      /* fall through */
-    }
-  }
-  return v.replace(/^["']|["']$/g, '')
 }

@@ -8,7 +8,7 @@ import { classHighlighter } from '@lezer/highlight'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { api, type VoiceSummary } from '../lib/api.ts'
-import { joinFrontMatter, splitFrontMatter } from '../lib/frontmatter.ts'
+import { joinDoc, splitFrontMatter, type FrontMatter } from '../lib/frontmatter.ts'
 import { helpMod } from '../editor/help.ts'
 import { Markdown } from '../lib/markdown.tsx'
 
@@ -23,7 +23,7 @@ export const platformLabel = (p: string) => kindName(kinds(), p)
 
 /** One platform's voice profile: read it, edit it, rebuild it from the exemplars. */
 export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
-  const [profile, setProfile] = useState<{ raw: string; meta: Record<string, string>; body: string } | null | undefined>(undefined)
+  const [profile, setProfile] = useState<FrontMatter | null | undefined>(undefined)
   const [proposal, setProposal] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -34,9 +34,9 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
   const load = () =>
     api.voiceProfile(platform).then((content) => {
       if (content === null) return setProfile(null)
-      const { meta, body, raw } = splitFrontMatter(content)
-      setProfile({ meta, body, raw })
-      setDraft(body)
+      const fm = splitFrontMatter(content)
+      setProfile(fm) // kept whole, so its front matter is written back as found
+      setDraft(fm.body)
     })
   useEffect(() => {
     setProposal(null)
@@ -72,7 +72,7 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
     if (!profile) return
     setDraft(body)
     window.clearTimeout(saveTimer.current)
-    saveTimer.current = window.setTimeout(() => api.saveVoiceProfile(platform, joinFrontMatter(profile.raw, profile.meta, body)), 600)
+    saveTimer.current = window.setTimeout(() => api.saveVoiceProfile(platform, joinDoc({ ...profile, body })), 600)
   }
 
   const sources = summary?.sources ?? []
@@ -105,8 +105,8 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
       </div>
       {summary && summary.exemplars < 3 && (
         <p className="voice-hint">
-          {summary.exemplars === 0 ? 'No exemplars yet, so this uses your most recent pieces.' : `Only ${summary.exemplars} exemplar${summary.exemplars === 1 ? '' : 's'}, so recent pieces fill in.`} Star the
-          pieces that sound most like you for a better profile.
+          {summary.exemplars === 0 ? 'No exemplars yet, so this uses your most recent pieces.' : `Only ${summary.exemplars} exemplar${summary.exemplars === 1 ? '' : 's'}, so recent pieces fill in.`}{' '}
+          Star the pieces that sound most like you for a better profile.
         </p>
       )}
 
@@ -131,18 +131,13 @@ export function VoicePage({ platform, summary, onOpenDoc, onChanged }: Props) {
       </div>
 
       {proposal && profile && (
-        <Proposal
-          current={profile.body}
-          next={splitFrontMatter(proposal).body}
-          onAccept={() => write(proposal).then(() => setProposal(null))}
-          onReject={() => setProposal(null)}
-        />
+        <Proposal current={profile.body} next={splitFrontMatter(proposal).body} onAccept={() => write(proposal).then(() => setProposal(null))} onReject={() => setProposal(null)} />
       )}
 
       {profile === null && !busy && sources.length > 0 && (
         <p className="empty">
-          A profile is a short list of traits: how your {platformLabel(platform)} pieces open, their rhythm, the words you reach for. Each trait quotes your own
-          writing. You can edit it, add rules of your own, and {helpMod}3–{helpMod}5 follow it.
+          A profile is a short list of traits: how your {platformLabel(platform)} pieces open, their rhythm, the words you reach for. Each trait quotes your own writing. You can edit it, add rules of
+          your own, and {helpMod}3–{helpMod}5 follow it.
         </p>
       )}
       {profile && !proposal && editing && <ProfileEditor key={platform + (profile.meta.built ?? '')} initial={draft} onChange={onEdit} />}

@@ -9,7 +9,8 @@ import type { Plugin } from 'vite'
 import { status } from './ai.ts'
 import { claudePool, closeClaudePools } from './claude-pool.ts'
 import { embedder, warmEmbedder } from './embed.ts'
-import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
+import { patchContent, type MetaPatch } from '../src/lib/frontmatter.ts'
+import { listTags } from './tags.ts'
 import { material, readThinking, recallChips, suggestClusters, suggestLinks, writeThinking, type Fragment } from './thinking.ts'
 import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
@@ -50,6 +51,7 @@ import {
   renameDoc,
   renameFolder,
   duplicateDoc,
+  editableFrontMatter,
   restoreDoc,
   trashDoc,
   readDoc,
@@ -280,8 +282,10 @@ const routes: Record<string, Handler> = {
   'POST /api/meta': async (req) => {
     const { path, patch } = await body<{ path: string; patch: MetaPatch }>(req)
     const { touched } = await collectTouched(async () => {
-      const { meta, body: text, raw } = splitFull(await readDoc(path))
-      await writeDoc(path, joinFrontMatter(raw, applyPatch(meta, patch), text), { reason: 'meta' })
+      const before = await readDoc(path)
+      if (splitFrontMatter(before).readonly) await editableFrontMatter(path, Object.keys(patch).includes('exemplar') ? 'star' : 'change')
+      const after = patchContent(before, patch)
+      if (after !== before) await writeDoc(path, after, { reason: 'meta' })
     })
     return { ok: true, touched }
   },
@@ -341,6 +345,7 @@ const routes: Record<string, Handler> = {
     if (q.length < 2) return { ready: true, results: [] }
     return { ready: true, results: await search(q, { limit: 12 }) }
   },
+  'GET /api/tags': async () => listTags(),
   'GET /api/versions': async (_req, url) => listVersions(url.searchParams.get('doc') ?? ''),
   'GET /api/version': async (_req, url) => ({ content: await readVersion(url.searchParams.get('doc') ?? '', url.searchParams.get('id') ?? '') }),
   'POST /api/versions/snapshot': async (req) => {

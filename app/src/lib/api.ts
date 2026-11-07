@@ -1,4 +1,6 @@
 import type { Kind } from './kinds.ts'
+import type { MetaPatch } from './frontmatter.ts'
+import type { TagCount } from './tags.ts'
 import type { TemplateInfo } from './templates.ts'
 import type { Appearance } from './appearance.ts'
 import type { EdgeCandidate, EdgeSlot } from './edge.ts'
@@ -12,6 +14,8 @@ export interface FileEntry {
   platform?: string
   exemplar: boolean
   mtime: number
+  /** Front-matter and inline tags, as written. */
+  tags: string[]
   /** A brief is pinned to it. */
   brief?: boolean
   /** The idea this piece was started from. */
@@ -285,7 +289,8 @@ export const api = {
   trash: () => fetch('/api/trash').then(json<Trashed[]>),
   restore: (id: string) => fetch('/api/restore', send('POST', { id })).then(json<Moved>),
   discard: (path: string) => fetch('/api/discard', send('POST', { path })).then(json<{ discarded: boolean }>),
-  patchMeta: (path: string, patch: Record<string, string | null>) => fetch('/api/meta', send('POST', { path, patch })).then(json<{ ok: true; touched?: Touched[] }>),
+  patchMeta: (path: string, patch: MetaPatch) => fetch('/api/meta', send('POST', { path, patch })).then(json<{ ok: true; touched?: Touched[] }>),
+  tags: () => fetch('/api/tags').then(json<TagCount[]>),
   voice: () => fetch('/api/voice').then(json<VoiceSummary[]>),
   voiceProfile: (platform: string) =>
     fetch('/api/voice/profile?platform=' + encodeURIComponent(platform))

@@ -20,6 +20,7 @@ import { isReferencesHeading, type Block as CountBlock } from '../lib/targets.ts
 import { readAloudPlugin } from './readAloud.ts'
 import { ReadAloudBar, canReadAloud, readAloud, useReadAloud } from '../components/ReadAloudBar.tsx'
 import { replaceAll, replaceCurrent, searchPlugin, searchState, setSearch, step } from './search.ts'
+import { tagsPlugin } from './tags.ts'
 
 export interface Heading {
   level: number
@@ -172,7 +173,7 @@ export function Editor(props: Props) {
           name: 'ekdanta',
           // Ahead of every other key handler: help first, then the writer's own shortcuts.
           priority: 1000,
-          addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), promptPlugin(), currentBlock, readAloudPlugin(), new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
+          addProseMirrorPlugins: () => [helpPlugin(), searchPlugin(), promptPlugin(), tagsPlugin(), currentBlock, readAloudPlugin(), new Plugin({ props: { handleKeyDown: (_view, e) => onKey(e) } })],
         }),
         SlashMenu.configure({
           templates: { list: () => p().templates?.list() ?? [], insert: (t) => p().templates?.insert(t), browse: () => p().templates?.browse() },

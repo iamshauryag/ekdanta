@@ -379,3 +379,17 @@ test('clearHistory empties the log, and a document without one is fine', async (
   await vault.clearHistory('clear/never.md')
   await assert.rejects(vault.clearHistory('../x.md'), /outside/)
 })
+
+test('a page whose front matter cannot be rewritten is not renamed, copied or filed as a kind', async () => {
+  const content = '---\nmeta:\n  nested: true\ntitle: Odd\n---\n\nBody\n'
+  await fs.mkdir(path.join(root, 'odd'), { recursive: true })
+  await fs.writeFile(path.join(root, 'odd/odd.md'), content)
+  await assert.rejects(vault.renameDoc('odd/odd.md', 'Even'), (e: Error & { status?: number }) => e.status === 409 && /Can't rename “Odd”/.test(e.message))
+  await assert.rejects(vault.duplicateDoc('odd/odd.md'), /Can't duplicate/)
+  const kind = DEFAULT_KINDS[0]
+  await assert.rejects(vault.moveToFolder(DEFAULT_KINDS, 'odd/odd.md', kind.folder), /Can't move/)
+  assert.equal(await fs.readFile(path.join(root, 'odd/odd.md'), 'utf8'), content, 'the file is untouched')
+  // A folder that isn't a kind's needs no front-matter change, so the page can go there.
+  assert.equal(await vault.moveToFolder(DEFAULT_KINDS, 'odd/odd.md', 'elsewhere'), 'elsewhere/odd.md')
+  assert.equal(await fs.readFile(path.join(root, 'elsewhere/odd.md'), 'utf8'), content)
+})

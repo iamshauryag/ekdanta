@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { findKind, kindDisplayName, kindName, kindOfFolder, kinds, pieceName, plural } from '../lib/kinds.ts'
 import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
+import { countsTags, hasTag, type TagCount } from '../lib/tags.ts'
 import { Icon } from './Icon.tsx'
 import { briefLabel } from '../lib/brief.ts'
 import { helpMod } from '../editor/help.ts'
@@ -25,6 +26,8 @@ interface Props {
   trash: Trashed[]
   onRestore: (id: string) => void
   search: SearchProps
+  /** The vault's tags, with how many documents carry each. */
+  tags: TagCount[]
   /** Bring files in: the file chooser, or files dropped on the sidebar. */
   onImport: (files?: File[]) => void
   /** Whether the Ideas page fills the page. */
@@ -79,11 +82,21 @@ export function Sidebar(p: Props) {
   )
 }
 
-function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, onRestore, onImport, ideasOpen, ideaCount, onIdeas, onCaptureIdea }: Props) {
+function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, onRestore, tags, onImport, ideasOpen, ideaCount, onIdeas, onCaptureIdea }: Props) {
   // ideas.md has its own row at the top, so it isn't listed again among the pages.
   const files = all.filter((f) => !isSpecialFile(f.path))
-  const folders = [...new Set(files.map((f) => f.folder))].sort()
+  const allFolders = [...new Set(files.map((f) => f.folder))].sort()
   const [showTrash, setShowTrash] = useState(false)
+  const [showTags, setShowTags] = useState(() => readPref('tagsOpen'))
+  const [picked, setPicked] = useState<string | null>(null)
+  // A tag that's gone from the vault no longer filters anything.
+  const filter = picked && tags.find((t) => t.tag.toLowerCase() === picked.toLowerCase())?.tag
+  const shown = filter ? files.filter((f) => countsTags(f.path) && hasTag(f.tags, filter)) : files
+  const folders = filter ? allFolders.filter((folder) => shown.some((f) => f.folder === folder)) : allFolders
+  const toggleTags = () => {
+    setShowTags(!showTags)
+    writePref('tagsOpen', !showTags)
+  }
   const ideasCurrent = ideasOpen || current?.toLowerCase() === IDEAS_FILE
   return (
     <>
@@ -107,6 +120,16 @@ function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, 
           )}
         </div>
       </div>
+      {filter && (
+        <div className="tag-filter" role="status">
+          <span>
+            Filtered by <b>#{filter}</b>
+          </span>
+          <button className="icon-btn small" title="Show every document" aria-label="Clear the tag filter" onClick={() => setPicked(null)}>
+            ×
+          </button>
+        </div>
+      )}
       {folders.map((folder) => (
         <div key={folder} className="folder">
           <div className="folder-name">
@@ -115,13 +138,40 @@ function Vault({ files: all, current, onOpen, onCreate, onStar, actions, trash, 
               <Icon name="plus" />
             </button>
           </div>
-          {files
+          {shown
             .filter((f) => f.folder === folder)
             .map((f) => (
-              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} actions={actions} folders={folders} />
+              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={onStar} actions={actions} folders={allFolders} />
             ))}
         </div>
       ))}
+      {tags.length > 0 && (
+        <div className="folder tags">
+          <button className="folder-name tags-head" onClick={toggleTags} aria-expanded={showTags}>
+            <span>Tags</span>
+            <span className="count">{tags.length}</span>
+          </button>
+          {showTags &&
+            tags.map((t) => {
+              const depth = t.tag.split('/').length - 1
+              const on = t.tag === filter
+              return (
+                <button
+                  key={t.tag}
+                  className={`tag-row${on ? ' is-current' : ''}`}
+                  style={{ paddingLeft: 14 + depth * 12 }}
+                  title={`#${t.tag}`}
+                  aria-pressed={on}
+                  onClick={() => setPicked(on ? null : t.tag)}
+                >
+                  {/* A nested tag shows its own part after a slash, so #craft and #writing/craft read apart. */}
+                  <span className="tag-name">{depth ? `/${t.tag.split('/').pop()}` : `#${t.tag}`}</span>
+                  <span className="count">{t.count}</span>
+                </button>
+              )
+            })}
+        </div>
+      )}
       {trash.length > 0 && (
         <div className="folder trash">
           <button className="folder-name trash-head" onClick={() => setShowTrash((o) => !o)} aria-expanded={showTrash}>
@@ -381,4 +431,20 @@ function folderLabel(folder: string) {
   // The same match that files pieces: a kind's folder, or a folder named exactly as its id.
   const kind = kindOfFolder(kinds(), folder)
   return kind ? plural(kindDisplayName(kind.name)) : last[0].toUpperCase() + last.slice(1)
+}
+
+function readPref(key: string) {
+  try {
+    return localStorage.getItem('ekdanta.' + key) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function writePref(key: string, value: boolean) {
+  try {
+    localStorage.setItem('ekdanta.' + key, String(value))
+  } catch {
+    /* preferences are a convenience */
+  }
 }

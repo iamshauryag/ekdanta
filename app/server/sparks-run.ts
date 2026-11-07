@@ -12,7 +12,7 @@ import { refresh, type Chunk } from './recall.ts'
 import { loadSettings } from './settings.ts'
 import { seedThinking } from './thinking.ts'
 import { META_DIR, createDoc, listFiles, nameDoc, readDoc, writeDoc } from './vault.ts'
-import { applyPatch, joinFrontMatter, splitFrontMatter } from '../src/lib/frontmatter.ts'
+import { joinDoc, patchFrontMatter, splitFrontMatter } from '../src/lib/frontmatter.ts'
 import { MAX_SOURCES, SPARK_KEY, candidateGroups, clean, cosine, keyOf, mmr, passageId, sample, seenBefore, shortTitle, validateSparks, appendBullet, type Passage, type Spark } from './sparks.ts'
 
 /** Where kept sparks are written, as a plain list the writer can edit. */
@@ -322,11 +322,10 @@ export async function startPiece(card: { key: string; title?: string; angle?: st
   const { kinds } = await loadSettings()
   const kind = kinds.find((k) => k.id === kindId) ?? kinds[0]
   const created = await createDoc(kinds, kind?.folder ?? '', kind?.id)
-  const { meta, raw } = splitFrontMatter(await readDoc(created))
+  const fm = splitFrontMatter(await readDoc(created))
   const title = shortTitle(clean(card.title))
   const docs = [...new Set(passages.map((p) => p.doc))]
-  const next = applyPatch(meta, { title, platform: kind?.id ?? meta.platform ?? 'essay', 'sparked-from': docs.join(', ') })
-  await writeDoc(created, joinFrontMatter(raw, next, ''), { reason: 'sparks' })
+  await writeDoc(created, joinDoc({ ...patchFrontMatter(fm, { title, platform: kind?.id ?? fm.meta.platform ?? 'essay', 'sparked-from': docs.join(', ') }), body: '' }), { reason: 'sparks' })
   const rel = title ? await nameDoc(created, title) : created
   const angle = clean(card.angle)
   await seedThinking(rel, [...(angle ? [{ text: angle, mark: 'Spark' }] : []), ...passages.map((p) => ({ text: p.text, from: { doc: p.doc, title: p.title, folder: p.folder } }))])
