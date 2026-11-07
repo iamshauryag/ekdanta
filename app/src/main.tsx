@@ -4,6 +4,7 @@ import '@fontsource-variable/newsreader'
 import '@fontsource-variable/newsreader/wght-italic.css'
 import '@fontsource-variable/inter'
 import './styles.css'
+import './print.css'
 import { App } from './App.tsx'
 import { autoHideScrollbars } from './lib/scrollbars.ts'
 

@@ -1,0 +1,160 @@
+/* Printing, and so PDF: the page alone, without the app around it. Export → PDF prints a clean copy
+   of the piece (.print-root: links resolved, prompts left out, its title at the top); ⌘P prints the
+   page as it is on screen. Either way the rail, sidebar, toolbar, panel and menus stay off paper. */
+
+.print-root {
+  display: none;
+}
+
+@page {
+  margin: 2.2cm 2.4cm 2.4cm;
+  @bottom-center {
+    content: counter(page);
+    font:
+      9pt 'Inter Variable',
+      system-ui,
+      sans-serif;
+    color: #777;
+  }
+}
+
+@media print {
+  :root {
+    color-scheme: light;
+  }
+  html,
+  body,
+  #root {
+    height: auto;
+    overflow: visible;
+    background: #fff;
+    color: #000;
+  }
+
+  /* ⌘P: just the page. */
+  .app {
+    display: block;
+    height: auto;
+  }
+  .titlebar,
+  .rail,
+  .sidebar,
+  .toolbar,
+  .panel,
+  .statusbar,
+  .doc-meta,
+  .platform-picker,
+  .toast,
+  .focus-hint,
+  .sheet-backdrop,
+  .menu,
+  .hl-card,
+  .hl-bar,
+  .hl-line,
+  .hl-nudge,
+  .hl-dot,
+  .hl-ghost {
+    display: none !important;
+  }
+  .page-area {
+    overflow: visible;
+    background: none;
+  }
+  .page {
+    width: auto;
+    margin: 0;
+    padding: 0;
+  }
+
+  /* Export → PDF: only the clean copy. */
+  body.is-printing > :not(.print-root) {
+    display: none !important;
+  }
+  body.is-printing .print-root {
+    display: block;
+  }
+  .print-root {
+    font:
+      12pt/1.55 'Newsreader Variable',
+      Georgia,
+      serif;
+    color: #000;
+    overflow-wrap: break-word;
+  }
+  .print-root .title {
+    font-size: 24pt;
+    line-height: 1.2;
+    margin: 0 0 4pt;
+  }
+  .print-root .byline {
+    color: #555;
+    margin: 0 0 18pt;
+  }
+  .print-root h1,
+  .print-root h2,
+  .print-root h3,
+  .print-root h4 {
+    line-height: 1.25;
+    margin: 16pt 0 6pt;
+    break-after: avoid;
+  }
+  .print-root p,
+  .print-root li {
+    orphans: 3;
+    widows: 3;
+  }
+  .print-root img {
+    max-width: 100%;
+    break-inside: avoid;
+  }
+  .print-root blockquote {
+    margin: 10pt 0;
+    padding-left: 12pt;
+    border-left: 2pt solid #bbb;
+    color: #333;
+  }
+  .print-root code {
+    font:
+      0.85em ui-monospace,
+      Menlo,
+      monospace;
+  }
+  .print-root pre {
+    white-space: pre-wrap;
+    background: #f3f2ef;
+    padding: 8pt 10pt;
+    border-radius: 4pt;
+    break-inside: avoid;
+  }
+  .print-root mark,
+  .print-root pre {
+    /* Highlights are the writer's marks, not decoration: print them even with background graphics off. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .print-root mark {
+    background: #fbe7a1;
+  }
+  .print-root table {
+    border-collapse: collapse;
+    margin: 10pt 0;
+  }
+  .print-root th,
+  .print-root td {
+    border: 0.75pt solid #bbb;
+    padding: 4pt 8pt;
+    text-align: left;
+    vertical-align: top;
+  }
+  .print-root li.task {
+    list-style: none;
+    margin-left: -1.2em;
+  }
+  .print-root a {
+    color: inherit;
+  }
+  .print-root hr {
+    border: 0;
+    border-top: 0.75pt solid #bbb;
+  }
+}

@@ -45,6 +45,7 @@
     "@tiptap/starter-kit": "3.32.0",
     "@tiptap/suggestion": "3.32.0",
     "diff": "^9.0.0",
+    "docx": "9.13.0",
     "jschardet": "^4.1.0",
     "linkedom": "^0.18.15",
     "mammoth": "^1.13.0",

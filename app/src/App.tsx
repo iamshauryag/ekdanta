@@ -15,6 +15,7 @@ import { Panel, type HistorySeg, type PanelTab } from './components/Panel.tsx'
 import { VersionPreview } from './components/VersionPreview.tsx'
 import type { VersionRow } from './lib/versions.ts'
 import { Settings } from './components/Settings.tsx'
+import { ExportSheet } from './components/ExportSheet.tsx'
 import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
@@ -138,6 +139,8 @@ export function App() {
   // Set during render, so everything below sees the current kinds of writing.
   setKinds(settings?.kinds)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [exporting, setExporting] = useState<string | null>(null) // the document the Export sheet is for
+  const closeExport = useCallback(() => setExporting(null), [])
   // Something the server couldn't do, shown in a banner over the page until dismissed.
   const [error, setError] = useState<string | null>(null)
   const fail = useCallback((e: unknown) => setError(e instanceof Error ? e.message : String(e)), [])
@@ -464,6 +467,15 @@ export function App() {
 
   /** Save now (⌘S, or before something reads the saved file). Never throws: a failure shows on the chip. */
   const save = useCallback(() => saver.flush(), [saver])
+
+  /**
+   * Everything typed is on disk: a pending save runs now, one in flight is waited for. If the text can't
+   * be saved (the server is down, or the file changed on disk), this refuses rather than let an export
+   * quietly use the older version on disk.
+   */
+  const flush = useCallback(async () => {
+    if (!(await saver.flush())) throw new Error('the latest changes aren’t saved yet, so an export would miss them')
+  }, [saver])
 
   const onChange = useCallback(
     (text: string) => {
@@ -1128,6 +1140,7 @@ export function App() {
         refreshVoices()
         notify(`Deleted “${item.title}”`, () => restore(item.id))
       }).catch(failed('delete')),
+    export: (rel) => setExporting(rel),
     pinBrief: (rel) => void pinBrief(rel),
     hasBrief: (rel) => (openBrief && rel === openBrief.doc.path ? openBrief.text.trim() !== '' : !!files.find((f) => f.path === rel)?.brief),
   }
@@ -1418,6 +1431,7 @@ export function App() {
       save: () => void save(),
       star: () => void (docRef.current && toggleExemplar(docRef.current.path)),
       settings: () => setSettingsOpen((o) => !o),
+      export: () => docRef.current && setExporting(docRef.current.path),
       newDraft: () => newDraft(),
       newFromTemplate: () => setPicker('new'),
       import: () => startImport(),
@@ -1935,6 +1949,17 @@ export function App() {
       {captureOpen && <CaptureBox onCapture={captureIdea} onClose={() => setCaptureOpen(false)} />}
       {thinkingOpen && loaded && <ThinkingSpace doc={loaded.path} title={title} onClose={closeThinking} />}
 
+      {exporting && (
+        <ExportSheet
+          path={exporting}
+          kind={exportKind(files.find((f) => f.path === exporting)?.platform ?? (exporting === loaded?.path ? loaded.meta.platform : undefined))}
+          files={files}
+          flush={flush}
+          onSaved={refreshFiles}
+          onClose={closeExport}
+        />
+      )}
+
       {picker && (
         <TemplatePicker
           title={picker === 'new' ? 'New from template' : picker === 'draft' ? 'Start from a template' : 'Insert a template'}
@@ -2059,6 +2084,13 @@ function whenKept(at: number) {
   const d = new Date(at)
   const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`
+}
+
+/** The kind an export starts from: a LinkedIn piece starts on Copy for LinkedIn. */
+function exportKind(platform: string | undefined) {
+  const id = (platform ?? 'essay').toLowerCase()
+  const k = findKind(kinds(), id)
+  return { id, name: k?.name ?? id }
 }
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */

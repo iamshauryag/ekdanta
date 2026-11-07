@@ -19,8 +19,9 @@ import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
 import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
 import { runReader, type ReaderRequest } from './reader.ts'
-import { HttpError, isSameOrigin, local, statusOf } from './net.ts'
+import { HttpError, isLocalRequest, isSameOrigin, local, statusOf } from './net.ts'
 import { addUpload, commit, convert, openBatch, preview, undo } from './import/index.ts'
+import { exportDoc, pandoc, type ExportRequest } from './export.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
 import { applyTemplateTo, listTemplates, seedTemplates } from './templates.ts'
@@ -336,6 +337,11 @@ const routes: Record<string, Handler> = {
   // The starter set, written only when the writer asks; files already there are never replaced.
   'POST /api/templates/seed': async () => seedTemplates(),
   'GET /api/meta': async (_req, url) => splitFrontMatter(await readDoc(url.searchParams.get('path') ?? '')).meta,
+  // Which engine makes Word files: pandoc (run on this machine) or the built-in one.
+  'GET /api/export/engine': local(async () => {
+    const p = await pandoc()
+    return { pandoc: p?.version ?? null }
+  }),
   // Ideas: ideas.md at the top of the vault, only ever appended to; stars are the app's own.
   'GET /api/ideas': async () => listIdeas(),
   'POST /api/ideas': async (req) => {
@@ -396,6 +402,27 @@ export function ekdantaApi(): Plugin {
           } catch {
             res.statusCode = 404
             return res.end()
+          }
+        }
+        // An export comes back as the file itself, like an image; saved into the vault, as JSON.
+        if (req.method === 'POST' && url.pathname === '/api/export') {
+          try {
+            // It may run pandoc and writes outside documents, so only from this computer.
+            if (!isLocalRequest(req)) throw new HttpError(403, 'Only available on this computer')
+            const r = await exportDoc(await body<ExportRequest>(req))
+            const info = { name: r.name, engine: r.engine, warnings: r.warnings, saved: r.saved ?? null }
+            if (r.saved) {
+              res.setHeader('content-type', 'application/json')
+              return res.end(JSON.stringify(info))
+            }
+            res.setHeader('content-type', r.type)
+            res.setHeader('content-disposition', `attachment; filename="${r.name.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(r.name)}`)
+            res.setHeader('x-ekdanta-export', encodeURIComponent(JSON.stringify(info)))
+            return res.end(r.data)
+          } catch (e) {
+            res.statusCode = statusOf(e)
+            res.setHeader('content-type', 'application/json')
+            return res.end(JSON.stringify({ error: (e as Error).message }))
           }
         }
         const handler = routes[`${req.method} ${url.pathname}`]

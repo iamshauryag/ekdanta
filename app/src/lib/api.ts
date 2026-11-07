@@ -103,6 +103,17 @@ export interface Thinking {
 }
 type Frag = { id: string; text: string }
 
+/** What an export made: its file name, the engine that made a Word file, and what the writer should know. */
+export interface Exported {
+  name: string
+  engine: 'pandoc' | 'built-in' | null
+  warnings: string[]
+  /** Where it was saved in the vault, or null when it came back as a download. */
+  saved: string | null
+  /** The file, for a download. */
+  blob: Blob | null
+}
+
 /** A request the server answered with an error: its status, its code when it gives one (VAULT_UNAVAILABLE), and anything else it sent. */
 export class ApiError extends Error {
   readonly status: number
@@ -275,6 +286,16 @@ export const api = {
   startIdea: (text: string, kind: string) => fetch('/api/ideas/start', send('POST', { text, kind })).then(json<{ path: string }>),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),
   readAs: (req: { doc: string; platform: string; reader: Reader; text: string; selection: boolean }) => fetch('/api/reader', send('POST', req)).then(json<ReaderReply>),
+  exportEngine: () => fetch('/api/export/engine').then(json<{ pandoc: string | null }>),
+  exportFile: async (path: string, format: 'docx' | 'html' | 'md', options: { destination: 'download' | 'vault' }): Promise<Exported> => {
+    const r = await fetch('/api/export', send('POST', { path, format, options }))
+    if (!r.ok || r.headers.get('content-type')?.startsWith('application/json')) {
+      const data = await json<Omit<Exported, 'blob'>>(r)
+      return { ...data, blob: null }
+    }
+    const info = JSON.parse(decodeURIComponent(r.headers.get('x-ekdanta-export') ?? '%7B%7D')) as Omit<Exported, 'blob'>
+    return { ...info, blob: await r.blob() }
+  },
 }
 
 export type ReaderReply = { kind: 'questions'; items: ReaderQuestion[]; provider: string } | { kind: 'empty' | 'error'; message: string }

@@ -40,6 +40,7 @@ export interface FileActions {
   remove: (path: string) => void
   /** Open the page's Document layout: page view, style, header, target. */
   layout: (path: string) => void
+  export: (path: string) => void
   /** Open the page with its brief's paste box (or its pinned brief, to edit). */
   pinBrief: (path: string) => void
   /** Whether the page has a brief pinned, as far as the app knows. */
@@ -324,6 +325,9 @@ function FileRow({
           </button>
           <button role="menuitem" onClick={act(() => actions.pinBrief(f.path))}>
             {briefLabel(f.platform, actions.hasBrief(f.path))}
+          </button>
+          <button role="menuitem" onClick={act(() => actions.export(f.path))}>
+            Export…
           </button>
           <hr />
           <button role="menuitem" className="danger" onClick={act(() => actions.remove(f.path))}>

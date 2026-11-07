@@ -10,6 +10,7 @@ import type Token from 'markdown-it/lib/token.mjs'
 import markPlugin from 'markdown-it-mark'
 import { tokenizer } from '../editor/markdown.ts'
 import { splitFrontMatter } from './frontmatter.ts'
+import { slug } from './slug.ts'
 import { isPromptParagraph } from './special.ts'
 
 export type ExportFormat = 'docx' | 'pdf' | 'html' | 'md' | 'linkedin' | 'plain' | 'rich'
@@ -81,6 +82,14 @@ export function prepare(content: string, opts: PrepareOptions): Prepared {
       if (isPromptParagraph(lines.slice(from, to).join('\n'))) for (let i = from; i < to; i++) drop.add(i)
     }
   }
+  // The lines of each paragraph, heading or table row, read as one: a tag or a code span can run over
+  // a line break, and read line by line `<img\nsrc=x onerror=…>` would never be seen as a tag.
+  const blockOf = new Array<number>(lines.length).fill(-1)
+  for (const t of tokenizer().parse(body, {})) {
+    if (t.type !== 'inline' || !t.map) continue
+    const [from, to] = t.map
+    for (let i = from; i < to; i++) if (blockOf[i] === -1 && !drop.has(i) && !code.has(i) && !html.has(i)) blockOf[i] = from
+  }
 
   const missing = new Set<string>()
   const image = (alt: string, src: string, title = '') => {
@@ -105,15 +114,25 @@ export function prepare(content: string, opts: PrepareOptions): Prepared {
   const out: string[] = []
   let footnotes = 0
   let citations = 0
-  lines.forEach((line, i) => {
-    if (drop.has(i)) return
-    if (code.has(i)) return out.push(line)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (drop.has(i)) continue
+    if (code.has(i)) {
+      out.push(line)
+      continue
+    }
     if (html.has(i)) {
       // Shown as the text it is, so nothing the writer wrote silently disappears.
-      return out.push(line.replace(/</g, '\\<'))
+      out.push(line.replace(/</g, '\\<'))
+      continue
     }
+    // A block's lines go through together; a line outside any block goes through alone.
+    let end = i + 1
+    if (blockOf[i] !== -1) while (end < lines.length && blockOf[end] === blockOf[i]) end++
+    const chunk = lines.slice(i, end).join('\n')
+    i = end - 1
     out.push(
-      outsideCode(line, (text) => {
+      outsideCode(chunk, (text) => {
         footnotes += (text.match(/\[\^[^\]\s]+\](?!:)/g) ?? []).length
         citations += (text.match(/\[[^\]]*-?@[\w:.#$%&+?<>~/-]+[^\]]*\]/g) ?? []).length
         // Links and images are set aside while raw HTML is looked for, so `<a path.png>` isn't taken for a tag.
@@ -128,10 +147,10 @@ export function prepare(content: string, opts: PrepareOptions): Prepared {
             htmlTags++
             return tag.replace(/</g, '\\<')
           })
-          .replace(/\u0001(\d+)\u0001/g, (_m, i: string) => kept[Number(i)])
+          .replace(/\u0001(\d+)\u0001/g, (_m, k: string) => kept[Number(k)])
       }),
     )
-  })
+  }
   if (htmlBlocks) warnings.push(`${plural(htmlBlocks, 'HTML block')} exported as text`)
   if (htmlTags) warnings.push(`${plural(htmlTags, 'HTML tag')} exported as text`)
   warnings.push(...missing)
@@ -150,11 +169,15 @@ export function prepare(content: string, opts: PrepareOptions): Prepared {
   }
 }
 
-/** What an engine without footnotes or citations (all but pandoc) says about them. */
-export function syntaxWarnings(counts: Prepared['counts'], engine: 'pandoc' | 'built-in' | 'markdown'): string[] {
+/**
+ * What an export without footnotes or citations says about them. Pandoc makes footnotes and leaves
+ * citations; the built-in Word engine leaves both, and says pandoc would make the footnotes; HTML,
+ * PDF and the copies (`as-written`) leave both as written. Clean Markdown keeps them as Markdown.
+ */
+export function syntaxWarnings(counts: Prepared['counts'], engine: 'pandoc' | 'built-in' | 'as-written' | 'markdown'): string[] {
   if (engine === 'markdown') return []
   const w: string[] = []
-  if (counts.footnotes && engine === 'built-in') w.push(`${plural(counts.footnotes, 'footnote mark')} like [^1] exported as written (pandoc turns them into footnotes)`)
+  if (counts.footnotes && engine !== 'pandoc') w.push(`${plural(counts.footnotes, 'footnote mark')} like [^1] exported as written${engine === 'built-in' ? ' (pandoc turns them into footnotes)' : ''}`)
   if (counts.citations) w.push(`${plural(counts.citations, 'citation')} like [@key] exported as written`)
   return w
 }
@@ -343,9 +366,24 @@ function matching(tokens: Token[], i: number) {
 
 // ---- HTML -------------------------------------------------------------------------------------
 
-/** The prepared body as an HTML fragment. A single line break shows as a break, as on the page. */
+/** <u> and </u>, the one tag prepare() keeps. */
+const U_TAG = /^<(\/?)u>/i
+
+/**
+ * The prepared body as an HTML fragment. A single line break shows as a break, as on the page.
+ * Raw HTML is never passed through, whatever prepare() missed: it goes into the app's own page when
+ * printing and into files and the clipboard, so a note from someone else must not carry a script.
+ * Only <u> is let through, as itself.
+ */
 export function toHtml(body: string): string {
-  const md = new MarkdownIt('commonmark', { html: true, breaks: true }).enable(['table', 'strikethrough']).use(markPlugin)
+  const md = new MarkdownIt('commonmark', { html: false, breaks: true }).enable(['table', 'strikethrough']).use(markPlugin)
+  md.inline.ruler.before('html_inline', 'underline_tag', (state, silent) => {
+    const m = U_TAG.exec(state.src.slice(state.pos, state.pos + 4))
+    if (!m) return false
+    if (!silent) state.push('html_inline', '', 0).content = m[1] ? '</u>' : '<u>'
+    state.pos += m[0].length
+    return true
+  })
   return md
     .render(body)
     .replace(/<li>(<p>)?\[ \] /g, '<li class="task">$1☐ ')
@@ -398,24 +436,9 @@ hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 
 // ---- File names -------------------------------------------------------------------------------
 
-// The Unicode-safe slug the app names documents with (kept in step with lib/slug.ts on the kind and
-// name fixes): Latin text loses its accents, other scripts keep their letters, and everything that
-// isn't a letter, mark or digit (slashes, colons, emoji) becomes one hyphen.
-const LATIN_RUN = /\p{Script=Latin}[\p{Script=Latin}\p{M}]*/gu
-const NOT_NAME = /[^\p{L}\p{M}\p{N}]+/gu
-
-/** An export's file name, from the title: "Café / Notes" → "cafe-notes.docx". */
+/** An export's file name, from the title, by the same Unicode-safe rule as documents: "Café / Notes" → "cafe-notes.docx". */
 export function exportName(title: string, ext: string, fallback = 'export'): string {
-  const s = title
-    .normalize('NFC')
-    .replace(LATIN_RUN, (run) => run.normalize('NFKD').replace(/\p{M}/gu, ''))
-    .toLowerCase()
-    .replace(/['’]/g, '')
-    .replace(NOT_NAME, '-')
-    .replace(/^-+|-+$/g, '')
-    .normalize('NFC')
-  const chars = Array.from(s)
-  const name = (chars.length <= 80 ? s : chars.slice(0, 80).join('').replace(/-+$/, '')) || exportName(fallback, '', 'export').replace(/\.$/, '') || 'export'
+  const name = slug(title, 80) || slug(fallback, 80) || 'export'
   return ext ? `${name}.${ext}` : name
 }
 

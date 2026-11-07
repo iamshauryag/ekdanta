@@ -62,6 +62,24 @@ test('footnotes and citations are counted; only engines without them warn', () =
   assert.equal(syntaxWarnings(p.counts, 'pandoc').length, 1)
   assert.deepEqual(syntaxWarnings(p.counts, 'markdown'), [])
   assert.deepEqual(syntaxWarnings(prepare('mail me at a@b.com\n', { page }).counts, 'built-in'), [])
+  // PDF, HTML and the copies leave both as written, and don't send the writer to pandoc.
+  assert.deepEqual(syntaxWarnings(p.counts, 'as-written'), ['1 footnote mark like [^1] exported as written', '1 citation like [@key] exported as written'])
+})
+
+test('a tag written over several lines is still caught and exported as text', () => {
+  const p = prepare('Hello <img\nsrc=x onerror="alert(1)"> there\nand <span\nclass="a">on</span> on.\n', { page })
+  assert.match(p.body, /\\<img\nsrc=x onerror="alert\(1\)">/)
+  assert.deepEqual(p.warnings, ['3 HTML tags exported as text'])
+  assert.doesNotMatch(toHtml(p.body), /<img|<span/)
+  // A code span over a line break is still code.
+  assert.equal(prepare('Use `a\n<b>` here.\n', { page }).body, 'Use `a\n<b>` here.\n')
+})
+
+test('HTML output never carries raw HTML, whatever reaches it; <u> is the one tag kept', () => {
+  const html = toHtml('<img src=x onerror="alert(1)">\n\n<script>alert(1)</script>\n\nText <img\nsrc=y onerror=z> and <u>under</u>, \\<u>not</u>.\n')
+  assert.doesNotMatch(html, /<img|<script/)
+  assert.match(html, /&lt;img src=x onerror=&quot;alert\(1\)&quot;&gt;/)
+  assert.match(html, /and <u>under<\/u>, &lt;u&gt;not<\/u>\./)
 })
 
 test('clean Markdown keeps only title and date', () => {
