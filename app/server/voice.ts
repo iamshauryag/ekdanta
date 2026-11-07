@@ -7,7 +7,7 @@ import path from 'node:path'
 import { generate, parseJson, status } from './ai.ts'
 import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from './vault.ts'
 import { loadSettings } from './settings.ts'
-import { kindName } from '../src/lib/kinds.ts'
+import { KIND_ID, kindName } from '../src/lib/kinds.ts'
 import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 
 const DIR = path.join(META_DIR, 'voice')
@@ -34,9 +34,9 @@ export interface VoiceSummary {
   exemplars: number
 }
 
-const platformOf = (f: FileEntry) => (f.platform ?? 'essay').toLowerCase()
+const platformOf = (f: FileEntry) => (f.platform ?? 'essay').normalize('NFC').toLowerCase()
 const file = (platform: string) => {
-  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(platform)) throw new Error('Unknown platform')
+  if (!KIND_ID.test(platform)) throw new Error('Unknown platform')
   return path.join(DIR, `${platform}.md`)
 }
 

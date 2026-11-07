@@ -5,6 +5,7 @@ import path from 'node:path'
 import { applyPatch, joinFrontMatter, splitFrontMatter as splitFull, type MetaPatch } from '../src/lib/frontmatter.ts'
 import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
 import { isSpecialPath } from '../src/lib/special.ts'
+import { docSlug, sameName, slug } from '../src/lib/slug.ts'
 import { createFileCache, type FileStat } from './cache.ts'
 import { META_DIR, VAULT } from './paths.ts'
 
@@ -195,19 +196,8 @@ export function isUntitled(rel: string) {
   return /^untitled(-\d+)?\.md$/.test(path.posix.basename(rel))
 }
 
-export function slugify(title: string) {
-  return (
-    title
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/['’]/g, '')
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 60)
-      .replace(/-$/, '') || 'untitled'
-  )
-}
+/** A document's file name from its title, in any script: "मेरा निबंध" → मेरा-निबंध. A title with nothing nameable (emoji only) gets note-<date>. */
+export const slugify = (title: string) => docSlug(title, today())
 
 /** `folder/name.md`, or `folder/name-2.md` and so on if that's taken. */
 async function freePath(folder: string, name: string) {
@@ -232,7 +222,10 @@ export async function createDoc(kinds: Kind[], folder: string, platform?: string
 /** Give an untitled document a file name from its title. Named documents keep theirs, so links to them never break. */
 export async function nameDoc(rel: string, title: string) {
   if (!isUntitled(rel) || !title.trim()) return rel
-  return moveDoc(rel, await freePath(folderOf(rel), slugify(title)))
+  const name = slugify(title)
+  // A title that slugs to the name it already has ("Untitled") stays put rather than hopping to untitled-2.md.
+  if (sameName(name, path.posix.basename(rel, '.md'))) return rel
+  return moveDoc(rel, await freePath(folderOf(rel), name))
 }
 
 /** Rename a document. Its sidecars (history, Thinking Space, Ekdanta's notes on it) move too, if there are any yet. */
@@ -293,22 +286,30 @@ export async function renameDoc(rel: string, title: string) {
   if (!title) return rel
   await patchDoc(rel, { title }, 'rename')
   const name = slugify(title)
-  const from = path.posix.basename(rel, '.md')
-  if (name === from) return rel
+  // macOS may hand back a decomposed (NFD) file name for a title typed composed: still the same name.
+  if (sameName(name, path.posix.basename(rel, '.md'))) return rel
   const next = await moveDoc(rel, await freePath(folderOf(rel), name))
   await relink(rel, next)
   return next
 }
 
 /** Point [[links]] at a document's new name, in the vault and in Ekdanta's own notes (voice profiles quote by link). */
-async function relink(prev: string, next: string) {
-  const oldName = path.posix.basename(prev, '.md')
-  const newName = path.posix.basename(next, '.md')
-  const oldFull = prev.replace(/\.md$/, '')
-  const newFull = next.replace(/\.md$/, '')
+const relink = (prev: string, next: string) => relinkAll([[prev, next]])
+
+/** Point [[links]] at several documents' new names in one pass over the vault, so a link is changed at most once. */
+async function relinkAll(moves: [prev: string, next: string][]) {
+  const to = new Map<string, string>()
+  for (const [prev, next] of moves) {
+    const oldName = path.posix.basename(prev, '.md')
+    const newName = path.posix.basename(next, '.md')
+    to.set(prev.replace(/\.md$/, ''), next.replace(/\.md$/, ''))
+    if (oldName !== newName) to.set(oldName, newName)
+  }
+  if (!to.size) return
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const re = new RegExp(`\\[\\[(${esc(oldFull)}|${esc(oldName)})(\\.md)?(#[^\\]|]*)?(\\|[^\\]]*)?\\]\\]`, 'g')
-  const fix = (text: string) => text.replace(re, (_m, target: string, ext = '', heading = '', alias = '') => `[[${target === oldFull ? newFull : newName}${ext}${heading}${alias}]]`)
+  const names = [...to.keys()].sort((a, b) => b.length - a.length).map(esc)
+  const re = new RegExp(`\\[\\[(${names.join('|')})(\\.md)?(#[^\\]|]*)?(\\|[^\\]]*)?\\]\\]`, 'g')
+  const fix = (text: string) => text.replace(re, (_m, target: string, ext = '', heading = '', alias = '') => `[[${to.get(target) ?? target}${ext}${heading}${alias}]]`)
   for (const f of await listFiles()) {
     const text = await readDoc(f.path)
     const out = fix(text)
@@ -321,6 +322,72 @@ async function relink(prev: string, next: string) {
     const out = fix(text)
     if (out !== text) await atomicWrite(path.join(voice, f), out)
   }
+}
+
+/** A vault-relative folder in a standard form, refusing dot-folders and anything outside the vault. */
+function cleanFolder(folder: string) {
+  const f = folder
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .trim()
+  if (!f || f.split('/').some((part) => !part || part.startsWith('.'))) throw new Error('Not a folder for documents')
+  resolveInVault(f)
+  return f
+}
+
+/**
+ * Rename a folder: every document in it (and in its subfolders) moves through moveDoc, so its history,
+ * Thinking Space and write record follow, and [[links]] to it are updated. If the new folder already
+ * exists the two are merged; a name already taken there gets -2. Other files move with them, and the
+ * old folder is removed once it's empty. Returns the documents moved.
+ */
+export async function renameFolder(from: string, to: string): Promise<{ from: string; to: string }[]> {
+  from = cleanFolder(from)
+  to = cleanFolder(to)
+  if (sameName(from, to)) return []
+  if (to.normalize('NFC').startsWith(from.normalize('NFC') + '/')) throw new Error("A folder can't move inside itself")
+  const src = resolveInVault(from)
+  if (!(await fs.stat(src).catch(() => null))?.isDirectory()) throw new Error(`There's no ${from}/ folder`)
+  const depth = from.split('/').length
+  const within = (rel: string) => {
+    const parts = rel.split('/')
+    return parts.length > depth && sameName(parts.slice(0, depth).join('/'), from) ? parts.slice(depth).join('/') : null
+  }
+  const moved: { from: string; to: string }[] = []
+  for (const f of await listFiles()) {
+    const rest = within(f.path)
+    if (rest === null) continue
+    const dir = path.posix.dirname(rest)
+    const next = await moveDoc(f.path, await freePath(dir === '.' ? to : `${to}/${dir}`, path.posix.basename(rest, '.md')))
+    moved.push({ from: f.path, to: next })
+  }
+  await relinkAll(moved.map((m) => [m.from, m.to]))
+  // Whatever else is left (images, a stray file of the writer's) goes along, beside the documents.
+  await moveRest(src, resolveInVault(to))
+  return moved
+}
+
+async function moveRest(srcDir: string, destDir: string) {
+  for (const e of await fs.readdir(srcDir, { withFileTypes: true }).catch(() => [])) {
+    const from = path.join(srcDir, e.name)
+    if (e.isDirectory()) {
+      await moveRest(from, path.join(destDir, e.name))
+      continue
+    }
+    // Finder's own bookkeeping isn't the writer's; it would only keep the old folder from going.
+    if (e.name === '.DS_Store') {
+      await fs.unlink(from).catch(() => {})
+      continue
+    }
+    await fs.mkdir(destDir, { recursive: true })
+    const ext = path.extname(e.name)
+    const stem = e.name.slice(0, e.name.length - ext.length)
+    let dest = path.join(destDir, e.name)
+    for (let n = 2; await exists(dest); n++) dest = path.join(destDir, `${stem}-${n}${ext}`)
+    await fs.rename(from, dest).catch((err) => console.error(`[ekdanta] couldn't move ${from}:`, err))
+  }
+  // Only an empty folder is removed: rmdir refuses one that still holds anything.
+  await fs.rmdir(srcDir).catch(() => {})
 }
 
 /** Move a document to another folder. A platform's folder makes it a piece for that platform. */
@@ -407,7 +474,7 @@ const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg
 export async function saveAsset(doc: string, name: string, base64: string) {
   const ext = (name.match(/\.([a-z0-9]+)$/i)?.[1] ?? 'png').toLowerCase()
   if (!IMAGE_TYPES[ext]) throw new Error('Only images can be added')
-  const stem = slugify(name.replace(/\.[^.]+$/, '')) || 'image'
+  const stem = slug(name.replace(/\.[^.]+$/, ''), 60) || 'image'
   let rel = ''
   for (let n = 1; ; n++) {
     rel = `attachments/${stem}${n > 1 ? '-' + n : ''}.${ext}`
@@ -482,6 +549,14 @@ export async function appendHistory(doc: string, item: unknown) {
   const file = historyFile(doc)
   await fs.mkdir(path.dirname(file), { recursive: true })
   await fs.appendFile(file, JSON.stringify(item) + '\n', 'utf8')
+}
+
+/** Clear a document's help log. The file stays, empty, so the log reads empty after a reload too. */
+export async function clearHistory(doc: string) {
+  resolveInVault(doc)
+  await fs.truncate(historyFile(doc), 0).catch((e: NodeJS.ErrnoException) => {
+    if (e.code !== 'ENOENT') throw e
+  })
 }
 
 export async function readHistory(doc: string): Promise<unknown[]> {

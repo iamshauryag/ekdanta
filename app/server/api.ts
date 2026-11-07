@@ -13,6 +13,7 @@ import { material, readThinking, recallChips, suggestClusters, suggestLinks, wri
 import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
+import { doubledFolder } from '../src/lib/kinds.ts'
 import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
 import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
@@ -22,6 +23,7 @@ import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snaps
 import {
   VAULT,
   appendHistory,
+  clearHistory,
   createDoc,
   discardIfEmpty,
   listFiles,
@@ -32,6 +34,7 @@ import {
   nameDoc,
   placeDoc,
   renameDoc,
+  renameFolder,
   duplicateDoc,
   restoreDoc,
   trashDoc,
@@ -159,6 +162,24 @@ const routes: Record<string, Handler> = {
     const { doc, item } = await body<{ doc: string; item: unknown }>(req)
     await appendHistory(doc, item)
     return { ok: true }
+  },
+  'DELETE /api/history': async (_req, url) => {
+    await clearHistory(url.searchParams.get('doc') ?? '')
+    return { ok: true }
+  },
+  // A kind whose folder doubled its plural (yt-scriptses/): move its pieces into the proper folder, then file there.
+  'POST /api/kinds/rename-folder': async (req) => {
+    const { id } = await body<{ id: string }>(req)
+    const { kinds } = await loadSettings()
+    const kind = kinds.find((k) => k.id === id)
+    const to = kind && doubledFolder(kind)
+    if (!kind || !to) throw new Error('That kind’s folder needs no renaming')
+    const owner = kinds.find((k) => k !== kind && k.folder === to)
+    if (owner) throw new Error(`${to}/ is already the ${owner.name} folder`)
+    const moved = await renameFolder(kind.folder, to)
+    const settings = await saveSettings({ kinds: kinds.map((k) => (k === kind ? { ...k, folder: to } : k)) })
+    refresh().catch(() => {})
+    return { settings, moved }
   },
   // Front-matter changes to a document that isn't open in the editor (starring it from the Vault, say).
   'POST /api/meta': async (req) => {

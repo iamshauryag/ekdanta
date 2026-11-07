@@ -53,6 +53,8 @@ const COMMAND_LIST = [
   { id: 'settings', label: 'Settings', group: 'App', key: 'Alt-,' },
   { id: 'saveVersion', label: 'Save version…', group: 'App', key: '' },
   { id: 'versions', label: 'Version history', group: 'App', key: '' },
+  // The help ladder's own dismiss key, here so it also works from the panel or a card's buttons.
+  { id: 'dismissHelp', label: 'Dismiss help', group: 'App', key: 'Mod-0' },
   { id: 'readAloud', label: 'Read aloud', group: 'App', key: '' },
   // ⌘⇧I on a Mac; elsewhere Ctrl+Shift+I opens the browser's developer tools, so Ctrl+Alt+I.
   { id: 'captureIdea', label: 'Capture idea', group: 'App', key: isMac ? 'Mod-Shift-i' : 'Mod-Alt-i' },

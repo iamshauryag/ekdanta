@@ -17,7 +17,7 @@ import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
 import { LimitStatus, textStore } from './components/LimitStatus.tsx'
-import { helpMod, noteCmdWorks } from './editor/help.ts'
+import { dismissHelp, helpMod, helpShowing, noteCmdWorks } from './editor/help.ts'
 import { fieldSlot, type EdgeSlot } from './lib/edge.ts'
 import { CaptureBox } from './components/CaptureBox.tsx'
 import { IdeasPage } from './components/IdeasPage.tsx'
@@ -521,6 +521,16 @@ export function App() {
     setPath(next)
   }
 
+  /** Settings → Kinds: move a kind's pieces out of a doubled-plural folder, following the open document if it moves. */
+  const renameKindFolder = async (id: string) => {
+    if (saveTimer.current !== undefined) await save()
+    const { settings: next, moved } = await api.renameKindFolder(id)
+    setSettings(next)
+    const mine = moved.find((m) => m.from === docRef.current?.path)
+    if (mine) follow(mine.to)
+    await refreshFiles()
+  }
+
   /** ★ a document as an exemplar of its platform, or un-star it. */
   const toggleExemplar = async (rel: string) => {
     const f = files.find((x) => x.path === rel)
@@ -734,12 +744,18 @@ export function App() {
         setHistorySeg('versions')
         setVersionsAsk((a) => a + 1)
       },
+      dismissHelp: () => void dismissHelp(),
       brief: () => void (docRef.current && pinBrief(docRef.current.path)),
       readAloud: () => (livePreview ? window.dispatchEvent(new Event('ekdanta:read-aloud')) : notify('Read aloud works on the page, not in the Markdown view')),
       captureIdea: () => setCaptureOpen((o) => !o),
       ideas: () => openIdeas(),
     }
     const onKey = (e: KeyboardEvent) => {
+      // The editor dismisses help itself; from the panel or a card's buttons, ⌘0 and Esc do it here.
+      const fromAside = (e.target as Element | null)?.closest?.('.panel, .hl-card, .hl-nudge, .hl-bar, .hl-line')
+      // Already handled by the editor, or nothing to dismiss: leave the key alone (⌘0 resets the zoom).
+      if (matches(e, binding('dismissHelp')) && (e.defaultPrevented || !helpShowing())) return
+      if (e.key === 'Escape' && fromAside && !e.defaultPrevented && dismissHelp()) return e.preventDefault()
       if (focus && e.key === 'Escape' && !document.querySelector('.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost')) return setFocus(false)
       for (const [id, action] of Object.entries(appActions)) {
         if (action && matches(e, binding(id))) {
@@ -1028,7 +1044,10 @@ export function App() {
           thoughts={thoughts}
           onOpenDoc={openDoc}
           onExemplar={() => current && toggleExemplar(current.path)}
-          onClearHistory={() => setHistory([])}
+          onClearHistory={() => {
+            if (!docRef.current) return
+            api.clearHistory(docRef.current.path).then(() => setHistory([]))
+          }}
           historySeg={historySeg}
           onHistorySeg={setHistorySeg}
           versions={{ tick: versionsTick, ask: versionsAsk, open: preview?.id ?? null, onSave: saveVersion, onOpen: setPreview }}
@@ -1058,7 +1077,7 @@ export function App() {
       {captureOpen && <CaptureBox onCapture={captureIdea} onClose={() => setCaptureOpen(false)} />}
       {thinkingOpen && loaded && <ThinkingSpace doc={loaded.path} title={title} onClose={closeThinking} />}
 
-      {settingsOpen && settings && <Settings settings={settings} status={status} onChange={changeSettings} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && settings && <Settings settings={settings} status={status} onChange={changeSettings} onClose={() => setSettingsOpen(false)} onRenameKindFolder={renameKindFolder} />}
 
       <footer className="statusbar">
         <span>

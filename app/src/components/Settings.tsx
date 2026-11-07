@@ -12,6 +12,7 @@ interface Props {
   status: Status | null
   onChange: (patch: Partial<S>) => void
   onClose: () => void
+  onRenameKindFolder?: (id: string) => Promise<void>
 }
 
 const CLAUDE_MODELS = ['haiku', 'sonnet', 'opus']
@@ -27,7 +28,7 @@ type Tab = (typeof TABS)[number]['id']
 // Reopening Settings returns to the tab you left.
 let lastTab: Tab = 'writing'
 
-export function Settings({ settings: s, status, onChange, onClose }: Props) {
+export function Settings({ settings: s, status, onChange, onClose, onRenameKindFolder }: Props) {
   const sheet = useRef<HTMLDivElement>(null)
   const [index, setIndex] = useState<string | null>(null)
   const [tab, setTabState] = useState<Tab>(lastTab)
@@ -143,7 +144,7 @@ export function Settings({ settings: s, status, onChange, onClose }: Props) {
           {tab === 'kinds' && (
             <section>
               <p className="sheet-note">What you write. Each kind files its pieces in its own folder, learns its own voice profile, and tells the help levels how the piece should read.</p>
-              <Kinds kinds={s.kinds} onChange={(kinds) => onChange({ kinds })} />
+              <Kinds kinds={s.kinds} onChange={(kinds) => onChange({ kinds })} onRenameFolder={onRenameKindFolder} />
             </section>
           )}
 

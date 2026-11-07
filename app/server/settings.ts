@@ -2,8 +2,8 @@
 // shares them. Environment variables give the defaults. API keys are never stored here.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { META_DIR } from './paths.ts'
-import { cleanKinds, DEFAULT_KINDS, type Kind } from '../src/lib/kinds.ts'
+import { META_DIR, VAULT } from './paths.ts'
+import { cleanKinds, DEFAULT_KINDS, doubledFolder, type Kind } from '../src/lib/kinds.ts'
 
 export type ProviderChoice = 'auto' | 'claude-cli' | 'anthropic-api' | 'ollama'
 
@@ -53,12 +53,35 @@ export async function loadSettings(): Promise<Settings> {
   if (current) return current
   try {
     const saved = JSON.parse(await fs.readFile(FILE, 'utf8')) as Partial<Settings>
-    current = { ...DEFAULTS, ...saved, kinds: cleanKinds(saved.kinds) ?? DEFAULTS.kinds, excludedFolders: cleanFolders(saved.excludedFolders) }
+    current = { ...DEFAULTS, ...saved, kinds: await settleFolders(cleanKinds(saved.kinds) ?? DEFAULTS.kinds), excludedFolders: cleanFolders(saved.excludedFolders) }
   } catch {
     current = { ...DEFAULTS }
   }
   return current
 }
+
+/**
+ * A kind saved with a doubled plural folder (yt-scriptses/, from before the word rules) gets its
+ * proper folder when the doubled one holds nothing, so there is nothing to move. One that holds
+ * pieces keeps it until the writer renames it from Settings → Kinds. A proper folder another kind
+ * already files into is left alone too: two kinds sharing one folder would mix up their pieces.
+ */
+async function settleFolders(kinds: Kind[]): Promise<Kind[]> {
+  const taken = new Set(kinds.map((k) => k.folder))
+  return Promise.all(
+    kinds.map(async (k) => {
+      const fix = doubledFolder(k)
+      if (!fix || taken.has(fix) || (await holdsAnything(path.join(VAULT, k.folder)))) return k
+      return { ...k, folder: fix }
+    }),
+  )
+}
+
+const holdsAnything = (abs: string) =>
+  fs.readdir(abs).then(
+    (names) => names.some((n) => n !== '.DS_Store'),
+    () => false,
+  )
 
 /** Vault-relative folder paths, tidied: forward slashes, no leading or trailing slash, no dot-folders or `..`, no repeats. */
 function cleanFolders(value: unknown): string[] {
@@ -89,7 +112,7 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
     if (key in patch && typeof patch[key] === typeof DEFAULTS[key]) (next as unknown as Record<string, unknown>)[key] = patch[key]
   }
   next.ceiling = Math.max(0, Math.min(5, Math.round(next.ceiling)))
-  next.kinds = cleanKinds(next.kinds) ?? prev.kinds
+  next.kinds = await settleFolders(cleanKinds(next.kinds) ?? prev.kinds)
   next.excludedFolders = cleanFolders(next.excludedFolders)
   next.keys = Object.fromEntries(Object.entries(next.keys ?? {}).filter(([k, v]) => /^[\w.-]+$/.test(k) && typeof v === 'string' && v.length < 40))
   current = next

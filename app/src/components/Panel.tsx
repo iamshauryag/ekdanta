@@ -121,7 +121,7 @@ export function Panel(p: Props) {
                 </button>
               ))}
             </div>
-            {p.historySeg === 'versions' ? <VersionsList doc={p.path} {...p.versions} /> : <HistoryLog history={p.history} />}
+            {p.historySeg === 'versions' ? <VersionsList doc={p.path} {...p.versions} /> : <HistoryLog key={p.path ?? ''} history={p.history} onClear={p.onClearHistory} />}
           </>
         )}
         {p.tab === 'piece' && <Piece {...p} />}
@@ -329,8 +329,9 @@ function Material({
   )
 }
 
-function HistoryLog({ history }: { history: HistoryItem[] }) {
+function HistoryLog({ history, onClear }: { history: HistoryItem[]; onClear: () => void }) {
   const items = [...history].reverse()
+  const [asking, setAsking] = useState(false)
   return (
     <>
       <div className="panel-head">
@@ -362,6 +363,32 @@ function HistoryLog({ history }: { history: HistoryItem[] }) {
           <div className={`outcome is-${h.outcome.replace(/\s/g, '-')}`}>{h.outcome}</div>
         </div>
       ))}
+      {items.length > 0 && (
+        <p className="history-clear">
+          {asking ? (
+            <>
+              Clear this document’s help log? It can’t be undone.{' '}
+              <button
+                className="link-btn is-danger"
+                onClick={() => {
+                  setAsking(false)
+                  onClear()
+                }}
+              >
+                Clear
+              </button>{' '}
+              ·{' '}
+              <button className="link-btn" onClick={() => setAsking(false)}>
+                Keep
+              </button>
+            </>
+          ) : (
+            <button className="link-btn" onClick={() => setAsking(true)}>
+              Clear help log
+            </button>
+          )}
+        </p>
+      )}
     </>
   )
 }

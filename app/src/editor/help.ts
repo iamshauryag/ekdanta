@@ -135,6 +135,15 @@ export function setWidgetHooks(h: WidgetHooks) {
   hooks = h
 }
 
+export const helpShowing = () => !!hooks?.current()
+
+/** Dismiss the help showing on the page, from outside the editor (the panel, a card's buttons). False if none is showing. */
+export function dismissHelp() {
+  if (!helpShowing()) return false
+  hooks?.dismiss()
+  return true
+}
+
 // ---- Labels -------------------------------------------------------------------------------
 
 const LEVEL_NAMES: Record<Level, string> = { 1: 'Recall', 2: 'Nudge', 3: 'Word', 4: 'Sentence', 5: 'Passage' }

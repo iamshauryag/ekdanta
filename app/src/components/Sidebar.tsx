@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { findKind, kindName, kinds, pieceName, plural } from '../lib/kinds.ts'
+import { findKind, kindDisplayName, kindName, kindOfFolder, kinds, pieceName, plural } from '../lib/kinds.ts'
 import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
 import { briefLabel } from '../lib/brief.ts'
@@ -299,12 +299,13 @@ function FileRow({
 }
 
 // Grouped by kind, pieces read as a plural: "LinkedIn posts", "YT scripts".
-const platformLabel = (p: string) => (findKind(kinds(), p) ? plural(kindName(kinds(), p)) : p === 'note' ? 'Notes' : kindName(kinds(), p))
+const platformLabel = (p: string) => (findKind(kinds(), p) ? plural(kindDisplayName(kindName(kinds(), p))) : p === 'note' ? 'Notes' : kindName(kinds(), p))
 
 /** A kind's own folder takes the kind's name; any other keeps its own. */
 function folderLabel(folder: string) {
   if (!folder) return 'Vault'
   const last = folder.split('/').pop()!
-  const kind = !folder.includes('/') && kinds().find((k) => k.folder === last.toLowerCase())
-  return kind ? plural(kind.name) : last[0].toUpperCase() + last.slice(1)
+  // The same match that files pieces: a kind's folder, or a folder named exactly as its id.
+  const kind = kindOfFolder(kinds(), folder)
+  return kind ? plural(kindDisplayName(kind.name)) : last[0].toUpperCase() + last.slice(1)
 }

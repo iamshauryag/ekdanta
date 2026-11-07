@@ -166,6 +166,8 @@ export const api = {
   /** Keep a version: of `content` if given (the text on screen), else of the file as saved. */
   snapshot: (doc: string, opts: { reason: string; name?: string; content?: string }) => fetch('/api/versions/snapshot', send('POST', { doc, ...opts })).then(json<{ version: VersionEntry | null }>),
   nameVersion: (doc: string, id: string, name: string) => fetch('/api/versions/name', send('POST', { doc, id, name })).then(json<{ version: VersionEntry }>),
+  clearHistory: (doc: string) => fetch('/api/history?doc=' + encodeURIComponent(doc), { method: 'DELETE' }).then(json),
+  renameKindFolder: (id: string) => fetch('/api/kinds/rename-folder', send('POST', { id })).then(json<{ settings: Settings; moved: { from: string; to: string }[] }>),
   brief: (doc: string) =>
     fetch('/api/brief?doc=' + encodeURIComponent(doc))
       .then(json<{ text: string }>)

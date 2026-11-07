@@ -3097,6 +3097,60 @@ button.keymap-key:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* feature: kind-and-name-fixes */
+.kind-preview {
+  margin: -2px 0 10px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  min-height: 1.4em;
+}
+.kind-preview code {
+  font: 11.5px var(--mono);
+}
+.kind-singular {
+  color: var(--ink);
+  font-weight: 500;
+  border-bottom: 1px dashed var(--line-2);
+}
+.kind-singular:hover {
+  border-bottom-color: var(--accent);
+}
+.kind-singular-input {
+  width: 14em;
+  padding: 2px 6px;
+  font-size: 12.5px;
+}
+.kind-folder-fix .link-btn {
+  font-size: 12px;
+}
+.kind-folder-fix .link-btn:disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.kind-folder-error {
+  color: var(--del-ink);
+}
+.kind-name-taken {
+  margin: -2px 0 2px;
+  font-size: 12.5px;
+}
+.history-clear {
+  margin: 14px 0 4px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.history-clear .link-btn {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+.history-clear .link-btn:hover {
+  color: var(--ink-2);
+}
+.history-clear .link-btn.is-danger {
+  color: var(--del-ink);
+  font-weight: 500;
+}
+
 /* ---- Pinned brief (first card in the Piece tab) ------------------------------------------- */
 .brief-card {
   background: var(--page);

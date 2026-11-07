@@ -297,7 +297,7 @@ export function Editor(props: Props) {
     const h = c.help
     const mod = e.metaKey || e.ctrlKey
     if (h) {
-      if (e.key === 'Escape' || (mod && e.key === '0')) {
+      if (e.key === 'Escape' || matches(e, binding('dismissHelp'))) {
         c.dismiss()
         return true
       }
