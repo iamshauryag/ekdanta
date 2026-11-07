@@ -6,6 +6,8 @@ import type { Heading } from '../editor/Editor.tsx'
 import { Icon } from './Icon.tsx'
 import { binding, formatKey, titled } from '../lib/keys.ts'
 import { helpMod } from '../editor/help.ts'
+import type { Editor as TiptapEditor } from '@tiptap/core'
+import { OutlineList } from './OutlineList.tsx'
 import { BriefCard } from './BriefCard.tsx'
 import { EDGE_LIMITS, EDGE_NAMES, showSuggestLink, type EdgeSlot } from '../lib/edge.ts'
 
@@ -49,6 +51,10 @@ interface Props {
   onThinking: () => void
   outline: Heading[]
   onHeading: (h: Heading) => void
+  /** The page, for moving sections and paragraphs from the Outline (null while the Markdown source shows). */
+  editor: TiptapEditor | null
+  onBeforeMove: () => void
+  notify: (text: string, undo?: () => void) => void
   thoughts: Thoughts
   onOpenDoc: (path: string) => void
   onClearHistory: () => void
@@ -84,7 +90,7 @@ export function Panel(p: Props) {
       </div>
       <div className="panel-body">
         {p.tab === 'material' && <Material thinking={p.thinking} covered={p.covered} nearest={p.nearest} onOpen={p.onThinking} thoughts={p.thoughts} onOpenDoc={p.onOpenDoc} />}
-        {p.tab === 'outline' && <Outline outline={p.outline} onHeading={p.onHeading} />}
+        {p.tab === 'outline' && <OutlineList editor={p.editor} outline={p.outline} onHeading={p.onHeading} onBeforeMove={p.onBeforeMove} notify={p.notify} />}
         {p.tab === 'history' && <HistoryLog history={p.history} />}
         {p.tab === 'piece' && <Piece {...p} />}
       </div>
@@ -287,26 +293,6 @@ function Material({
       <button className="btn mat-open" onClick={onOpen}>
         Open Thinking Space {binding('thinking') && <kbd>{formatKey(binding('thinking'))}</kbd>}
       </button>
-    </>
-  )
-}
-
-/** The document's headings, as in Google Docs' outline. */
-function Outline({ outline, onHeading }: { outline: Heading[]; onHeading: (h: Heading) => void }) {
-  const top = Math.min(...outline.map((h) => h.level))
-  return (
-    <>
-      <div className="panel-head">
-        Outline <em>· {outline.length} headings</em>
-      </div>
-      {!outline.length && <p className="empty">Headings you add appear here. Start a line with #, type /heading, or press {formatKey(binding('h1')) || 'the Heading key'}.</p>}
-      <nav className="outline">
-        {outline.map((h, i) => (
-          <button key={i} className={`outline-item level-${h.level - top}`} onClick={() => onHeading(h)}>
-            {h.text}
-          </button>
-        ))}
-      </nav>
     </>
   )
 }

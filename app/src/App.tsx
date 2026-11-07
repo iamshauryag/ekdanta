@@ -153,6 +153,8 @@ export function App() {
 
   // The open document. Saves always read from here, so a save can never land in the wrong file.
   const docRef = useRef<Doc | null>(null)
+  /** Whether this server keeps versions at all; see keepVersion. */
+  const versions = useRef(true)
   // The open file as text, for the length count; it changes on every keystroke without re-rendering the app.
   const [fileText] = useState(textStore)
   const syncText = useCallback(() => {
@@ -733,6 +735,30 @@ export function App() {
 
   const saveImage = useCallback(async (name: string, data: string) => (await api.saveImage(docRef.current?.path ?? '', name, data)).src, [])
 
+  /**
+   * Keep a version of the text on screen, for version history. Without it (an older server) the
+   * request fails quietly: the change itself can still be undone with ⌘Z.
+   */
+  /**
+   * Keep a copy of the text as it is now, so a big change can be stepped back to. The version store is
+   * the version-history feature's; until that lands this server answers 404, so the first refusal turns
+   * the asking off for the rest of the session instead of a failed request per move. (Once version
+   * history is merged this can call its shared api helper, which makes the same request.)
+   */
+  const keepVersion = (reason: string) => {
+    const d = docRef.current
+    if (!d || !versions.current) return
+    fetch('/api/versions/snapshot', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ doc: d.path, reason, content: joinFrontMatter(d.rawMeta, d.meta, d.body) }),
+    })
+      .then((r) => {
+        if (r.status === 404 || r.status === 501) versions.current = false
+      })
+      .catch(() => {})
+  }
+
   /** Put the caret on a heading from the Outline. */
   const goToHeading = (h: Heading) => {
     if (!editor) return
@@ -919,6 +945,9 @@ export function App() {
           onVoice={() => openVoice(platform)}
           outline={outline}
           onHeading={goToHeading}
+          editor={editor}
+          onBeforeMove={() => keepVersion('before moving text in the outline')}
+          notify={notify}
           thinking={thinking}
           covered={material.covered}
           nearest={material.nearest}

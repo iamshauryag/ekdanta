@@ -2682,6 +2682,82 @@ kbd {
 .outline-item.level-5 {
   padding-left: 50px;
 }
+.outline-head {
+  align-items: center;
+}
+.outline-view {
+  margin-left: 6px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+}
+.outline-item {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.outline-item[draggable='true'] {
+  cursor: grab;
+}
+.outline-item:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: -2px;
+}
+.outline-text {
+  min-width: 0;
+}
+.outline-item.is-para {
+  align-items: center;
+  font-size: 13.5px;
+}
+.outline-item.is-para .outline-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.outline.is-paras .outline-item.is-signpost {
+  margin-top: 8px;
+  padding: 3px 8px;
+  font: 600 11px/1.3 var(--sans);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.outline.is-paras .outline-item.is-signpost:first-child {
+  margin-top: 0;
+}
+.outline-mark {
+  flex: none;
+  margin-left: auto;
+  font: 11px var(--sans);
+  color: var(--ink-3);
+}
+.outline-item.is-moving {
+  opacity: 0.45;
+}
+.outline-item.drop-before::before,
+.outline-item.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.outline-item.drop-before::before {
+  top: -1px;
+}
+.outline-item.drop-after::after {
+  bottom: -1px;
+}
+.outline-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
 
 /* The selection bar's newer buttons */
 .fmt-bar .is-u {
