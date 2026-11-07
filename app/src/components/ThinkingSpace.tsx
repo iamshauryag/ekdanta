@@ -189,8 +189,7 @@ export function ThinkingSpace({ doc, title, onClose }: Props) {
     }
   }
 
-  const rename = (id: string, label: string) =>
-    setSide((s) => ({ ...s, clusters: s.clusters?.map((c) => (c.id === id ? { ...c, label, mine: true } : c)) }))
+  const rename = (id: string, label: string) => setSide((s) => ({ ...s, clusters: s.clusters?.map((c) => (c.id === id ? { ...c, label, mine: true } : c)) }))
 
   // ---- Keys -----------------------------------------------------------------------------
 
@@ -237,12 +236,7 @@ export function ThinkingSpace({ doc, title, onClose }: Props) {
 
       {view === 'loose' ? (
         <div className="ts-scroll">
-          <div
-            className={`ts-canvas${hideLinks ? ' hide-links' : ''}`}
-            ref={canvasRef}
-            onPointerDown={onCanvasDown}
-            style={{ minWidth: extent.w || undefined, minHeight: extent.h || undefined }}
-          >
+          <div className={`ts-canvas${hideLinks ? ' hide-links' : ''}`} ref={canvasRef} onPointerDown={onCanvasDown} style={{ minWidth: extent.w || undefined, minHeight: extent.h || undefined }}>
             <svg className="ts-links" width="100%" height="100%" aria-hidden="true">
               {shown.map((e) => {
                 const g = geometry(byId.get(e.fromNode)!, byId.get(e.toNode)!, texts)
@@ -262,7 +256,8 @@ export function ThinkingSpace({ doc, title, onClose }: Props) {
                 key={n.id}
                 node={n}
                 editing={editing === n.id}
-                chip={side.recall?.[n.id]?.text === n.text ? side.recall?.[n.id]?.hit ?? null : null}
+                chip={side.recall?.[n.id]?.text === n.text ? (side.recall?.[n.id]?.hit ?? null) : null}
+                mark={side.marks?.[n.id]}
                 clickAt={clickAt}
                 onDown={onFragDown}
                 onCommit={commit}
@@ -329,6 +324,8 @@ interface FragmentProps {
   node: CanvasNode
   editing: boolean
   chip: { doc: string; title: string; folder: string } | null
+  /** Where the fragment came from ('Spark'), shown above it. */
+  mark?: string
   clickAt: React.MutableRefObject<Point | null>
   onDown: (e: React.PointerEvent, n: CanvasNode) => void
   onCommit: (id: string, el: HTMLElement, opts?: { next?: boolean }) => void
@@ -336,7 +333,7 @@ interface FragmentProps {
   onDone: () => void
 }
 
-function Fragment({ node, editing, chip, clickAt, onDown, onCommit, onRemove, onDone }: FragmentProps) {
+function Fragment({ node, editing, chip, mark, clickAt, onDown, onCommit, onRemove, onDone }: FragmentProps) {
   const ref = useRef<HTMLDivElement>(null)
   // The text lives in the DOM while it's being typed; React only sets it when it isn't.
   useLayoutEffect(() => {
@@ -361,7 +358,8 @@ function Fragment({ node, editing, chip, clickAt, onDown, onCommit, onRemove, on
   }, [editing, clickAt])
 
   return (
-    <div className="ts-frag-wrap" style={{ left: node.x, top: node.y }}>
+    <div className="ts-frag-wrap" style={{ left: node.x, top: node.y, maxWidth: Math.max(280, node.width) }}>
+      {mark && <span className="ts-mark">{mark}</span>}
       <div
         ref={ref}
         className={`ts-frag${editing ? ' is-editing' : ''}`}

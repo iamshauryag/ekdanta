@@ -58,6 +58,42 @@ export async function writeThinking(doc: string, canvas: Canvas, side: unknown) 
   await fs.writeFile(sp, JSON.stringify(side ?? {}), 'utf8')
 }
 
+/**
+ * Fill a new document's Thinking Space (Sparks' Start a piece): a fragment marked with its origin,
+ * then quoted passages, each with a chip naming the note it came from. Only for an empty canvas.
+ */
+export async function seedThinking(doc: string, fragments: { text: string; mark?: string; from?: { doc: string; title: string; folder: string } }[]) {
+  const { canvas } = await readThinking(doc)
+  if (canvas.nodes.length) return
+  const nodes: Canvas['nodes'] = []
+  const recall: Record<string, { text: string; hit: { doc: string; title: string; folder: string } | null }> = {}
+  const marks: Record<string, string> = {}
+  const id = () => Math.random().toString(36).slice(2, 10)
+  // A fragment's height before the canvas measures it, erring tall so long passages never overlap:
+  // about one character per 8px, each line break starting a new line, plus room for the chip or mark
+  // drawn with it.
+  const height = (text: string, width: number, extra: number) => text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / (width / 8))), 0) * 24 + 16 + extra
+  let y = 96
+  const heads = fragments.filter((f) => !f.from)
+  const quotes = fragments.filter((f) => f.from)
+  for (const f of heads) {
+    const n = { id: id(), type: 'text', text: f.text, x: 120, y, width: 420, height: height(f.text, 420, f.mark ? 22 : 0) }
+    nodes.push(n)
+    if (f.mark) marks[n.id] = f.mark
+    y += n.height + 48
+  }
+  // Quoted passages in two columns, each column stacking down the canvas.
+  const col = [y, y]
+  quotes.forEach((f, i) => {
+    const c = i % 2
+    const n = { id: id(), type: 'text', text: f.text, x: 120 + c * 360, y: col[c], width: 320, height: height(f.text, 320, 30) }
+    nodes.push(n)
+    recall[n.id] = { text: f.text, hit: f.from! }
+    col[c] += n.height + 52
+  })
+  await writeThinking(doc, { nodes, edges: [] }, { recall, marks })
+}
+
 const usable = (fragments: Fragment[]) => fragments.filter((f) => f.id && f.text?.trim()).slice(0, 60)
 const listFor = (fragments: Fragment[]) => fragments.map((f) => `${f.id}: ${f.text.replace(/\s+/g, ' ').trim()}`).join('\n')
 
@@ -99,7 +135,11 @@ Return JSON: {"clusters": [{"label": "...", "ids": ["id", "..."]}]}`
   const used = new Set<string>()
   return (parseJson<{ clusters: { label: string; ids: string[] }[] }>(raw).clusters ?? [])
     .map((c) => ({
-      label: String(c.label ?? '').toLowerCase().split(/\s+/).slice(0, 3).join(' '),
+      label: String(c.label ?? '')
+        .toLowerCase()
+        .split(/\s+/)
+        .slice(0, 3)
+        .join(' '),
       ids: (c.ids ?? []).filter((id) => ids.has(id) && !used.has(id) && used.add(id)),
     }))
     .filter((c) => c.label && c.ids.length)

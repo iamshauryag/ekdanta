@@ -18,6 +18,8 @@ import { Settings } from './components/Settings.tsx'
 import { ExportSheet } from './components/ExportSheet.tsx'
 import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
+import { MoreMenu } from './components/MoreMenu.tsx'
+import { SparksPage } from './components/SparksPage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
 import { helpLevel, type Level } from './editor/caret.ts'
@@ -170,16 +172,25 @@ export function App() {
   }, [refreshIdeaCount])
   const [trash, setTrash] = useState<Trashed[]>([])
   const refreshTrash = useCallback(() => api.trash().then(setTrash).catch(fail), [fail])
-  const [toast, setToast] = useState<{ text: string; undo?: () => void } | null>(null)
+  const [toast, setToast] = useState<{ text: string; undo?: () => void; label?: string } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
-  const notify = useCallback((text: string, undo?: () => void) => {
+  /** A short message at the bottom; `undo` adds a button, named `label` (Undo unless said otherwise). */
+  const notify = useCallback((text: string, undo?: () => void, label?: string) => {
     window.clearTimeout(toastTimer.current)
-    setToast({ text, undo })
+    setToast({ text, undo, label })
     toastTimer.current = window.setTimeout(() => setToast(null), 6000)
   }, [])
   // The open document's Thinking Space, and which of its fragments the draft already uses.
   const [thinkingOpen, setThinkingOpen] = useState(false)
   const [thinking, setThinking] = useState<Thinking | null>(null)
+  // Sparks fills the window; a piece started from it opens in its Thinking Space once it's loaded.
+  const [sparksOpen, setSparksOpen] = useState(false)
+  // Once opened, the page stays mounted (hidden when closed) so its cards survive a visit to a note.
+  const [sparksMounted, setSparksMounted] = useState(false)
+  useEffect(() => {
+    if (sparksOpen) setSparksMounted(true)
+  }, [sparksOpen])
+  const thinkOnLoad = useRef<string | null>(null)
   const [material, setMaterial] = useState<{ covered: string[]; nearest: string | null }>({ covered: [], nearest: null })
   // The brief pinned beside the open document ('' for none), tied to the document it was read for: it's
   // null until both have loaded, so the paste box never opens empty over a brief still on its way, and
@@ -1450,6 +1461,7 @@ export function App() {
         const d = docRef.current
         if (d) setLayoutFor((f) => (f === d.path ? null : d.path))
       },
+      sparks: () => setSparksOpen(true),
       versions: () => {
         openTab('history')
         setHistorySeg('versions')
@@ -1555,6 +1567,21 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [files, openDoc, refreshFiles],
   )
+
+  const moreItems = [{ id: 'sparks', label: 'Sparks', run: () => setSparksOpen(true) }]
+
+  const startedFromSpark = async (next: string) => {
+    setSparksOpen(false)
+    await refreshFiles()
+    thinkOnLoad.current = next
+    await openDoc(next)
+  }
+  useEffect(() => {
+    if (loaded && thinkOnLoad.current === loaded.path) {
+      thinkOnLoad.current = null
+      setThinkingOpen(true)
+    }
+  }, [loaded])
 
   /** Images are linked relative to the document, and served from the vault. */
   const assetUrl = useCallback((src: string) => {
@@ -1673,6 +1700,7 @@ export function App() {
         <button className={`rail-btn${sidebarOpen && sidebarMode === 'voice' ? ' is-on' : ''}`} title="Voice" onClick={() => showSidebar('voice')}>
           <Icon name="voice" />
         </button>
+        <MoreMenu items={moreItems} />
         <div className="rail-spacer" />
         <button className="rail-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
           <Icon name="focus" />
@@ -1925,7 +1953,7 @@ export function App() {
                 toast.undo!()
               }}
             >
-              Undo
+              {toast.label ?? 'Undo'}
             </button>
           )}
         </div>
@@ -1957,6 +1985,23 @@ export function App() {
           flush={flush}
           onSaved={refreshFiles}
           onClose={closeExport}
+        />
+      )}
+
+      {(sparksOpen || sparksMounted) && (
+        <SparksPage
+          open={sparksOpen}
+          doc={loaded && !voiceView ? loaded.path : null}
+          docTitle={title}
+          platform={platform}
+          ceiling={ceiling}
+          onOpenDoc={(p) => {
+            setSparksOpen(false)
+            openDoc(p)
+            notify('Your sparks are still there', () => setSparksOpen(true), 'Back to Sparks')
+          }}
+          onStarted={startedFromSpark}
+          onClose={() => setSparksOpen(false)}
         />
       )}
 

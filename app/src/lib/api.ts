@@ -96,12 +96,42 @@ export interface ThinkingSide {
   linkedSig?: string // the fragments as they were when links were last suggested
   recall?: Record<string, { text: string; hit: { doc: string; title: string; folder: string } | null }>
   checked?: Record<string, boolean> // fragments the writer ticked (true) or un-ticked (false) by hand
+  marks?: Record<string, string> // where a fragment came from, shown on it ('Spark')
 }
 export interface Thinking {
   canvas: { nodes: CanvasNode[]; edges: CanvasEdge[] }
   side: ThinkingSide
 }
 type Frag = { id: string; text: string }
+
+export type SparkSeed =
+  { kind: 'piece'; doc: string } | { kind: 'topic'; topic: string } | { kind: 'folder'; folder: string } | { kind: 'tag'; tag: string } | { kind: 'surprise' } | { kind: 'like'; ids: string[] }
+export interface SparkSource {
+  id: string
+  doc: string
+  title: string
+  folder: string
+  text: string
+}
+export interface SparkCard {
+  key: string
+  title?: string
+  angle?: string
+  why?: string
+  suits?: string
+  sources: SparkSource[]
+}
+export interface SparkResult {
+  mode: 'sparks' | 'pairs'
+  cards: SparkCard[]
+  message?: string
+  note?: string
+}
+export interface IndexState {
+  building: boolean
+  docs: number
+  paragraphs: number
+}
 
 /** What an export made: its file name, the engine that made a Word file, and what the writer should know. */
 export interface Exported {
@@ -241,6 +271,12 @@ export const api = {
     fetch('/api/thinking/material', send('POST', { doc, fragments, paragraph })).then(json<{ covered: string[]; nearest: string | null }>),
   history: (doc: string) => fetch('/api/history?doc=' + encodeURIComponent(doc)).then(json<unknown[]>),
   appendHistory: (doc: string, item: unknown) => fetch('/api/history', send('POST', { doc, item })).then(json),
+  sparks: (req: { seed: SparkSeed; suits?: string; exclude?: string[] }) => fetch('/api/sparks', send('POST', req)).then(json<SparkResult>),
+  sparkState: () => fetch('/api/sparks/state').then(json<IndexState>),
+  sparkOptions: () => fetch('/api/sparks/options').then(json<{ docs: number; folders: string[]; tags: string[] }>),
+  keepSpark: (card: SparkCard) => fetch('/api/sparks/keep', send('POST', card)).then(json<{ path: string; bullet: string }>),
+  dismissSpark: (key: string) => fetch('/api/sparks/dismiss', send('POST', { key })).then(json),
+  startFromSpark: (card: SparkCard, kind: string) => fetch('/api/sparks/start', send('POST', { card, kind })).then(json<{ path: string }>),
   versions: (doc: string) => fetch('/api/versions?doc=' + encodeURIComponent(doc)).then(json<VersionRow[]>),
   version: (doc: string, id: string) =>
     fetch(`/api/version?doc=${encodeURIComponent(doc)}&id=${encodeURIComponent(id)}`)

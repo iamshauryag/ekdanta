@@ -7,7 +7,7 @@ import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from '
 import { loadSettings } from './settings.ts'
 import { isPromptParagraph, isSpecialPath } from '../src/lib/special.ts'
 
-interface Chunk {
+export interface Chunk {
   doc: string
   title: string
   folder: string
@@ -104,6 +104,11 @@ export function refresh(): Promise<IndexFile> {
     return ix
   })().finally(() => (building = null))
   return building
+}
+
+/** Whether the index is being brought up to date, and its size so far: for views that wait on it. */
+export function indexState() {
+  return { building: !!building, docs: index ? Object.keys(index.files).length : 0, paragraphs: index?.chunks.length ?? 0 }
 }
 
 function cosine(a: number[], b: number[]) {

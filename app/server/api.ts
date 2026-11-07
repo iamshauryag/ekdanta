@@ -22,10 +22,11 @@ import { runReader, type ReaderRequest } from './reader.ts'
 import { HttpError, isLocalRequest, isSameOrigin, local, statusOf } from './net.ts'
 import { addUpload, commit, convert, openBatch, preview, undo } from './import/index.ts'
 import { exportDoc, pandoc, type ExportRequest } from './export.ts'
-import { refresh, search, paragraphs } from './recall.ts'
+import { indexState, refresh, search, paragraphs } from './recall.ts'
 import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
 import { applyTemplateTo, listTemplates, seedTemplates } from './templates.ts'
 import { listSnippets, readSnippet } from './snippets.ts'
+import { dismissSpark, keepSpark, runSparks, sparkOptions, startPiece, type Card, type SparkRequest } from './sparks-run.ts'
 import {
   VAULT,
   MissingDoc,
@@ -315,6 +316,20 @@ const routes: Record<string, Handler> = {
   'POST /api/thinking/material': async (req) => {
     const { doc, fragments, paragraph } = await body<{ doc: string; fragments: Fragment[]; paragraph: string }>(req)
     return material(doc, fragments, paragraph ?? '')
+  },
+  // Sparks: ideas across notes, only when asked.
+  'GET /api/sparks/state': async () => indexState(),
+  'GET /api/sparks/options': async () => sparkOptions(),
+  'POST /api/sparks': async (req) => runSparks(await body<SparkRequest>(req)),
+  'POST /api/sparks/keep': async (req) => keepSpark(await body<Card>(req)),
+  'POST /api/sparks/dismiss': async (req) => {
+    const { key } = await body<{ key: string }>(req)
+    await dismissSpark(key)
+    return { ok: true }
+  },
+  'POST /api/sparks/start': async (req) => {
+    const { card, kind } = await body<{ card: Card; kind?: string }>(req)
+    return startPiece(card, kind)
   },
   'GET /api/versions': async (_req, url) => listVersions(url.searchParams.get('doc') ?? ''),
   'GET /api/version': async (_req, url) => ({ content: await readVersion(url.searchParams.get('doc') ?? '', url.searchParams.get('id') ?? '') }),
