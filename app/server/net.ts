@@ -39,16 +39,14 @@ const header = (req: RequestLike, name: string) => {
 }
 
 /**
- * True only for a request made on this machine, to this machine: from a loopback address, not
- * forwarded by a proxy, addressed to a loopback host name, and from a page on that same host (or
- * typed into the address bar). A GET must show that with Origin or Sec-Fetch-Site, which every
- * current browser sends; a script on this machine can send `Sec-Fetch-Site: none`.
+ * True for a request the app itself made: from a page on the host it was addressed to, from the
+ * address bar, or from a script on this machine — not from another site the writer has open in the
+ * same browser, which can otherwise reach the server simply because it is running. The host it was
+ * addressed to is whatever the writer opened, so this holds over `tailscale serve` too.
  */
-export function isLocalRequest(req: RequestLike): boolean {
-  if (!isLoopbackAddress(req.socket?.remoteAddress)) return false
-  if (header(req, 'x-forwarded-for') || header(req, 'x-forwarded-host') || header(req, 'forwarded')) return false
+export function isSameOrigin(req: RequestLike): boolean {
   const host = header(req, 'host')
-  if (!host || !isLoopbackHost(host)) return false
+  if (!host) return false
   // Browsers say whether the request comes from another site. Origin alone isn't enough: they
   // leave it off a cross-site GET (an <img>, a link, a navigation).
   const site = header(req, 'sec-fetch-site')
@@ -64,6 +62,20 @@ export function isLocalRequest(req: RequestLike): boolean {
   } catch {
     return false // "null" (a sandboxed frame or a file://) or garbage
   }
+}
+
+/**
+ * True only for a request made on this machine, to this machine: from a loopback address, not
+ * forwarded by a proxy, addressed to a loopback host name, and from a page on that same host (or
+ * typed into the address bar). A GET must show that with Origin or Sec-Fetch-Site, which every
+ * current browser sends; a script on this machine can send `Sec-Fetch-Site: none`.
+ */
+export function isLocalRequest(req: RequestLike): boolean {
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) return false
+  if (header(req, 'x-forwarded-for') || header(req, 'x-forwarded-host') || header(req, 'forwarded')) return false
+  const host = header(req, 'host')
+  if (!host || !isLoopbackHost(host)) return false
+  return isSameOrigin(req)
 }
 
 /** An error with an HTTP status, for the API router to answer with. */

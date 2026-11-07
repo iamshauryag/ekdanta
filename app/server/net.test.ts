@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HttpError, isLocalRequest, isLoopbackAddress, local, runTool, statusOf, which } from './net.ts'
+import { HttpError, isLocalRequest, isLoopbackAddress, isSameOrigin, local, runTool, statusOf, which } from './net.ts'
 
 const req = (remoteAddress: string | undefined, headers: Record<string, string>, method?: string) => ({ method, socket: { remoteAddress }, headers })
 
@@ -49,6 +49,39 @@ test('another site is refused even without an Origin header', () => {
   assert.equal(isLocalRequest(req('127.0.0.1', { host: 'localhost:5317', origin: 'http://localhost:5317', 'sec-fetch-site': 'same-origin' }, 'POST')), true)
   assert.equal(isLocalRequest(req('127.0.0.1', { host: 'localhost:5317', 'sec-fetch-site': 'none' }, 'GET')), true)
   assert.equal(isLocalRequest(req('127.0.0.1', { host: 'localhost:5317' }, 'POST')), true)
+})
+
+test('the app is answered on whatever host the writer opened, the tailnet included', () => {
+  assert.equal(isSameOrigin(req('127.0.0.1', { host: 'localhost:5317', origin: 'http://localhost:5317' }, 'PUT')), true)
+  assert.equal(isSameOrigin(req('127.0.0.1', { host: '[::1]:5317', origin: 'http://[::1]:5317' }, 'PUT')), true)
+  // Writing from the writer's phone over `tailscale serve` is still the app: local() refuses that
+  // host, and routes the whole vault depends on must not.
+  const phone = req('100.64.0.7', { host: 'mac.tail1234.ts.net', origin: 'https://mac.tail1234.ts.net' }, 'PUT')
+  assert.equal(isSameOrigin(phone), true)
+  assert.equal(isLocalRequest(phone), false)
+})
+
+test('another site is refused, whichever host it aims at', () => {
+  const sites: Record<string, string>[] = [
+    { host: 'localhost:5317', origin: 'https://evil.example' },
+    { host: 'localhost:5317', origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' },
+    { host: 'localhost:5317', origin: 'http://localhost:8080' }, // another port is another origin
+    { host: 'localhost:5317', origin: 'null' },
+    { host: 'localhost:5317', 'sec-fetch-site': 'cross-site' },
+    { host: 'localhost:5317', 'sec-fetch-site': 'same-site' },
+    { host: 'mac.tail1234.ts.net', origin: 'https://evil.example' },
+  ]
+  for (const headers of sites) {
+    assert.equal(isSameOrigin(req('127.0.0.1', headers, 'PUT')), false, JSON.stringify(headers))
+  }
+  assert.equal(isSameOrigin({ headers: {} }), false)
+})
+
+test("a script on the machine is the writer's own; an old browser's <img> is not", () => {
+  assert.equal(isSameOrigin(req('127.0.0.1', { host: 'localhost:5317' }, 'POST')), true)
+  assert.equal(isSameOrigin(req('127.0.0.1', { host: 'localhost:5317', 'sec-fetch-site': 'none' }, 'GET')), true)
+  assert.equal(isSameOrigin(req('127.0.0.1', { host: 'localhost:5317' }, 'GET')), false)
+  assert.equal(isSameOrigin(req('127.0.0.1', { host: 'localhost:5317' }, 'HEAD')), false)
 })
 
 test('local() lets this machine through and answers anyone else with 403', async () => {

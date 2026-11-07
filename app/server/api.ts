@@ -1,5 +1,8 @@
 // HTTP API for the app, mounted on Vite's dev server. It binds to localhost; tailnet hosts can reach it
-// through `tailscale serve`, so routes that run programs or write outside the vault are wrapped in local().
+// through `tailscale serve`. Every route is answered only for the app's own page (see isSameOrigin): any
+// other site the writer has open could otherwise write to their vault and spend their model quota, simply
+// because the server is running. Routes that run programs or write outside the vault want local() as well,
+// which is stricter — this machine only, never the tailnet.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
 import { status } from './ai.ts'
@@ -13,7 +16,7 @@ import { runHelp, type HelpRequest } from './help.ts'
 import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
 import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
-import { local, statusOf } from './net.ts'
+import { isSameOrigin, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import {
   VAULT,
@@ -38,8 +41,6 @@ import {
 } from './vault.ts'
 
 type Handler = (req: IncomingMessage, url: URL) => Promise<unknown>
-
-export { local }
 
 async function body<T>(req: IncomingMessage): Promise<T> {
   let raw = ''
@@ -228,6 +229,12 @@ export function ekdantaApi(): Plugin {
       server.httpServer?.once('close', closeClaudePools)
       server.middlewares.use(async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
         if (!req.url?.startsWith('/api/')) return next()
+        // Checked here rather than per route, so a route added later can't be the one that forgets.
+        if (!isSameOrigin(req)) {
+          res.statusCode = 403
+          res.setHeader('content-type', 'application/json')
+          return res.end(JSON.stringify({ error: 'Only available from the app' }))
+        }
         const url = new URL(req.url, 'http://localhost')
         // Images are served as themselves, not as JSON.
         if (req.method === 'GET' && url.pathname === '/api/asset') {
