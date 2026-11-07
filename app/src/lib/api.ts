@@ -3,6 +3,7 @@ import type { TemplateInfo } from './templates.ts'
 import type { Appearance } from './appearance.ts'
 import type { EdgeCandidate, EdgeSlot } from './edge.ts'
 import type { VersionEntry, VersionRow } from './versions.ts'
+import type { Reader, ReaderQuestion } from './reader.ts'
 // Thin client for the local server in server/api.ts.
 export interface FileEntry {
   path: string
@@ -192,4 +193,7 @@ export const api = {
   starIdea: (text: string, starred: boolean) => fetch('/api/ideas/star', send('POST', { text, starred })).then(json<{ starred: boolean }>),
   startIdea: (text: string, kind: string) => fetch('/api/ideas/start', send('POST', { text, kind })).then(json<{ path: string }>),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),
+  readAs: (req: { doc: string; platform: string; reader: Reader; text: string; selection: boolean }) => fetch('/api/reader', send('POST', req)).then(json<ReaderReply>),
 }
+
+export type ReaderReply = { kind: 'questions'; items: ReaderQuestion[]; provider: string } | { kind: 'empty' | 'error'; message: string }

@@ -22,6 +22,7 @@ import { fieldSlot, type EdgeSlot } from './lib/edge.ts'
 import { CaptureBox } from './components/CaptureBox.tsx'
 import { IdeasPage } from './components/IdeasPage.tsx'
 import { IDEAS_FILE } from './lib/special.ts'
+import type { Reading } from './components/ReaderList.tsx'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, isMac as isMacKeys, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
 import { isSpecialPath } from './lib/special.ts'
@@ -162,6 +163,10 @@ export function App() {
   const paragraph = useRef('')
   const materialTimer = useRef<number | undefined>(undefined)
   const ceiling = settings?.ceiling ?? 5
+  // Read as…: its card in the Piece tab, and the latest list of reader questions (this session only).
+  const [readerOpen, setReaderOpen] = useState(false)
+  const [readerFocus, setReaderFocus] = useState(0)
+  const [reading, setReading] = useState<Reading | null>(null)
   const recallDot = settings?.recallDot ?? true
   // Changes show at once; the server's cleaned copy replaces them only if no newer change was made
   // meanwhile (dragging the text size sends many), or an older reply would undo the newer change.
@@ -1005,6 +1010,14 @@ export function App() {
       readAloud: () => (livePreview ? window.dispatchEvent(new Event('ekdanta:read-aloud')) : notify('Read aloud works on the page, not in the Markdown view')),
       captureIdea: () => setCaptureOpen((o) => !o),
       ideas: () => openIdeas(),
+      readAs: () => {
+        if (!docRef.current) return
+        // The card is hidden below help level 2, so say why rather than doing nothing at all.
+        if (ceiling < 2) return notify('Read as… needs the help ceiling at 2 or more. Settings → Writing.')
+        openTab('piece')
+        setReaderOpen(true)
+        setReaderFocus((n) => n + 1)
+      },
     }
     const onKey = (e: KeyboardEvent) => {
       // The editor dismisses help itself; from the panel or a card's buttons, ⌘0 and Esc do it here.
@@ -1024,7 +1037,7 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, livePreview, notify])
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, ceiling, livePreview, notify])
 
   const current = files.find((f) => f.path === path)
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
@@ -1307,7 +1320,6 @@ export function App() {
           onVoice={() => openVoice(platform)}
           outline={outline}
           onHeading={goToHeading}
-          editor={editor}
           onBeforeMove={() => keepVersion('before moving text in the outline')}
           notify={notify}
           thinking={thinking}
@@ -1329,6 +1341,12 @@ export function App() {
           onBriefEditing={setBriefEditing}
           onBriefSave={saveBrief}
           onBriefUnpin={unpinBrief}
+          editor={livePreview ? editor : null}
+          readerOpen={readerOpen}
+          onReaderOpen={setReaderOpen}
+          readerFocus={readerFocus}
+          reading={reading}
+          onReading={setReading}
         />
       )}
 

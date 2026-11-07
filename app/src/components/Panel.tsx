@@ -12,6 +12,7 @@ import type { VersionRow } from '../lib/versions.ts'
 import { VersionsList } from './VersionsList.tsx'
 import { BriefCard } from './BriefCard.tsx'
 import { EDGE_LIMITS, EDGE_NAMES, showSuggestLink, type EdgeSlot } from '../lib/edge.ts'
+import { ReaderList, type Reading } from './ReaderList.tsx'
 
 export type PanelTab = 'material' | 'outline' | 'history' | 'piece'
 /** The History tab's two halves: the document's versions, and the log of help asked for. */
@@ -64,7 +65,7 @@ interface Props {
   onThinking: () => void
   outline: Heading[]
   onHeading: (h: Heading) => void
-  /** The page, for moving sections and paragraphs from the Outline (null while the Markdown source shows). */
+  /** The page: for moving sections from the Outline, and for Read as… to read (null while the Markdown source shows). */
   editor: TiptapEditor | null
   onBeforeMove: () => void
   notify: (text: string, undo?: () => void) => void
@@ -80,6 +81,12 @@ interface Props {
   onBriefEditing: (on: boolean) => void
   onBriefSave: (text: string) => Promise<void>
   onBriefUnpin: () => void
+  /** Read as…: whether its card is open, and the latest list (session only). */
+  readerOpen: boolean
+  onReaderOpen: (open: boolean) => void
+  readerFocus: number
+  reading: Reading | null
+  onReading: (r: Reading | null) => void
 }
 
 export function Panel(p: Props) {
@@ -447,6 +454,10 @@ function Piece(p: Props) {
   return (
     <>
       <BriefCard key={p.path ?? ''} text={p.brief} platform={p.platform} editing={p.briefEditing} onEditing={p.onBriefEditing} onSave={p.onBriefSave} onUnpin={p.onBriefUnpin} />
+      {/* Read as… is level-2 help (questions only), so it goes with the help ceiling. */}
+      {p.ceiling >= 2 && p.path && (
+        <ReaderList editor={p.editor} doc={p.path} platform={p.platform} open={p.readerOpen} onOpen={p.onReaderOpen} focusTick={p.readerFocus} reading={p.reading} onReading={p.onReading} />
+      )}
       <div className="panel-head">
         Piece <em>· facts</em>
       </div>

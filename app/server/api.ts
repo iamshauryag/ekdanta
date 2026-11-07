@@ -17,6 +17,7 @@ import { doubledFolder } from '../src/lib/kinds.ts'
 import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
 import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
+import { runReader, type ReaderRequest } from './reader.ts'
 import { isSameOrigin, statusOf } from './net.ts'
 import { refresh, search, paragraphs } from './recall.ts'
 import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
@@ -155,6 +156,8 @@ const routes: Record<string, Handler> = {
   },
   // A subject, title, excerpt or opening line drawn from the draft.
   'POST /api/edge': async (req) => runEdge(await body<EdgeRequest>(req)),
+  // Read as…: questions a named reader would ask, each tied to a phrase. Never changes the document.
+  'POST /api/reader': async (req) => runReader(await body<ReaderRequest>(req)),
   // Background check for the Recall dot: is there anything strong for this paragraph?
   'POST /api/recall-probe': async (req) => {
     const { text, doc } = await body<{ text: string; doc: string }>(req)

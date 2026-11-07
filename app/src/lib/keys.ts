@@ -60,6 +60,7 @@ const COMMAND_LIST = [
   // ⌘⇧I on a Mac; elsewhere Ctrl+Shift+I opens the browser's developer tools, so Ctrl+Alt+I.
   { id: 'captureIdea', label: 'Capture idea', group: 'App', key: isMac ? 'Mod-Shift-i' : 'Mod-Alt-i' },
   { id: 'ideas', label: 'Ideas', group: 'App', key: '' },
+  { id: 'readAs', label: 'Read as…', group: 'App', key: '' },
 ] as const satisfies readonly Command[]
 
 export const COMMANDS: Command[] = [...COMMAND_LIST]
