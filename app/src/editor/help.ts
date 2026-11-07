@@ -20,15 +20,35 @@ export type Hunk = { kind: 'eq'; text: string } | { kind: 'chg'; del: string; in
 
 // Positions are document positions. `at` is where a card goes: just after the block the help is about.
 export type Help =
-  | { kind: 'loading'; level: Level; from: number; to: number; at: number; slow?: boolean; label?: string }
+  // `caret`: the request is about the caret here (a next word, a ghost, opening questions). Typing or
+  // moving the caret cancels it, so an answer never lands where the writer no longer is.
+  | { kind: 'loading'; level: Level; from: number; to: number; at: number; slow?: boolean; label?: string; caret?: number }
   | { kind: 'notice'; level?: Level; from: number; to: number; at: number; text: string; tone?: 'error'; label?: string }
   | { kind: 'recall'; level: 1; from: number; to: number; at: number; results: RecallResult[]; page: number; sel: number }
   | { kind: 'nudge'; level: 2; from: number; to: number; at: number; text: string; history: string[]; inMargin: boolean }
-  | { kind: 'word'; level: 3; mode: 'replace' | 'next'; from: number; to: number; at: number; options: string[]; sel: number; seen: string[] }
-  | { kind: 'ghost'; level: 4; from: number; to: number; at: number; text: string; seen: string[] }
+  // 'complete' finishes the word the caret is in: from–to is the whole word, replaced on accepting.
+  | { kind: 'word'; level: 3; mode: 'replace' | 'next' | 'complete'; from: number; to: number; at: number; options: string[]; sel: number; seen: string[] }
+  | {
+      kind: 'ghost'
+      level: 4 | 5
+      from: number
+      to: number // where the key hint goes
+      at: number // where the text goes
+      caret: number // moving the caret away from here dismisses it
+      text: string
+      seen: string[]
+      /** What Tab accepts: all of it (⌘4), or the next sentence (⌘5). */
+      unit: 'all' | 'sentence'
+      /** Text that goes in a new block after the caret's: a paragraph (after a heading) or a list item. */
+      block?: 'paragraph' | 'listItem' | 'taskItem'
+      /** What the writer has accepted of it so far. */
+      taken: string
+    }
+  /** Questions to find a first line in, before the writer has written one. Never prose. */
+  | { kind: 'questions'; level: Level; from: number; to: number; at: number; questions: string[]; seen: string[] }
   // A subject, title, excerpt or opening line drawn from the draft. Its card sits at the top of the page.
   | { kind: 'edge'; level: 3; slot: EdgeSlot; from: number; to: number; at: number; options: EdgeCandidate[]; sel: number; seen: string[]; note?: string }
-  | { kind: 'bar'; level: 4 | 5; from: number; to: number; busy: boolean }
+  | { kind: 'bar'; level: 4 | 5; from: number; to: number; busy: boolean; hint?: boolean }
   | {
       kind: 'diff'
       level: 3 | 4 | 5 // 3: an opening line proposed in place
@@ -64,8 +84,11 @@ export const setHelp = (tr: Transaction, help: Help | null) => tr.setMeta(helpKe
 function mapHelp(help: Help, tr: Transaction): Help | null {
   const m = (pos: number, assoc = 1) => tr.mapping.map(pos, assoc)
   // Typing wins: any edit dismisses the suggestion. A Nudge covers nothing, so it stays.
-  if (help.kind === 'nudge') return { ...help, from: m(help.from, -1), to: m(help.to), at: m(help.at) }
+  if (help.kind === 'nudge' || help.kind === 'questions') return { ...help, from: m(help.from, -1), to: m(help.to), at: m(help.at) }
   if (help.kind === 'bar') return { ...help, from: m(help.from, -1), to: m(help.to) }
+  // Recall and a Nudge only read the text, so their answer follows it; anything that would write
+  // at the caret or over a selection is cancelled by the edit (the controller drops the answer).
+  if (help.kind === 'loading' && help.caret === undefined && (help.level === 1 || help.level === 2)) return { ...help, from: m(help.from, -1), to: m(help.to), at: m(help.at) }
   return null
 }
 
@@ -79,10 +102,10 @@ export function helpPlugin() {
         let { help, dot } = value
         if (meta && 'help' in meta) help = meta.help ?? null
         else if (help && tr.docChanged) help = mapHelp(help, tr)
-        else if (help && tr.selectionSet && (help.kind === 'ghost' || help.kind === 'word')) {
-          // Moving away from a word list or ghost text dismisses it.
+        else if (help && tr.selectionSet && (help.kind === 'ghost' || help.kind === 'word' || (help.kind === 'loading' && help.caret !== undefined))) {
+          // Moving away from a word list or ghost text dismisses it, and cancels one still being asked for.
           const head = state.selection.head
-          if (help.kind === 'ghost' && head !== help.at) help = null
+          if ((help.kind === 'ghost' || help.kind === 'loading') && (head !== help.caret || !state.selection.empty)) help = null
           else if (help.kind === 'word' && (head < help.from || head > help.to)) help = null
         }
         if (meta && 'dot' in meta) dot = meta.dot ?? null
@@ -214,9 +237,19 @@ function buildDecorations(doc: PMNode, help: Help, d: Decoration[]) {
       scope(help.from, help.to)
       card(help.at, `edge-${help.slot}-${help.options.map((o) => o.text).join('|')}-${help.sel}-${help.note ?? ''}`, () => edgeWidget(help), -1)
       break
-    case 'ghost':
-      card(help.at, `ghost-${help.text}`, () => el('span', 'hl-ghost', help.text), 1)
-      card(help.to, 'ghost-hint', () => lineWidget(levelLabel(4), `Tab accept · ⌥→ one word · ${helpMod}4 next · Esc`, 'hint'))
+    case 'ghost': {
+      const hint = help.unit === 'sentence' ? `Tab next sentence · ⌥→ one word · ⌘↵ all · ${helpMod}${help.level} another · Esc` : `Tab accept · ⌥→ one word · ${helpMod}${help.level} another · Esc`
+      if (help.block) {
+        // A new paragraph or list item, shown where it would go: after the caret's block.
+        card(help.at, `ghost-block-${help.block}-${help.text}`, () => ghostBlockWidget(help.block!, help.text, levelLabel(help.level), hint), -1)
+      } else {
+        card(help.at, `ghost-${help.text}`, () => el('span', 'hl-ghost', help.text), 1)
+        card(help.to, `ghost-hint-${help.level}-${help.text}`, () => ghostHint(levelLabel(help.level), hint, help.text))
+      }
+      break
+    }
+    case 'questions':
+      card(help.at, `questions-${help.questions.join('|')}`, () => questionsWidget(help))
       break
     case 'bar':
       scope(help.from, help.to)
@@ -321,6 +354,37 @@ function excerpt(t: string) {
   return s.length > 240 ? s.slice(0, 237).replace(/\s+\S*$/, '') + '…' : s
 }
 
+function ghostBlockWidget(block: 'paragraph' | 'listItem' | 'taskItem', text: string, label: string, hint: string) {
+  const wrap = el(block === 'paragraph' ? 'div' : 'li', `hl-ghost-block is-${block}`)
+  wrap.append(el('p', 'hl-ghost', text.trimStart()), ghostHint(label, hint, text))
+  return wrap
+}
+
+/** The keys under ghost text. A screen reader hears the suggestion itself too, since grey text is silent. */
+function ghostHint(label: string, hint: string, text: string) {
+  const line = lineWidget(label, hint, 'hint')
+  line.setAttribute('role', 'status')
+  line.prepend(el('span', 'hl-sr', `Suggested: ${text.trim()}`))
+  return line
+}
+
+function questionsWidget(help: Extract<Help, { kind: 'questions' }>) {
+  const card = el('div', 'hl-card hl-questions')
+  card.setAttribute('role', 'status')
+  const head = el('div', 'hl-card-head')
+  head.append(el('span', 'hl-label', levelLabel(help.level)), el('span', 'hl-meta', 'questions to start from'))
+  card.append(head, el('div', 'hl-questions-lead', 'Write your first line — then I can continue from your words'))
+  const list = el('ul', 'hl-question-list')
+  for (const q of help.questions) list.append(el('li', undefined, q))
+  card.append(list)
+  const foot = el('div', 'hl-card-foot')
+  const left = el('span')
+  left.append(kbd('Esc'), ' dismiss')
+  foot.append(left, el('span', undefined, `${helpMod}${help.level} other questions`))
+  card.append(foot)
+  return card
+}
+
 function nudgeWidget(text: string, inMargin: boolean) {
   const anchor = el(inMargin ? 'span' : 'div', inMargin ? 'hl-nudge-anchor' : 'hl-nudge-below')
   const note = el('span', 'hl-nudge')
@@ -338,7 +402,7 @@ function wordWidget(help: Extract<Help, { kind: 'word' }>) {
   const wrap = el('div', 'hl-word-wrap')
   const list = el('div', 'hl-card hl-word')
   const head = el('div', 'hl-card-head')
-  head.append(el('span', 'hl-label', levelLabel(3)), el('span', 'hl-meta', help.mode === 'next' ? 'next word' : 'replace'))
+  head.append(el('span', 'hl-label', levelLabel(3)), el('span', 'hl-meta', help.mode === 'next' ? 'next word' : help.mode === 'complete' ? 'finish the word' : 'replace'))
   list.append(head)
   help.options.forEach((o, i) => {
     const row = el('div', 'hl-option' + (i === help.sel ? ' is-sel' : ''))
@@ -428,6 +492,7 @@ function barWidget() {
     e.stopPropagation()
   }
   bar.append(input, el('span', 'hl-meta', help?.kind === 'diff' ? '↵ refine · Esc' : '↵ run · Esc'), el('div', 'hl-progress'))
+  if (help?.kind === 'bar' && help.hint) bar.append(el('div', 'hl-bar-hint', `At the end of a paragraph, ${helpMod}5 continues it`))
   if (help?.kind === 'bar') requestAnimationFrame(() => input.focus())
   return bar
 }

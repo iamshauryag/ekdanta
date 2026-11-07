@@ -127,6 +127,13 @@ export function KeyMap({ overrides, onChange }: { overrides: Record<string, stri
         <div className="keymap-group-name">Help ladder · fixed</div>
         {[
           [`${helpMod}1 – ${helpMod}5`, 'Recall, Nudge, Word, Sentence, Passage'],
+          // What each level does with nothing selected, where the caret is.
+          [`${helpMod}1`, 'Your notes on this paragraph (on an empty line, the one above)'],
+          [`${helpMod}2`, 'A question about this paragraph; on an empty line, what comes next'],
+          [`${helpMod}3`, 'The next word, or ways to finish the word you’re typing'],
+          [`${helpMod}4`, 'The next sentence (on a heading, the section’s first; in a list, the next item)'],
+          [`${helpMod}5`, 'At the end of a paragraph, the next few sentences; elsewhere, rewrite it'],
+          ['Tab · ⌥→ · ⌘↵', 'Take the next sentence, one word, or all of a suggestion'],
           ['Esc', 'Dismiss a suggestion'],
           ['Tab · ↵ · ⌫', 'Step through a diff, accept, reject'],
           ['⌘↵ · ⌘⌫', 'Accept all, reject all'],

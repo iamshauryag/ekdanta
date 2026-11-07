@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Editor as TiptapEditor } from '@tiptap/core'
-import { Editor, helpLevel, type EditorFormat, type Heading } from './editor/Editor.tsx'
+import { Editor, type EditorFormat, type Heading } from './editor/Editor.tsx'
 import type { PageRef } from './editor/menus.ts'
 import { SourceEditor } from './editor/Source.tsx'
 import { findKind, kindName, kinds, setKinds } from './lib/kinds.ts'
@@ -16,6 +16,7 @@ import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { Sidebar, type FileActions, type SidebarMode } from './components/Sidebar.tsx'
 import { Icon } from './components/Icon.tsx'
+import { helpLevel, type Level } from './editor/caret.ts'
 import { ImportSheet } from './components/ImportSheet.tsx'
 import { VaultError, Welcome } from './components/Welcome.tsx'
 import { LimitStatus, textStore } from './components/LimitStatus.tsx'
@@ -75,6 +76,8 @@ export function App() {
   // The pages the writer sees in the vault, without the app's own material files (ideas.md).
   const pages = useMemo(() => files.filter((f) => !isSpecialFile(f.path)), [files])
   const [status, setStatus] = useState<Status | null>(null)
+  const statusRef = useRef<Status | null>(null)
+  statusRef.current = status
   const [path, setPath] = usePref<string | null>('lastDoc', null)
   const remembered = useRef(path) // the document open when Ekdanta was last closed
   // Nothing is read until the settings say where to start (see "Where Ekdanta starts").
@@ -1461,6 +1464,11 @@ export function App() {
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
   const title = loaded ? (loaded.meta.title ?? current?.title ?? '') : ''
   const isNew = !!loaded && fresh === loaded.path
+  // The one-time tip about help at the caret, until the writer dismisses it. It waits for a new draft
+  // to have a first sentence or so: before that, ⌘3–⌘5 only ask opening questions, and the tip would
+  // promise text they won't write. Not in the Markdown view, where help doesn't run.
+  const [caretTipSeen, setCaretTipSeen] = usePref('tip.helpAtCaret', false)
+  const showCaretTip = !caretTipSeen && !!loaded && !voiceView && livePreview && isNew && words >= 4
   const templateItems = useMemo(() => ({ list: () => templatesRef.current, insert: (t: TemplateInfo) => insertAtCaretRef.current(t), browse: () => setPicker('insert') }), [])
   const insertAtCaretRef = useRef(insertAtCaret)
   insertAtCaretRef.current = insertAtCaret
@@ -1567,6 +1575,8 @@ export function App() {
     () => ({
       doc: () => docRef.current?.path ?? '',
       platform: () => (docRef.current?.meta.platform ?? 'essay').toLowerCase(),
+      title: () => docRef.current?.meta.title ?? '',
+      provider: () => statusRef.current?.strong ?? null,
       ceiling: () => ceiling,
       recallDot: () => recallDot && !focus,
     }),
@@ -1723,7 +1733,7 @@ export function App() {
               value={loaded.meta.title ?? (current?.title === 'Untitled' ? '' : title)}
               autoFocus={isNew && loaded.caret == null}
               onCommit={setTitle}
-              onHelp={livePreview ? (level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } })) : undefined}
+              onHelp={(level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } }))}
             />
             {isNew && !words && <PlatformPicker value={platform} onPick={setPlatform} />}
             {isNew && bodyEmpty && templates.length > 0 && (
@@ -1760,7 +1770,7 @@ export function App() {
                 acceptEdge={acceptEdge}
               />
             ) : (
-              <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} spellcheck={spellcheck} />
+              <SourceEditor key={loaded.key + ':md'} initial={docRef.current?.body ?? loaded.body} onChange={onChange} onPageView={() => chooseView(true)} spellcheck={spellcheck} />
             )}
           </div>
         )}
@@ -1933,9 +1943,18 @@ export function App() {
             </>
           )}
         </span>
-        <span className="muted">
-          {mod}1 Recall · {mod}2 Nudge · {mod}3 Word · {mod}4 Sentence · {mod}5 Passage
-        </span>
+        {showCaretTip ? (
+          <span className="caret-tip" role="note">
+            Nothing selected? {mod}3 next word · {mod}4 next sentence · {mod}5 continues the paragraph{mod === '⌘' ? ' (or ⌥)' : ''}
+            <button className="caret-tip-close" title="Got it" aria-label="Dismiss tip" onClick={() => setCaretTipSeen(true)}>
+              ✕
+            </button>
+          </span>
+        ) : (
+          <span className="muted">
+            {mod}1 Recall · {mod}2 Nudge · {mod}3 Word · {mod}4 Sentence · {mod}5 Passage
+          </span>
+        )}
       </footer>
     </div>
   )
@@ -1974,7 +1993,7 @@ function whenKept(at: number) {
 }
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */
-function TitleField({ value, autoFocus, spellcheck, onCommit, onHelp }: { value: string; autoFocus: boolean; spellcheck: boolean; onCommit: (t: string) => void; onHelp?: (level: number) => void }) {
+function TitleField({ value, autoFocus, spellcheck, onCommit, onHelp }: { value: string; autoFocus: boolean; spellcheck: boolean; onCommit: (t: string) => void; onHelp: (level: Level) => void }) {
   const ref = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -2001,13 +2020,13 @@ function TitleField({ value, autoFocus, spellcheck, onCommit, onHelp }: { value:
       onBlur={commit}
       onKeyDown={(e) => {
         // A help key never types into the title (⌥3 is # on a Mac). ⌘3 may draw a title from the draft;
-        // the others run in the text. The title is committed first, so it's current when help reads it.
-        const level = onHelp ? helpLevel(e.nativeEvent) : null
+        // the others run in the text (or, in the Markdown view, say where help works). The title is committed first, so it's current when help reads it.
+        const level = helpLevel(e.nativeEvent)
         if (level) {
           e.preventDefault()
           if (e.metaKey) noteCmdWorks()
           commit()
-          onHelp!(level)
+          onHelp(level)
           return
         }
         if (e.key === 'Enter' || e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {

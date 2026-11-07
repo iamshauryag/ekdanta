@@ -1,7 +1,30 @@
 // Turns a help keystroke into a request, and the response into a suggestion on the page.
+//
+// With nothing selected, what each level does depends on where the caret is (planCaret in caret.ts).
+// Restraint: ⌘3–⌘5 write text only once the body has a sentence of the writer's own; before that
+// they offer questions. Nothing goes into the page until the writer presses a key to accept it.
+//
+// | Caret                         | ⌘1 Recall           | ⌘2 Nudge              | ⌘3 Word                 | ⌘4 Sentence              | ⌘5 Passage                     |
+// |-------------------------------|---------------------|-----------------------|-------------------------|--------------------------|--------------------------------|
+// | End of a paragraph            | on the paragraph    | on the paragraph      | next word               | one-sentence ghost       | 2–4 sentence ghost (continue)  |
+// | Mid-paragraph, between words  | on the paragraph    | on the paragraph      | next word               | one-sentence ghost       | rewrite bar, with a hint       |
+// | In or after a word ("writ|")  | on the paragraph    | on the paragraph      | finish the word         | ghost after the word     | rewrite bar (mid-paragraph)    |
+// | After a short word ("the|")   | on the paragraph    | on the paragraph      | next word               | one-sentence ghost       | as its position says           |
+// | Empty line after text         | the paragraph above | what comes next       | capitalised openers     | opening sentence         | opening 2–4 sentences          |
+// | Heading                       | on the heading      | on the heading        | next word               | section's first sentence | section's first 2–4 sentences  |
+// | List item                     | on the item         | on the item           | next word / finish it   | the next item            | the next item                  |
+// | Code block, table             | Help is off inside code (or tables)                                                                                     |
+// | Body has no sentence, title   | on the title        | an opening question   | a card of 2–3 opening questions, never prose                                  |
+// | Body has no sentence, no title| Write a line first, or open Thinking Space                                                                              |
+//
+// A ghost from ⌘5 takes Tab for the next sentence, ⌥→ for a word, ⌘↵ for all of it, ⌘5 for another,
+// Esc or ⌘0 to dismiss. A selection works as it always has: ⌘3 replaces, ⌘4 and ⌘5 rewrite.
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { TextSelection, type Transaction } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
+import { binding, formatKey } from '../lib/keys.ts'
+import { firstWord, hasOwnSentence, isCompleteWord, sentences, splitFirstSentence, wordAtCaret } from '../lib/prose.ts'
+import { SERVER_DOWN, friendlyError, planCaret, type Block, type Caret, type Place } from './caret.ts'
 import {
   blockEnd,
   changedRatio,
@@ -40,6 +63,9 @@ export interface HistoryItem {
 export interface ControllerOptions {
   doc: () => string
   platform: () => string
+  title: () => string
+  /** The model provider in use, to name it when it can't be reached. */
+  provider: () => string | null
   ceiling: () => number
   record: (item: HistoryItem) => void
   /** Keep a version of the text as it is now (called just before help replaces more than a sentence). */
@@ -54,11 +80,12 @@ export interface ControllerOptions {
 type Resp =
   | { kind: 'recall'; results: RecallResult[] }
   | { kind: 'nudge'; text: string }
-  | { kind: 'word'; alternatives: string[] }
+  | { kind: 'word'; alternatives: string[]; mode?: 'next' | 'complete' }
   | { kind: 'ghost'; text: string }
+  | { kind: 'questions'; questions: string[] }
   | { kind: 'rewrite'; text: string }
   | { kind: 'empty'; message: string }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; provider?: string }
 
 type EdgeResp = { kind: 'edge'; candidates: EdgeCandidate[] } | { kind: 'empty'; message: string } | { kind: 'error'; message: string; error?: string }
 
@@ -176,10 +203,22 @@ export class HelpController {
     if (!h) return
     this.seq++
     if (h.kind === 'diff') return this.finishDiff('rejected')
-    if (['recall', 'nudge', 'word', 'ghost', 'edge'].includes(h.kind)) {
+    this.noteDismissed(h)
+    this.set(null)
+  }
+
+  /** A suggestion went away without being used (Esc, or typing over it): note it in the history. */
+  noteDismissed(h: Help) {
+    if (h.kind === 'ghost' && h.taken.trim()) return this.recordGhost(h, 'partly accepted')
+    if (['recall', 'nudge', 'word', 'ghost', 'questions', 'edge'].includes(h.kind)) {
       this.record({ level: (h as { level: Level }).level, from: h.from, outcome: 'dismissed' })
     }
-    this.set(null)
+  }
+
+  private recordGhost(h: Extract<Help, { kind: 'ghost' }>, outcome: 'accepted' | 'partly accepted') {
+    const n = sentences(h.taken).length
+    const what = h.block === 'listItem' || h.block === 'taskItem' ? 'next list item' : h.level === 5 ? `continued paragraph · ${n} sentence${n === 1 ? '' : 's'}` : h.taken.trim()
+    this.record({ level: h.level, from: h.from, outcome, detail: what })
   }
 
   // ---- Asking -------------------------------------------------------------------------------
@@ -204,38 +243,39 @@ export class HelpController {
       }
     }
 
-    // Same key again = next suggestion.
+    // Same key again = next suggestion: more Recall results, or something not shown yet.
+    let avoid: string[] = []
     if (current && 'level' in current && current.level === level && current.kind !== 'loading') {
       if (current.kind === 'recall' && current.results.length > (current.page + 1) * 3) {
         this.set({ ...current, page: current.page + 1, sel: (current.page + 1) * 3 })
         return
       }
-      if (current.kind === 'word')
-        return current.mode === 'next'
-          ? this.fetchNextWord(current.from, [...current.seen, ...current.options])
-          : this.fetchWord(current.from, current.to, current.at, [...current.seen, ...current.options])
-      if (current.kind === 'ghost') return this.fetchGhost(current.at, [...current.seen, current.text])
       // ⌘3 again asks for more titles or opening lines; a subject or excerpt card leaves ⌘3 in the text as it was.
       // Once the draft is used up the card stays as it is, saying so.
       if (current.kind === 'edge' && (current.slot === 'title' || current.slot === 'opening'))
         return current.note ? undefined : this.fetchEdge(current.slot, [...current.seen, ...current.options.map((o) => o.text)])
-      if (current.kind === 'nudge') return this.fetchNudge(current.from, current.to, current.history)
+      if (current.kind === 'word') avoid = [...current.seen, ...current.options]
+      else if (current.kind === 'ghost') avoid = [...current.seen, current.text.trim()]
+      else if (current.kind === 'nudge') avoid = current.history
+      else if (current.kind === 'questions') avoid = [...current.seen, ...current.questions]
     }
 
+    if (sel.empty) return this.atCaret(level, avoid)
+    if (this.inBlock(sel.from, 'codeBlock') || this.inBlock(sel.to, 'codeBlock')) return this.notice(level, sel.to, NOTICES.code())
+
     const para = paragraphAt(state, sel.head)
-    if (level === 1) return sel.empty ? this.fetchRecall(para.from, para.to) : this.fetchRecall(sel.from, sel.to)
-    if (level === 2) return sel.empty ? this.fetchNudge(para.from, para.to, []) : this.fetchNudge(sel.from, sel.to, [])
+    if (level === 1) return this.fetchRecall(sel.from, sel.to)
+    if (level === 2) return this.fetchNudge(sel.from, sel.to, avoid)
     if (level === 3) {
-      // Nothing selected: what could the next word be? A selection: what could replace it?
-      if (sel.empty) return this.fetchNextWord(sel.head, [])
+      // A selection: what could replace it?
       const text = textOf(this.doc, sel.from, sel.to)
       if (text.split(/\s+/).filter(Boolean).length > 4 || text.includes('\n')) {
         return this.notice(3, sel.to, `${helpMod}3 works on a word or short phrase`)
       }
-      return this.fetchWord(sel.from, sel.to, blockEnd(state, sel.to), [])
+      if (current?.kind === 'word' && current.mode === 'replace' && current.from === sel.from && current.to === sel.to) return this.fetchWord(sel.from, sel.to, current.at, avoid)
+      return this.fetchWord(sel.from, sel.to, blockEnd(state, sel.to), avoid)
     }
     if (level === 4) {
-      if (sel.empty) return this.fetchGhost(sel.head, [])
       const text = textOf(this.doc, sel.from, sel.to)
       const sentences = splitAfter(text.trim(), AFTER_STOP).filter(Boolean)
       if (sentences.length > 1) return this.openBar(5, sel.from, sel.to)
@@ -248,13 +288,99 @@ export class HelpController {
       const start = map.text.indexOf(sentence)
       return this.fetchRewrite(4, map.pos(start), map.pos(start + sentence.length), '')
     }
-    return sel.empty ? this.openBar(5, para.from, para.to) : this.openBar(5, sel.from, sel.to)
+    return this.openBar(5, sel.empty ? para.from : sel.from, sel.empty ? para.to : sel.to)
+  }
+
+  /** Is the position inside a node of this type? */
+  private inBlock(pos: number, type: string) {
+    const $pos = this.doc.resolve(pos)
+    for (let d = $pos.depth; d > 0; d--) if ($pos.node(d).type.name === type) return true
+    return false
+  }
+
+  /** Where the caret is, for planCaret, and the positions acting on it needs. */
+  private caretInfo() {
+    const { state } = this.view
+    const doc = this.doc
+    const head = state.selection.head
+    const $pos = state.selection.$head
+    const para = paragraphAt(state, head)
+    let block: Block = 'paragraph'
+    let item: { depth: number; type: 'listItem' | 'taskItem' } | null = null
+    for (let d = $pos.depth; d > 0; d--) {
+      const name = $pos.node(d).type.name
+      if (name === 'codeBlock' && block === 'paragraph') block = 'code'
+      else if (name === 'heading' && block === 'paragraph') block = 'heading'
+      else if (name === 'table') block = 'table'
+      else if ((name === 'listItem' || name === 'taskItem') && !item) item = { depth: d, type: name }
+    }
+    if (item && block === 'paragraph') block = 'listItem'
+
+    // The word being typed, only when real letters touch the caret (not a page link or a line break).
+    const before = $pos.nodeBefore?.isText ? textOf(doc, para.from, head) : ''
+    const after = $pos.nodeAfter?.isText ? textOf(doc, head, para.to) : ''
+    const { partial, suffix } = wordAtCaret(before, after)
+
+    // The nearest earlier block with text in it, for an empty line.
+    let previous: { from: number; to: number } | null = null
+    doc.nodesBetween(0, para.from, (node, pos) => {
+      if (node.isTextblock && pos + node.nodeSize <= para.from && node.textContent.trim()) previous = { from: pos + 1, to: pos + node.nodeSize - 1 }
+      return !node.isTextblock
+    })
+
+    const caret: Caret = {
+      block,
+      text: textOf(doc, para.from, para.to),
+      atEnd: !textOf(doc, head, para.to).trim(),
+      partial,
+      suffix,
+      lineStart: $pos.nodeBefore?.type.name === 'hardBreak',
+      hasPrevious: previous !== null,
+      hasOwn: hasOwnSentence(ownText(doc)),
+      title: this.opts.title(),
+    }
+    return { caret, head, para, previous: previous as { from: number; to: number } | null, item }
+  }
+
+  /** Nothing selected: what each level does depends on where the caret is (the table at the top). */
+  private atCaret(level: Level, avoid: string[]) {
+    const info = this.caretInfo()
+    const { caret, head, para, previous } = info
+    const plan = planCaret(level, caret, isCompleteWord)
+    switch (plan.do) {
+      case 'notice':
+        return this.notice(level, head, NOTICES[plan.text]())
+      case 'recall':
+        if (plan.on === 'previous' && previous) return this.fetchRecall(previous.from, previous.to)
+        if (plan.on === 'title') return this.fetchRecall(head, head, caret.title)
+        return this.fetchRecall(para.from, para.to)
+      case 'nudge':
+        if (plan.on === 'next' && previous) return this.fetchNudge(head, head, avoid, { scope: textOf(this.doc, previous.from, previous.to), nextParagraph: true })
+        if (plan.on === 'opening') return this.fetchNudge(head, head, avoid, { level: 2, scope: caret.title || caret.text, opening: true, count: 1 })
+        return this.fetchNudge(para.from, para.to, avoid)
+      case 'questions':
+        return this.fetchQuestions(level, head, caret.title || caret.text, avoid)
+      case 'word':
+        if (plan.mode === 'complete') return this.fetchCompletion(head - caret.partial.length, head + caret.suffix.length, caret.partial, caret.suffix, avoid)
+        return this.fetchNextWord(head, avoid, plan.mode === 'opener')
+      case 'ghost':
+      case 'continue':
+        if (plan.place === 'wordEnd') {
+          // Step past the rest of the word first, so the caret and the ghost meet where the text goes.
+          this.view.dispatch(this.view.state.tr.setSelection(TextSelection.create(this.doc, head + caret.suffix.length)))
+          return this.fetchGhost(level === 5 ? 5 : 4, 'inline', plan.list, this.caretInfo(), avoid)
+        }
+        return this.fetchGhost(level === 5 ? 5 : 4, plan.place, plan.list, info, avoid)
+      case 'bar':
+        return this.openBar(5, para.from, para.to, plan.hint)
+    }
   }
 
   /**
    * A help key pressed in the title. ⌘3 with a draft of 3+ sentences suggests a title (or, for kinds
-   * whose title isn't published, an opening line) drawn from the draft; every other key moves to the
-   * start of the text and runs there. See titleHelp() in lib/edge.ts for the whole table.
+   * whose title isn't published, an opening line) drawn from the draft; every other key moves into
+   * the text and runs there (see titleHelp() in lib/edge.ts). ⌘1 and ⌘2 look at the first paragraph;
+   * ⌘3–⌘5 carry on from the end of the writer's last paragraph, never between two they have written.
    */
   requestFromTitle(level: Level) {
     const current = this.help
@@ -267,9 +393,33 @@ export class HelpController {
       this.view.focus()
       return this.fetchEdge(plan.slot, [])
     }
-    this.view.dispatch(this.view.state.tr.setSelection(TextSelection.atStart(this.doc)))
+    const target = level <= 2 ? this.titleTarget('first') : (this.titleTarget('last') ?? this.titleTarget('first'))
+    const sel = target === null ? TextSelection.atStart(this.doc) : TextSelection.create(this.doc, target)
+    this.view.dispatch(this.view.state.tr.setSelection(sel).scrollIntoView())
     this.view.focus()
     this.request(level)
+  }
+
+  /**
+   * Where a key from the title runs: the end of the first paragraph (any text block, if there is no
+   * paragraph), or the end of the last paragraph with the writer's own words in it.
+   */
+  private titleTarget(which: 'first' | 'last'): number | null {
+    let first: number | null = null
+    let firstBlock: number | null = null
+    let last: number | null = null
+    this.doc.descendants((node, pos) => {
+      if (node.type.name === 'codeBlock' || node.type.name === 'blockquote' || node.type.name === 'table') return false
+      if (!node.isTextblock) return true
+      const end = pos + node.nodeSize - 1
+      firstBlock ??= end
+      if (node.type.name === 'paragraph') {
+        first ??= end
+        if (node.textContent.trim() && !isPromptBlock(node)) last = end
+      }
+      return false
+    })
+    return which === 'first' ? (first ?? firstBlock) : last
   }
 
   /** The writer's own prose: paragraphs and list items, not headings, code or template prompts. */
@@ -389,46 +539,77 @@ export class HelpController {
     return { before: textOf(this.doc, 0, from).slice(-3000), after: textOf(this.doc, to, size).slice(0, 1500) }
   }
 
-  private async call(level: Level, from: number, to: number, at: number, body: Record<string, unknown>): Promise<Resp | null> {
+  /** Ask the server. Every request carries the document, its kind and its title. */
+  private async post(level: Level, body: Record<string, unknown>): Promise<Resp> {
+    let r: Response
+    try {
+      r = await fetch('/api/help', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ level, doc: this.opts.doc(), platform: this.opts.platform(), title: this.opts.title(), ...body }),
+      })
+    } catch {
+      throw new Error(SERVER_DOWN)
+    }
+    const data = (await r.json().catch(() => ({ error: SERVER_DOWN }))) as Resp & { error?: string }
+    if (data.error) throw new Error(data.error)
+    if (data.kind === 'error') throw Object.assign(new Error(data.message), { provider: data.provider })
+    return data
+  }
+
+  private friendly(e: unknown) {
+    return friendlyError((e as Error).message, (e as { provider?: string }).provider ?? this.opts.provider())
+  }
+
+  /**
+   * Ask, showing a loading line until the answer comes. The answer is dropped when the request was
+   * cancelled meanwhile: by another request, by Esc, or by the writer typing or (for a request at the
+   * caret) moving the caret, which clears the loading line. `where` is where the answer goes now:
+   * Recall and a Nudge follow the text through edits made while they were asked for.
+   */
+  private async call(level: Level, from: number, to: number, at: number, body: Record<string, unknown>, caret?: number): Promise<(Resp & { where: { from: number; to: number; at: number } }) | null> {
     const id = ++this.seq
-    this.set({ kind: 'loading', level, from, to, at })
+    this.set({ kind: 'loading', level, from, to, at, ...(caret === undefined ? {} : { caret }) })
     this.slowTimer = window.setTimeout(() => {
       const h = this.help
       if (id === this.seq && h?.kind === 'loading') this.view.dispatch(setHelp(this.view.state.tr, { ...h, slow: true }))
     }, 8000)
     const allowed = this.allowOnce === level
     try {
-      const r = await fetch('/api/help', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ level, doc: this.opts.doc(), platform: this.opts.platform(), ...body }),
+      const data = await this.post(level, body).finally(() => {
+        if (id === this.seq && allowed) this.allowOnce = null
       })
-      const data = (await r.json()) as Resp & { error?: string }
-      if (id !== this.seq) return null // cancelled or superseded
-      if (allowed) this.allowOnce = null
-      if (data.error) throw new Error(data.error)
-      if (data.kind === 'error') throw new Error(data.message)
+      const where = this.stillAsking(id)
+      if (!where) return null // cancelled or superseded
       if (data.kind === 'empty') {
-        this.record({ level, from, outcome: 'empty', detail: data.message })
-        this.set({ kind: 'notice', level, from, to, at, text: data.message || EMPTY_MESSAGES[level] })
+        this.record({ level, from: where.from, outcome: 'empty', detail: data.message })
+        this.set({ kind: 'notice', level, ...where, text: data.message || EMPTY_MESSAGES[level] })
         return null
       }
-      return data
+      return { ...data, where }
     } catch (e) {
-      if (id !== this.seq) return null
-      const msg = (e as Error).message
-      this.record({ level, from, outcome: 'error', detail: msg })
-      this.set({ kind: 'notice', level, from, to, at, text: friendlyError(msg), tone: 'error' })
+      const where = this.stillAsking(id)
+      if (!where) return null
+      this.record({ level, from: where.from, outcome: 'error', detail: (e as Error).message })
+      this.set({ kind: 'notice', level, ...where, text: this.friendly(e), tone: 'error' })
       return null
     }
   }
 
-  private async fetchRecall(from: number, to: number) {
-    const scope = textOf(this.doc, from, to)
+  /** Is request `id` still the one on the page? Then where its answer goes, as the text is now. */
+  private stillAsking(id: number) {
+    const h = this.help
+    if (id !== this.seq || h?.kind !== 'loading') return null
+    return { from: h.from, to: h.to, at: h.at }
+  }
+
+  private async fetchRecall(from: number, to: number, scopeText?: string) {
+    const scope = scopeText ?? textOf(this.doc, from, to)
     if (!scope.trim()) return this.notice(1, from, 'Put the cursor in a paragraph to recall related material')
-    const at = blockEnd(this.view.state, to)
+    let at = blockEnd(this.view.state, to)
     const res = await this.call(1, from, to, at, { scope })
     if (res?.kind !== 'recall') return
+    ;({ from, to, at } = res.where)
     if (!res.results.length) {
       this.record({ level: 1, from, outcome: 'empty' })
       return this.set({ kind: 'notice', level: 1, from, to, at, text: EMPTY_MESSAGES[1] })
@@ -437,14 +618,15 @@ export class HelpController {
     this.record({ level: 1, from, outcome: 'shown', sources: res.results.slice(0, 3).map(({ doc, title, folder }) => ({ doc, title, folder })) })
   }
 
-  private async fetchNudge(from: number, to: number, history: string[]) {
-    const scope = textOf(this.doc, from, to)
+  private async fetchNudge(from: number, to: number, history: string[], ask: { scope?: string } & Record<string, unknown> = {}) {
+    const scope = ask.scope ?? textOf(this.doc, from, to)
     if (!scope.trim()) return this.notice(2, from, 'Put the cursor in a paragraph to get a nudge')
     const at = blockEnd(this.view.state, to)
-    const res = await this.call(2, from, to, at, { scope, ...this.context(from, to), avoid: history })
+    const res = await this.call(2, from, to, at, { ...this.context(from, to), ...ask, scope, avoid: history })
     if (res?.kind !== 'nudge') return
-    this.set({ kind: 'nudge', level: 2, from, to, at: blockEnd(this.view.state, to), text: res.text, history: [...history, res.text], inMargin: this.marginRoom() })
-    this.record({ level: 2, from, outcome: 'shown', detail: res.text })
+    const where = res.where
+    this.set({ kind: 'nudge', level: 2, ...where, text: res.text, history: [...history, res.text], inMargin: this.marginRoom() })
+    this.record({ level: 2, from: where.from, outcome: 'shown', detail: res.text })
   }
 
   private async fetchWord(from: number, to: number, at: number, seen: string[]) {
@@ -462,29 +644,114 @@ export class HelpController {
     this.set({ kind: 'word', level: 3, mode: 'replace', from, to, at, options: res.alternatives, sel: 0, seen })
   }
 
-  private async fetchNextWord(pos: number, seen: string[]) {
+  private async fetchNextWord(pos: number, seen: string[], opener = false) {
     const size = this.doc.content.size
     const scope = textOf(this.doc, 0, pos).slice(-1500)
     if (!scope.trim()) return this.notice(3, pos, 'Write a few words first, or select a word to replace')
     const at = blockEnd(this.view.state, pos)
-    const res = await this.call(3, pos, pos, at, { scope, after: textOf(this.doc, pos, size).slice(0, 300), next: true, avoid: seen })
+    const newLine = opener && this.view.state.selection.$head.nodeBefore?.type.name === 'hardBreak'
+    const res = await this.call(3, pos, pos, at, { scope, after: textOf(this.doc, pos, size).slice(0, 300), next: true, atParagraphStart: opener, newLine, avoid: seen }, pos)
     if (res?.kind !== 'word') return
     this.set({ kind: 'word', level: 3, mode: 'next', from: pos, to: pos, at, options: res.alternatives, sel: 0, seen })
   }
 
-  private async fetchGhost(pos: number, seen: string[]) {
+  /** ⌘3 in or right after a word: ways to finish it. The model may say it is already complete, and offer next words. */
+  private async fetchCompletion(from: number, to: number, partial: string, suffix: string, seen: string[]) {
+    const head = this.view.state.selection.head
     const size = this.doc.content.size
-    const scope = textOf(this.doc, 0, pos).slice(-3000)
-    if (!scope.trim()) return this.notice(4, pos, `Write a little first, then ${helpMod}4 can continue it`)
-    const end = blockEnd(this.view.state, pos)
-    const res = await this.call(4, pos, pos, end, { scope, after: textOf(this.doc, pos, size).slice(0, 800), avoid: seen })
-    if (res?.kind !== 'ghost') return
-    this.set({ kind: 'ghost', level: 4, from: pos, to: blockEnd(this.view.state, pos), at: pos, text: res.text, seen })
+    const at = blockEnd(this.view.state, head)
+    const res = await this.call(
+      3,
+      from,
+      to,
+      at,
+      {
+        scope: textOf(this.doc, 0, head).slice(-1500),
+        after: textOf(this.doc, to, size).slice(0, 300),
+        next: true,
+        partial,
+        suffix,
+        avoid: seen,
+      },
+      head,
+    )
+    if (res?.kind !== 'word') return
+    if (res.mode === 'next') return this.set({ kind: 'word', level: 3, mode: 'next', from: head, to: head, at, options: res.alternatives, sel: 0, seen })
+    this.set({ kind: 'word', level: 3, mode: 'complete', from, to, at, options: res.alternatives, sel: 0, seen })
   }
 
-  private openBar(level: 4 | 5, from: number, to: number) {
+  /** Before the writer's first sentence, ⌘3–⌘5 offer questions to start from, never prose. */
+  private async fetchQuestions(level: Level, pos: number, scope: string, seen: string[]) {
+    const at = blockEnd(this.view.state, pos)
+    const res = await this.call(level, pos, pos, at, { level: 2, opening: true, count: 3, scope, avoid: seen }, pos)
+    if (res?.kind !== 'questions' && res?.kind !== 'nudge') return
+    const questions = res.kind === 'questions' ? res.questions : [res.text]
+    this.set({ kind: 'questions', level, from: pos, to: pos, at, questions, seen })
+    this.reveal()
+    this.record({ level, from: pos, outcome: 'shown', detail: questions.join(' · ') })
+  }
+
+  /**
+   * ⌘4 (a sentence) and ⌘5 (2–4 sentences) as ghost text: on the writer's line, at the start of an
+   * empty paragraph, as the first paragraph under a heading, or as the next list item.
+   */
+  private async fetchGhost(level: 4 | 5, place: Place, list: boolean, info: ReturnType<HelpController['caretInfo']>, seen: string[]) {
+    const { head, para, item } = info
+    const doc = this.doc
+    const size = doc.content.size
+    let at = head
+    let block: 'paragraph' | 'listItem' | 'taskItem' | undefined
+    if (place === 'afterHeading') {
+      at = para.after
+      block = 'paragraph'
+    } else if (place === 'nextItem' && item) {
+      at = doc.resolve(head).after(item.depth)
+      block = item.type
+    }
+    // Everything up to where the new text goes, and what already follows it.
+    const scopeEnd = block ? (place === 'afterHeading' ? para.to : at) : head
+    const scope = textOf(doc, 0, scopeEnd).slice(-3000)
+    const after = textOf(doc, block ? at : head, size).slice(0, 800)
+    const hint = block ? at : blockEnd(this.view.state, head)
+    const res = await this.call(
+      level,
+      head,
+      head,
+      hint,
+      {
+        scope,
+        after,
+        avoid: seen,
+        continue: level === 5,
+        atParagraphStart: place !== 'inline',
+        newLine: place === 'paragraphStart' && info.caret.lineStart,
+        // The caret right after letters: the word may be unfinished, and the model may finish it first.
+        partial: place === 'inline' ? info.caret.partial : '',
+        list,
+        ...(place === 'afterHeading' ? { heading: caretHeading(info.caret.text) } : {}),
+      },
+      head,
+    )
+    if (res?.kind !== 'ghost') return
+    // call() drops the answer if the writer typed or moved the caret meanwhile, so these positions still hold.
+    this.set({ kind: 'ghost', level, from: head, caret: head, at, to: hint, text: res.text, seen, unit: level === 5 && !list ? 'sentence' : 'all', block, taken: '' })
+    this.reveal()
+  }
+
+  /**
+   * Bring the end of a suggestion into view: a long ghost near the bottom of the window would
+   * otherwise show grey words with its keys out of sight below them.
+   */
+  private reveal() {
+    requestAnimationFrame(() => {
+      const shown = this.view.dom.querySelectorAll<HTMLElement>('.hl-ghost-block, .hl-line.hl-hint, .hl-questions')
+      shown[shown.length - 1]?.scrollIntoView({ block: 'nearest' })
+    })
+  }
+
+  private openBar(level: 4 | 5, from: number, to: number, hint = false) {
     this.seq++
-    this.set({ kind: 'bar', level, from, to, busy: false })
+    this.set({ kind: 'bar', level, from, to, busy: false, hint })
   }
 
   private runInstruction(instruction: string) {
@@ -496,7 +763,7 @@ export class HelpController {
 
   private async fetchRewrite(level: 4 | 5, from: number, to: number, instruction: string) {
     const original = textOf(this.doc, from, to)
-    const at = blockEnd(this.view.state, to)
+    let at = blockEnd(this.view.state, to)
     const id = this.seq + 1
     const keepBar = level === 5
     if (keepBar) this.set({ kind: 'bar', level, from, to, busy: true })
@@ -504,6 +771,15 @@ export class HelpController {
       ? await this.callKeepingBar(level, from, to, { scope: original, instruction, ...this.context(from, to) }, id)
       : await this.call(level, from, to, at, { scope: original, instruction, rewrite: true, ...this.context(from, to) })
     if (res?.kind !== 'rewrite') return
+    if (keepBar) {
+      // The bar stays open while the model writes, and follows the text through edits. If the writer
+      // changed the passage itself meanwhile, the rewrite is of text that is no longer there.
+      const h = this.help
+      if (h?.kind !== 'bar') return
+      ;({ from, to } = h)
+      at = blockEnd(this.view.state, to)
+      if (textOf(this.doc, from, to) !== original) return this.set({ kind: 'notice', level, from, to, at, text: `The passage changed while help was writing · press ${helpMod}5 to ask again` })
+    }
     const hunks = computeHunks(original, res.text)
     if (!hunks.some((x) => x.kind === 'chg')) return this.set({ kind: 'notice', level, from, to, at, text: EMPTY_MESSAGES[level] })
     this.set({ kind: 'diff', level, from, to, at, original, hunks, focus: -1, instruction, bar: keepBar, sideBySide: changedRatio(original, hunks) > 0.6 })
@@ -516,15 +792,10 @@ export class HelpController {
     this.seq = id
     const at = blockEnd(this.view.state, to)
     try {
-      const r = await fetch('/api/help', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ level, doc: this.opts.doc(), platform: this.opts.platform(), ...body }),
+      const data = await this.post(level, body).finally(() => {
+        if (id === this.seq && this.allowOnce === level) this.allowOnce = null
       })
-      const data = (await r.json()) as Resp & { error?: string }
       if (id !== this.seq) return null
-      if (this.allowOnce === level) this.allowOnce = null
-      if (data.error || data.kind === 'error') throw new Error(data.error ?? (data as { message: string }).message)
       if (data.kind === 'empty') {
         this.set({ kind: 'notice', level, from, to, at, text: data.message })
         return null
@@ -532,7 +803,7 @@ export class HelpController {
       return data
     } catch (e) {
       if (id !== this.seq) return null
-      this.set({ kind: 'notice', level, from, to, at, text: friendlyError((e as Error).message), tone: 'error' })
+      this.set({ kind: 'notice', level, from, to, at, text: this.friendly(e), tone: 'error' })
       return null
     }
   }
@@ -556,10 +827,12 @@ export class HelpController {
       const next = textOf(this.doc, h.from, Math.min(this.doc.content.size, h.from + 1))
       if (next && /\w/.test(next)) word += ' '
     }
+    // Finishing a word replaces the letters typed so far (and any after the caret): no extra space.
     const tr = this.own(this.view.state.tr.insertText(word, h.from, h.to))
     tr.setSelection(TextSelection.create(tr.doc, h.from + word.length))
     this.view.dispatch(tr)
-    this.record({ level: 3, from: h.from, outcome: 'accepted', detail: h.mode === 'next' ? `next word: ${word.trim()}` : `${original} → ${word}` })
+    const detail = h.mode === 'next' ? `next word: ${word.trim()}` : h.mode === 'complete' ? `finished word: ${original} → ${word}` : `${original} → ${word}`
+    this.record({ level: 3, from: h.from, outcome: 'accepted', detail })
     this.flash(h.from)
   }
 
@@ -591,20 +864,35 @@ export class HelpController {
     this.set(null)
   }
 
-  acceptGhost(oneWord = false) {
+  /**
+   * Take some of a ghost: the next sentence (Tab, for ⌘5), one word (⌥→), or all of it (⌘↵, or Tab
+   * for ⌘4). What's left stays as a ghost after the caret.
+   */
+  acceptGhost(how: 'unit' | 'word' | 'all' = 'unit') {
     const h = this.help
     if (h?.kind !== 'ghost') return false
-    let text = h.text
-    if (oneWord) text = text.match(/^\s*\S+/)?.[0] ?? text
+    const text = how === 'word' ? firstWord(h.text) : how === 'all' || h.unit === 'all' ? h.text : splitFirstSentence(h.text)[0]
     const rest = h.text.slice(text.length)
     // Taking a whole continuation of more than a sentence: keep the text as it was first.
     if (!rest.trim() && sentenceCount(h.text) > 1) this.opts.snapshot?.(`before ${helpMod}4 continuation`)
     const tr = this.view.state.tr
-    const end = insertPlain(tr, h.at, h.at, text)
+    let end: number
+    if (h.block) {
+      // The first piece makes the new paragraph or list item; the rest continues inside it.
+      const schema = tr.doc.type.schema
+      const para = schema.nodes.paragraph.create()
+      const node = h.block === 'paragraph' ? para : schema.nodes[h.block].create(h.block === 'taskItem' ? { checked: false } : null, para)
+      tr.insert(h.at, node)
+      const start = h.at + (h.block === 'paragraph' ? 1 : 2)
+      end = insertPlain(tr, start, start, text.trimStart())
+    } else end = insertPlain(tr, h.at, h.at, text)
     tr.setSelection(TextSelection.create(tr.doc, end))
-    const next: Help | null = rest.trim() ? { ...h, from: end, at: end, to: tr.mapping.map(h.to), text: rest } : null
-    this.view.dispatch(setHelp(tr, next))
-    if (!rest.trim()) this.record({ level: 4, from: h.from, outcome: 'accepted', detail: h.text.trim() })
+    const taken = h.taken + text
+    const $end = tr.doc.resolve(end)
+    const next: Help | null = rest.trim() ? { ...h, block: undefined, from: tr.mapping.map(h.from), caret: end, at: end, to: $end.after($end.depth), text: rest, taken } : null
+    this.view.dispatch(setHelp(tr.scrollIntoView(), next))
+    if (next) this.reveal()
+    else this.recordGhost({ ...h, taken }, 'accepted')
     return true
   }
 
@@ -746,10 +1034,32 @@ export class HelpController {
   }
 }
 
-function friendlyError(msg: string) {
-  if (/ECONNREFUSED|fetch failed|Ollama/i.test(msg)) return 'Couldn’t reach Ollama · start it with `ollama serve`'
-  if (/timed out/i.test(msg)) return 'The model took too long · try again'
-  if (/rejected/i.test(msg)) return 'Your API key was rejected'
-  if (/No model/i.test(msg)) return msg
-  return `Something went wrong · ${msg.slice(0, 80)}`
+const NOTICES = {
+  code: () => 'Help is off inside code',
+  table: () => 'Help is off inside tables',
+  firstLine: () => {
+    const key = formatKey(binding('thinking'))
+    return `Write a line first, or open Thinking Space${key ? ` (${key})` : ''}`
+  },
 }
+
+/** The writer's own text: paragraphs and list items, leaving out headings, code, quotes and a template's prompts. */
+export function ownText(doc: PMNode) {
+  const parts: string[] = []
+  doc.descendants((node) => {
+    if (node.type.name === 'blockquote' || node.type.name === 'codeBlock' || node.type.name === 'heading' || node.type.name === 'table') return false
+    if (!node.isTextblock) return true
+    if (!isPromptBlock(node)) parts.push(textOf(node, 0, node.content.size))
+    return false
+  })
+  return parts.join('\n\n')
+}
+
+/** A template's `*Prompt: …*` paragraph, as the page shows it: emphasised text that opens with "Prompt:". */
+function isPromptBlock(node: PMNode) {
+  const first = node.firstChild
+  return /^\s*Prompt:/i.test(node.textContent) && !!first?.isText && first.marks.some((m) => m.type.name === 'italic' || m.type.name === 'bold')
+}
+
+/** A heading's text, for the prompt that opens its section. */
+const caretHeading = (text: string) => text.trim().slice(0, 200)

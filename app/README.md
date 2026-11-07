@@ -46,6 +46,26 @@ Ekdanta uses whatever you already have. By default it picks, in this order:
 
 Settings (⌥,) can pin a provider, choose the Claude models, use the local model for ⌘3 only, or switch Recall to Ollama's `nomic-embed-text`. They're saved in `.ekdanta/settings.json` in the vault, so every device that opens the vault shares them. Environment variables set the defaults: `EKDANTA_CLAUDE_MODEL`, `EKDANTA_CLAUDE_FAST_MODEL`, `EKDANTA_OLLAMA_MODEL`, `EKDANTA_PREFER_LOCAL=1`, `EKDANTA_EMBEDDER=ollama`, `EKDANTA_DISABLE_CLAUDE_CLI=1` and `EKDANTA_RECALL_FLOOR`. API keys are only ever read from the environment.
 
+## Help at the caret
+
+With nothing selected, each help level does what fits where the caret is. Nothing goes into the page until you press a key to take it, and ⌘3–⌘5 write only once the page has a sentence of your own; before that they offer questions to start from.
+
+| Caret                             | ⌘1 Recall                                  | ⌘2 Nudge             | ⌘3 Word                                            | ⌘4 Sentence                                      | ⌘5 Passage                                       |
+| --------------------------------- | ------------------------------------------ | -------------------- | -------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------ |
+| End of a paragraph                | notes on the paragraph                     | a question about it  | the next word                                      | the next sentence                                | the next 2–4 sentences                           |
+| Mid-paragraph                     | notes on the paragraph                     | a question about it  | the next word                                      | the next sentence                                | the rewrite bar (a hint says where ⌘5 continues) |
+| In or right after a word (`writ`) |                                            |                      | ways to finish it: `writing`, never `writ writing` | the next sentence, after the whole word          |                                                  |
+| Empty line after your text        | notes on the paragraph above               | what could come next | opening words, capitalised                         | an opening sentence                              | an opening 2–4 sentences                         |
+| Heading                           | notes on the heading                       | a question about it  | the next word                                      | the section's first sentence, as a new paragraph | its first 2–4 sentences                          |
+| List item                         | notes on the item                          | a question about it  | the next word                                      | the next item                                    | the next item                                    |
+| Code block or table               | Help is off inside code (or tables)        |                      |                                                    |                                                  |                                                  |
+| No sentence yet, with a title     | notes on the title                         | an opening question  | 2–3 opening questions, never prose                 |                                                  |                                                  |
+| No sentence yet, no title         | Write a line first, or open Thinking Space |                      |                                                    |                                                  |                                                  |
+
+A ⌘5 ghost takes **Tab** for the next sentence, **⌥→** for the next word and **⌘↵** for all of it; ⌘5 again gives another, and Esc (or ⌘0) drops what's left. History notes how many sentences you took. A continuation follows your voice profile and the kind's length, stays within 90 words, is cut to whole sentences, and is thrown away if it only repeats the paragraph after it. Every level also sees the piece's title.
+
+In the title, ⌥1–⌥5 (and ⌘1–⌘5 where the browser lets them through) never type into the title. ⌘3 with a draft of three sentences or more suggests a title from it; otherwise ⌘1 and ⌘2 run at the end of the first paragraph, and ⌘3–⌘5 at the end of your last paragraph, so a continuation never lands between two paragraphs you've written. In the Markdown view, help keys say help works in the page view, with a Switch button (reach it with Tab, or press the help key again). If you keep typing or move the caret while a word, sentence or passage is still being written, it is dropped, so it never appears where you no longer are (Recall and a Nudge follow your edits instead). Once a new draft has its first few words, the status bar shows a one-time tip about ⌘3–⌘5 with nothing selected; dismiss it and it stays gone.
+
 ## Voice profiles
 
 Each kind gets a short, readable profile in `.ekdanta/voice/<kind>.md`, built from your ★ exemplars (topped up with recent pieces while there are fewer than three). Every trait quotes your own writing, and Ekdanta checks each quote against the source before keeping it. Edit the traits freely; anything under **Your rules** is yours and a rebuild never changes it. A rebuild is shown as a diff to accept or reject, and ⌘3–⌘5 follow the profile for the piece's kind. The profile opens as a formatted page; switch to Markdown to edit it.
@@ -66,27 +86,28 @@ Every shortcut below except the help ladder's can be changed in Settings → Key
 
 The help levels are ⌘1–⌘5. Some browsers keep ⌘+number for switching tabs; there, use ⌥ (Option) instead. Ekdanta notices which one reaches it and labels everything to match.
 
-| Keys | |
-|---|---|
-| ⌘1 · ⌘2 · ⌘3 · ⌘4 · ⌘5 | Recall · Nudge · Word · Sentence · Passage. The same key again gives the next suggestion. |
-| ⌘3 | With nothing selected, options for the next word; with a selection, replacements for it |
-| Esc | Dismiss (typing also dismisses, except a Nudge) |
-| ↑↓ ↵ | Choose and pick in Recall and Word |
-| Tab | Accept ghost text; in a diff, step through changes (↵ accept, ⌫ reject) |
-| ⌘↵ / ⌘⌫ | Accept all / reject all |
-| ⌥T | Thinking Space for the open piece (browsers keep ⌘T for a new tab) |
-| ⌥N | New draft, in the current folder (browsers keep ⌘N for a new window) |
-| ⌘B · ⌘I · ⌘U · ⌘⇧X | Bold · italic · underline · strikethrough |
-| ⌘E · ⌘⇧H · ⌘K | Inline code · highlight · link |
-| ⌘⇧0 · ⌘⇧1–3 | Normal text · heading 1–3 (on a Mac, ⌘⇧3 is the screenshot key: rebind Heading 3 in Settings) |
-| ⌘⇧7 · ⌘⇧8 · ⌘⇧9 | Numbered list · bulleted list · checklist (⌘↵ ticks a to-do) |
-| Tab · ⇧Tab · ⌘] · ⌘[ | Nest and un-nest list items |
-| ⌘F | Find and replace |
-| ⌘⇧V | Paste as plain text |
-| ⌥⇧8 | Star the open piece as an exemplar (it sounds like you), or un-star it |
-| ⌥, | Settings: help ceiling, models, appearance, the Recall index |
-| ⌘. | Focus mode |
-| ⌘\ · ⌃⌥1–4 | Right panel · Material, Outline, History, Piece |
+| Keys                   |                                                                                                                               |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| ⌘1 · ⌘2 · ⌘3 · ⌘4 · ⌘5 | Recall · Nudge · Word · Sentence · Passage. The same key again gives the next suggestion.                                     |
+| ⌘3                     | With nothing selected, options for the next word (or to finish the word you're typing); with a selection, replacements for it |
+| ⌘5                     | At the end of a paragraph, continue it (Tab takes a sentence, ⌘↵ all of it); with a selection or mid-paragraph, rewrite       |
+| Esc                    | Dismiss (typing also dismisses, except a Nudge)                                                                               |
+| ↑↓ ↵                   | Choose and pick in Recall and Word                                                                                            |
+| Tab                    | Accept ghost text; in a diff, step through changes (↵ accept, ⌫ reject)                                                       |
+| ⌘↵ / ⌘⌫                | Accept all / reject all                                                                                                       |
+| ⌥T                     | Thinking Space for the open piece (browsers keep ⌘T for a new tab)                                                            |
+| ⌥N                     | New draft, in the current folder (browsers keep ⌘N for a new window)                                                          |
+| ⌘B · ⌘I · ⌘U · ⌘⇧X     | Bold · italic · underline · strikethrough                                                                                     |
+| ⌘E · ⌘⇧H · ⌘K          | Inline code · highlight · link                                                                                                |
+| ⌘⇧0 · ⌘⇧1–3            | Normal text · heading 1–3 (on a Mac, ⌘⇧3 is the screenshot key: rebind Heading 3 in Settings)                                 |
+| ⌘⇧7 · ⌘⇧8 · ⌘⇧9        | Numbered list · bulleted list · checklist (⌘↵ ticks a to-do)                                                                  |
+| Tab · ⇧Tab · ⌘] · ⌘[   | Nest and un-nest list items                                                                                                   |
+| ⌘F                     | Find and replace                                                                                                              |
+| ⌘⇧V                    | Paste as plain text                                                                                                           |
+| ⌥⇧8                    | Star the open piece as an exemplar (it sounds like you), or un-star it                                                        |
+| ⌥,                     | Settings: help ceiling, models, appearance, the Recall index                                                                  |
+| ⌘.                     | Focus mode                                                                                                                    |
+| ⌘\ · ⌃⌥1–4             | Right panel · Material, Outline, History, Piece                                                                               |
 
 ## What's not here yet
 

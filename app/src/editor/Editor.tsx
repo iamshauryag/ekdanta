@@ -8,6 +8,7 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { closeHistory, redoDepth, undoDepth } from '@tiptap/pm/history'
 import { COMMANDS, binding, matches, titled } from '../lib/keys.ts'
 import { blockOf, marksOf, runCommand, type Block, type Mark } from './commands.ts'
+import { helpLevel } from './caret.ts'
 import { HelpController, type HistoryItem } from './controller.ts'
 import type { EdgeSlot } from '../lib/edge.ts'
 import { helpKey, helpOf, helpPlugin, noteCmdWorks, paragraphAt, textOf, type Help, type Level } from './help.ts'
@@ -41,6 +42,9 @@ interface Props {
   onChange: (markdown: string) => void
   doc: () => string
   platform: () => string
+  title: () => string
+  /** The model provider in use, to name it in errors. */
+  provider: () => string | null
   ceiling: () => number
   recallDot: () => boolean
   record: (item: HistoryItem) => void
@@ -74,14 +78,6 @@ interface Props {
   edgeCurrent?: (slot: EdgeSlot) => string
   /** Use an accepted title, subject or excerpt. */
   acceptEdge?: (slot: EdgeSlot, text: string) => void
-}
-
-/** Which help level a keydown asks for: ⌥1–⌥5 everywhere, ⌘1–⌘5 where the browser allows it. */
-export function helpLevel(e: KeyboardEvent): Level | null {
-  const m = e.code.match(/^Digit([1-5])$/)
-  if (!m || e.shiftKey || e.ctrlKey) return null
-  if (e.altKey !== e.metaKey) return Number(m[1]) as Level
-  return null
 }
 
 // Commands that act on the page (the rest of lib/keys.ts is handled by the app).
@@ -202,7 +198,7 @@ export function Editor(props: Props) {
         const now = helpOf(editor.state)
         const before = lastHelp.current
         if (before && !now && transaction.docChanged && !transaction.getMeta(helpKey) && 'level' in before && !['loading', 'notice', 'bar'].includes(before.kind)) {
-          p().record({ level: before.level as Level, at: new Date().toISOString(), from: before.from, outcome: 'dismissed' })
+          controller.current?.noteDismissed(before)
         }
         lastHelp.current = now
         if (transaction.docChanged || transaction.selectionSet) {
@@ -239,6 +235,8 @@ export function Editor(props: Props) {
     controller.current = new HelpController(editor.view, {
       doc: () => p().doc(),
       platform: () => p().platform(),
+      title: () => p().title(),
+      provider: () => p().provider(),
       ceiling: () => p().ceiling(),
       record: (item) => p().record(item),
       snapshot: (reason) => p().snapshot?.(reason),
@@ -339,8 +337,9 @@ export function Editor(props: Props) {
         }
       }
       if (h.kind === 'ghost') {
-        if (e.key === 'Tab' && !mod) return c.acceptGhost()
-        if (e.key === 'ArrowRight' && e.altKey) return c.acceptGhost(true)
+        if (e.key === 'Tab' && !mod && !e.shiftKey) return c.acceptGhost()
+        if (e.key === 'ArrowRight' && e.altKey) return c.acceptGhost('word')
+        if (e.key === 'Enter' && mod) return c.acceptGhost('all')
       }
       if (h.kind === 'nudge' && mod && e.key === 'Enter') {
         c.resolve()
