@@ -4853,3 +4853,132 @@ p.row-warn {
 :root[data-theme='dark'] .import-status.is-unsupported {
   color: #d8ad5a;
 }
+
+/* feature: save-safety */
+.save-state button.save-retry {
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.save-state.is-failed,
+.save-state.is-conflict,
+.save-state.is-gone {
+  color: var(--del-ink);
+}
+/* A bar above the page when a save needs the writer: sticky under the toolbar. */
+.save-bar {
+  position: sticky;
+  top: var(--toolbar-h, 41px);
+  z-index: 19;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  width: var(--measure);
+  max-width: calc(100% - 32px);
+  margin: 12px auto 0 84px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.06);
+}
+.save-bar.is-conflict {
+  border-color: var(--del-ink);
+  background: color-mix(in srgb, var(--del-bg) 60%, var(--pop));
+}
+.app.is-focus .save-bar {
+  top: 0;
+}
+.save-bar-actions {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.save-bar-actions button {
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-weight: 500;
+  color: var(--accent);
+}
+.save-bar-actions button:hover {
+  background: var(--accent-soft);
+}
+.save-bar + .page {
+  padding-top: 18px;
+}
+@media (max-width: 900px) {
+  .save-bar {
+    margin-left: 16px;
+  }
+}
+.compare-sheet {
+  width: min(760px, 100%);
+}
+.compare-key {
+  margin: 0 24px 8px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.compare-key del,
+.compare-key ins {
+  margin-right: 10px;
+}
+.compare-text {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 24px;
+  padding: 14px 16px;
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--page);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.compare-sheet del {
+  color: var(--del-ink);
+  background: var(--del-bg);
+  text-decoration: line-through;
+}
+.compare-sheet ins {
+  color: var(--accent);
+  background: var(--accent-soft);
+  text-decoration: none;
+}
+.compare-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 24px 18px;
+}
+/* In focus mode the title bar is hidden: a failing save shows in the corner instead. */
+.save-state.is-floating {
+  position: fixed;
+  top: 12px;
+  right: 16px;
+  z-index: 30;
+  margin: 0;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+}
+/* Heard by screen readers, never seen. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

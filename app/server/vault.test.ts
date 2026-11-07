@@ -188,6 +188,121 @@ test('saving keeps a document’s permissions and its hard links', async () => {
   await fs.rm(other)
 })
 
+test('writing what is already there changes nothing, not even the mtime', async () => {
+  const abs = path.join(root, 'essays/same.md')
+  const { mtime } = await vault.writeDoc('essays/same.md', 'unchanged')
+  const seen: string[] = []
+  const off = vault.onBeforeWrite((w) => void seen.push(w.reason))
+  try {
+    await new Promise((r) => setTimeout(r, 15))
+    const again = await vault.writeDoc('essays/same.md', 'unchanged')
+    assert.equal(again.mtime, mtime)
+    assert.equal((await fs.stat(abs)).mtimeMs, mtime)
+    assert.deepEqual(seen, [], 'no hooks for a write that writes nothing')
+  } finally {
+    off()
+  }
+  // The same text arriving from outside: the record catches up, so it isn't taken for an outside edit.
+  await fs.writeFile(abs, 'from outside')
+  await vault.writeDoc('essays/same.md', 'from outside')
+  assert.equal((await vault.lastWritten('essays/same.md'))?.mtime, (await fs.stat(abs)).mtimeMs)
+})
+
+test('a save based on an older version is refused with what is on disk, and a gone file is not brought back', async () => {
+  const { mtime } = await vault.writeDoc('essays/two.md', 'base')
+  const theirs = await vault.writeDoc('essays/two.md', 'their edit', { baseMtime: mtime })
+  await assert.rejects(vault.writeDoc('essays/two.md', 'my edit', { baseMtime: mtime }), (e: unknown) => {
+    assert.ok(e instanceof vault.StaleWrite)
+    assert.equal(e.content, 'their edit')
+    assert.equal(e.mtime, theirs.mtime)
+    return true
+  })
+  // Same text as theirs: nothing to fight over.
+  assert.equal((await vault.writeDoc('essays/two.md', 'their edit', { baseMtime: mtime })).mtime, theirs.mtime)
+  // Keep mine: write again on top of the version now on disk.
+  await vault.writeDoc('essays/two.md', 'my edit', { baseMtime: theirs.mtime })
+  assert.equal(await fs.readFile(path.join(root, 'essays/two.md'), 'utf8'), 'my edit')
+
+  await assert.rejects(vault.writeDoc('essays/gone.md', 'x', { create: false }), vault.MissingDoc)
+  assert.equal(await exists(path.join(root, 'essays/gone.md')), false)
+  await vault.writeDoc('essays/gone.md', 'x', { create: true, baseMtime: 123 })
+  assert.equal(await fs.readFile(path.join(root, 'essays/gone.md'), 'utf8'), 'x')
+  assert.deepEqual(await vault.readWithMtime('essays/nowhere.md'), null)
+  assert.equal((await vault.readWithMtime('essays/gone.md'))?.mtime, (await fs.stat(path.join(root, 'essays/gone.md'))).mtimeMs)
+})
+
+test('a rename reports every document it touched, with the mtime now on disk', async () => {
+  await vault.writeDoc('essays/linker.md', '---\ntitle: Linker\n---\n\nSee [[target]].')
+  await vault.writeDoc('essays/target.md', '---\ntitle: Target\n---\n\nHere.')
+  const { result: next, touched } = await vault.collectTouched(() => vault.renameDoc('essays/target.md', 'Aim'))
+  assert.equal(next, 'essays/aim.md')
+  const byPath = new Map(touched.map((t) => [t.path, t.mtime]))
+  for (const p of ['essays/aim.md', 'essays/linker.md']) assert.equal(byPath.get(p), (await fs.stat(path.join(root, p))).mtimeMs, p)
+  assert.match(await fs.readFile(path.join(root, 'essays/linker.md'), 'utf8'), /\[\[aim\]\]/)
+  // Writes outside a collector aren't recorded anywhere.
+  const outside = await vault.collectTouched(async () => 1)
+  assert.deepEqual(outside.touched, [])
+})
+
+test('changesSince sees outside edits, new and deleted files from stats alone', async () => {
+  const { now } = await vault.changesSince()
+  await fs.writeFile(path.join(root, 'essays/outside-new.md'), 'new')
+  const later = new Date(Date.now() + 20_000)
+  await fs.utimes(path.join(root, 'essays/aim.md'), later, later)
+  await fs.rm(path.join(root, 'essays/linker.md'))
+  const c = await vault.changesSince(now)
+  assert.ok(c.now > now)
+  assert.deepEqual(
+    c.created.map((x) => x.path),
+    ['essays/outside-new.md'],
+  )
+  assert.deepEqual(
+    c.changed.map((x) => x.path),
+    ['essays/aim.md'],
+  )
+  assert.equal(c.changed[0].mtime, later.getTime())
+  assert.deepEqual(c.deleted, ['essays/linker.md'])
+  // Nothing new since then.
+  const quiet = await vault.changesSince(c.now)
+  assert.deepEqual([quiet.changed, quiet.created, quiet.deleted], [[], [], []])
+  // Created then deleted between two polls: nothing to report.
+  await fs.writeFile(path.join(root, 'essays/blip.md'), 'x')
+  await vault.changesSince(quiet.now - 1) // a scan in between sees it appear
+  await fs.rm(path.join(root, 'essays/blip.md'))
+  const net = await vault.changesSince(quiet.now)
+  assert.equal(
+    [...net.created, ...net.changed].some((x) => x.path === 'essays/blip.md'),
+    false,
+  )
+  assert.equal(net.deleted.includes('essays/blip.md'), false)
+  // A time from before the log began asks the client to start over.
+  assert.equal((await vault.changesSince(0)).reset, true)
+})
+
+test('polling a 5,000-file vault reads no file contents', async () => {
+  const big = path.join(root, 'big')
+  await fs.mkdir(big, { recursive: true })
+  await Promise.all(Array.from({ length: 5000 }, (_, i) => fs.writeFile(path.join(big, `n${i}.md`), `note ${i}`)))
+  const { now } = await vault.changesSince()
+  const real = { readFile: fs.readFile, open: fs.open }
+  let reads = 0
+  fs.readFile = ((...a: Parameters<typeof fs.readFile>) => (reads++, real.readFile(...a))) as typeof fs.readFile
+  fs.open = ((...a: Parameters<typeof fs.open>) => (reads++, real.open(...a))) as typeof fs.open
+  try {
+    const later = new Date(Date.now() + 30_000)
+    await fs.utimes(path.join(big, 'n42.md'), later, later)
+    const c = await vault.changesSince(now)
+    assert.deepEqual(
+      c.changed.map((x) => x.path),
+      ['big/n42.md'],
+    )
+  } finally {
+    fs.readFile = real.readFile
+    fs.open = real.open
+  }
+  assert.equal(reads, 0)
+})
+
 // ---- Names in any script, and renaming a folder ----
 
 const today = () => {

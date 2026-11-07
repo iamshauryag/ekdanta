@@ -5,7 +5,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { countWords, isVersionId, retain, splitDoc, versionId, wordDelta, type VersionEntry, type VersionRow } from '../src/lib/versions.ts'
-import { META_DIR, betweenWrites, docKey, hashOf, lastWritten, onBeforeWrite, readDoc, registerSidecar, resolveInVault, atomicWrite } from './vault.ts'
+import { META_DIR, betweenWrites, docKey, hashOf, lastWritten, onBeforeWrite, readDoc, readWithMtime, registerSidecar, resolveInVault, atomicWrite } from './vault.ts'
 import { HttpError } from './net.ts'
 
 /** Saves closer together than this don't each get a version. */
@@ -176,12 +176,12 @@ export function nameVersion(rel: string, id: string, name: string) {
 /**
  * Open a document: read it and, if it was changed outside Ekdanta since Ekdanta last wrote it, keep
  * both sides as versions. Done between writes, so a save in flight is never mistaken for an outside
- * change (the file already new, the write record not yet). Returns the file's text.
+ * change (the file already new, the write record not yet). Returns the file's text and mtime, or null if it isn't there.
  */
-export function checkOutside(rel: string): Promise<string> {
+export function checkOutside(rel: string): Promise<{ content: string; mtime: number } | null> {
   return betweenWrites(rel, async () => {
-    const now = await readDoc(rel)
-    await noteOutside(rel, now).catch((e) => console.error(`[ekdanta] couldn't keep versions of ${rel}:`, e))
+    const now = await readWithMtime(rel)
+    if (now) await noteOutside(rel, now.content).catch((e) => console.error(`[ekdanta] couldn't keep versions of ${rel}:`, e))
     return now
   })
 }

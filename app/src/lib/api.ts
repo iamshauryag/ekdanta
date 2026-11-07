@@ -100,13 +100,41 @@ export interface Thinking {
 }
 type Frag = { id: string; text: string }
 
-/** A failed request: the server's message, and its code when it gives one (VAULT_UNAVAILABLE). */
+/** A request the server answered with an error: its status, its code when it gives one (VAULT_UNAVAILABLE), and anything else it sent. */
 export class ApiError extends Error {
+  readonly status: number
   readonly code?: string
-  constructor(message: string, code?: string) {
-    super(message)
-    this.code = code
+  readonly data: Record<string, unknown>
+  constructor(status: number, data: Record<string, unknown>, fallback: string) {
+    super(typeof data.error === 'string' ? data.error : fallback)
+    this.status = status
+    this.data = data
+    if (typeof data.code === 'string') this.code = data.code
   }
+}
+
+async function json<T>(r: Response): Promise<T> {
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) throw new ApiError(r.status, data as Record<string, unknown>, r.statusText || 'The app’s server didn’t answer')
+  return data as T
+}
+
+/** A document a server operation wrote or moved, and its mtime now. */
+export interface Touched {
+  path: string
+  mtime: number
+}
+/** What a file operation answers: where the document is now, and every document it changed. */
+export interface Moved {
+  path: string
+  touched?: Touched[]
+}
+export interface Changes {
+  now: number
+  reset?: boolean
+  changed: Touched[]
+  created: Touched[]
+  deleted: string[]
 }
 
 export interface IdeaRow {
@@ -116,12 +144,6 @@ export interface IdeaRow {
   starred: boolean
   /** The newest piece started from it, while that piece exists. */
   started?: { path: string; title: string }
-}
-
-async function json<T>(r: Response): Promise<T> {
-  const data = await r.json().catch(() => ({ error: r.statusText || 'The app’s server didn’t answer' }))
-  if (!r.ok) throw new ApiError((data as { error?: string }).error ?? r.statusText, (data as { code?: string }).code)
-  return data as T
 }
 
 export type ImportStatus = 'pending' | 'converted' | 'review' | 'failed' | 'duplicate' | 'unsupported'
@@ -168,19 +190,23 @@ export const api = {
     fetch('/api/file?path=' + encodeURIComponent(path))
       .then(json<{ content: string }>)
       .then((d) => d.content),
-  write: (path: string, content: string) => fetch('/api/file', send('PUT', { path, content })).then(json),
+  /** The document's text and the mtime of exactly that text. */
+  readFile: (path: string) => fetch('/api/file?path=' + encodeURIComponent(path)).then(json<{ content: string; mtime: number }>),
+  /** Save. With baseMtime, a file changed since is refused (ApiError 409, data {mtime, content}); a gone file is a 404 unless create. */
+  write: (path: string, content: string, opts: { baseMtime?: number; create?: boolean } = {}) => fetch('/api/file', send('PUT', { path, content, ...opts })).then(json<{ ok: true; mtime: number }>),
+  changes: (since?: number) => fetch('/api/changes' + (since === undefined ? '' : '?since=' + since)).then(json<Changes>),
   create: (folder: string, platform?: string) => fetch('/api/new', send('POST', { folder, platform })).then(json<{ path: string }>),
-  name: (path: string, title: string) => fetch('/api/name', send('POST', { path, title })).then(json<{ path: string }>),
-  place: (path: string) => fetch('/api/place', send('POST', { path })).then(json<{ path: string }>),
-  rename: (path: string, title: string) => fetch('/api/rename', send('POST', { path, title })).then(json<{ path: string }>),
-  move: (path: string, folder: string) => fetch('/api/move', send('POST', { path, folder })).then(json<{ path: string }>),
-  duplicate: (path: string) => fetch('/api/duplicate', send('POST', { path })).then(json<{ path: string }>),
+  name: (path: string, title: string) => fetch('/api/name', send('POST', { path, title })).then(json<Moved>),
+  place: (path: string) => fetch('/api/place', send('POST', { path })).then(json<Moved>),
+  rename: (path: string, title: string) => fetch('/api/rename', send('POST', { path, title })).then(json<Moved>),
+  move: (path: string, folder: string) => fetch('/api/move', send('POST', { path, folder })).then(json<Moved>),
+  duplicate: (path: string) => fetch('/api/duplicate', send('POST', { path })).then(json<Moved>),
   remove: (path: string) => fetch('/api/delete', send('POST', { path })).then(json<Trashed>),
   saveImage: (doc: string, name: string, data: string) => fetch('/api/asset', send('POST', { doc, name, data })).then(json<{ src: string }>),
   trash: () => fetch('/api/trash').then(json<Trashed[]>),
-  restore: (id: string) => fetch('/api/restore', send('POST', { id })).then(json<{ path: string }>),
+  restore: (id: string) => fetch('/api/restore', send('POST', { id })).then(json<Moved>),
   discard: (path: string) => fetch('/api/discard', send('POST', { path })).then(json<{ discarded: boolean }>),
-  patchMeta: (path: string, patch: Record<string, string | null>) => fetch('/api/meta', send('POST', { path, patch })).then(json),
+  patchMeta: (path: string, patch: Record<string, string | null>) => fetch('/api/meta', send('POST', { path, patch })).then(json<{ ok: true; touched?: Touched[] }>),
   voice: () => fetch('/api/voice').then(json<VoiceSummary[]>),
   voiceProfile: (platform: string) =>
     fetch('/api/voice/profile?platform=' + encodeURIComponent(platform))
@@ -210,9 +236,9 @@ export const api = {
   snapshot: (doc: string, opts: { reason: string; name?: string; content?: string }) => fetch('/api/versions/snapshot', send('POST', { doc, ...opts })).then(json<{ version: VersionEntry | null }>),
   nameVersion: (doc: string, id: string, name: string) => fetch('/api/versions/name', send('POST', { doc, id, name })).then(json<{ version: VersionEntry }>),
   clearHistory: (doc: string) => fetch('/api/history?doc=' + encodeURIComponent(doc), { method: 'DELETE' }).then(json),
-  renameKindFolder: (id: string) => fetch('/api/kinds/rename-folder', send('POST', { id })).then(json<{ settings: Settings; moved: { from: string; to: string }[] }>),
+  renameKindFolder: (id: string) => fetch('/api/kinds/rename-folder', send('POST', { id })).then(json<{ settings: Settings; moved: { from: string; to: string }[]; touched?: Touched[] }>),
   templates: () => fetch('/api/templates').then(json<TemplateInfo[]>),
-  applyTemplate: (path: string, template: string) => fetch('/api/templates/apply', send('POST', { path, template })).then(json<{ cursor: number | null }>),
+  applyTemplate: (path: string, template: string) => fetch('/api/templates/apply', send('POST', { path, template })).then(json<{ cursor: number | null; touched?: Touched[] }>),
   seedTemplates: () => fetch('/api/templates/seed', send('POST', {})).then(json<{ added: string[] }>),
   useSample: () => fetch('/api/vault/use-sample', send('POST', {})).then(json<{ files: number }>),
   importBatch: () => fetch('/api/import/batch', send('POST', {})).then(json<ImportBatch>),
@@ -241,7 +267,7 @@ export const api = {
   edge: (req: { slot: EdgeSlot; text: string; kind: string; current?: string; avoid?: string[] }) =>
     fetch('/api/edge', send('POST', req)).then(json<{ kind: 'edge'; candidates: EdgeCandidate[] } | { kind: 'empty' | 'error'; message: string }>),
   ideas: () => fetch('/api/ideas').then(json<{ exists: boolean; ideas: IdeaRow[] }>),
-  captureIdea: (text: string) => fetch('/api/ideas', send('POST', { text })).then(json<{ added: boolean; text: string; date: string }>),
+  captureIdea: (text: string) => fetch('/api/ideas', send('POST', { text })).then(json<{ added: boolean; text: string; date: string; touched?: Touched[] }>),
   starIdea: (text: string, starred: boolean) => fetch('/api/ideas/star', send('POST', { text, starred })).then(json<{ starred: boolean }>),
   startIdea: (text: string, kind: string) => fetch('/api/ideas/start', send('POST', { text, kind })).then(json<{ path: string }>),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),

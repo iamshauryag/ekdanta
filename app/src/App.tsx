@@ -6,7 +6,7 @@ import { SourceEditor } from './editor/Source.tsx'
 import { findKind, kindName, kinds, setKinds } from './lib/kinds.ts'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
-import { api, ApiError, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Trashed, type VoiceSummary } from './lib/api.ts'
+import { api, ApiError, type Changes, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Touched, type Trashed, type VoiceSummary } from './lib/api.ts'
 import { applyPatch, joinFrontMatter, splitFrontMatter, type Meta, type MetaPatch } from './lib/frontmatter.ts'
 import { Panel, type HistorySeg, type PanelTab } from './components/Panel.tsx'
 import { VersionPreview } from './components/VersionPreview.tsx'
@@ -23,16 +23,26 @@ import { dismissHelp, helpMod, helpShowing, noteCmdWorks } from './editor/help.t
 import { fieldSlot, type EdgeSlot } from './lib/edge.ts'
 import { CaptureBox } from './components/CaptureBox.tsx'
 import { IdeasPage } from './components/IdeasPage.tsx'
-import { IDEAS_FILE, isSpecialFile } from './lib/special.ts'
+import { IDEAS_FILE, isSpecialFile, isSpecialPath } from './lib/special.ts'
 import type { Reading } from './components/ReaderList.tsx'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
 import { binding, isMac as isMacKeys, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
-import { isSpecialPath } from './lib/special.ts'
 import { authorOf, templateBody, templateMeta, type TemplateInfo } from './lib/templates.ts'
 import { StartFrom, TemplatePicker } from './components/TemplatePicker.tsx'
 import { insertTemplate, replacePlaceholder } from './editor/prompts.ts'
 import { APPEARANCE_DEFAULTS, appearanceVars, newNoteFolder } from './lib/appearance.ts'
 import { READ_WPM, readingTimes } from './lib/sentences.ts'
+import { Saver, createQueue, draftToOffer, dropDraft, rebase, retryDelay, writeDraft, type Draft, type SaveState, type Store } from './lib/saver.ts'
+import { CompareModal, ConflictBar, NoticeBar } from './components/ConflictBar.tsx'
+
+/** This browser's storage, if it has any (a private window or blocked site data may not). */
+function browserStore(): Store | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
 
 function usePref<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(() => {
@@ -76,7 +86,15 @@ export function App() {
   const [fresh, setFresh] = useState<string | null>(null) // a new draft, whose title gets the caret
   const [history, setHistory] = useState<HistoryItem[]>([])
   const [words, setWords] = useState(0)
-  const [saved, setSaved] = useState<'saved' | 'saving' | 'unsaved'>('saved')
+  const [saved, setSaved] = useState<SaveState>('saved')
+  // The file changed on disk under unsaved text: their version, until the writer picks one.
+  const [conflict, setConflict] = useState<{ path: string; mtime: number; content: string } | null>(null)
+  // Text kept in this browser from a save that never landed, offered when its document opens.
+  const [offer, setOffer] = useState<(Draft & { path: string }) | null>(null)
+  // What a screen reader hears about saving: only a save going wrong, and coming right again.
+  const [saveNews, setSaveNews] = useState('')
+  // A document that couldn't be read because the server didn't answer: it's tried again until it can be.
+  const [openFailed, setOpenFailed] = useState<string | null>(null)
 
   const [sidebarOpen, setSidebarOpen] = usePref('sidebar', true)
   const [sidebarMode, setSidebarMode] = usePref<SidebarMode>('sidebarMode', 'vault')
@@ -102,6 +120,8 @@ export function App() {
     [setChosenView],
   )
   const [editor, setEditor] = useState<TiptapEditor | null>(null)
+  const editorRef = useRef<TiptapEditor | null>(null)
+  editorRef.current = editor
   const [format, setFormat] = useState<EditorFormat | null>(null)
   const [outline, setOutline] = useState<Heading[]>([])
   const [settings, setSettings] = useState<SettingsT | null>(null)
@@ -117,19 +137,6 @@ export function App() {
   // Ideas: the full-page list, the one-line capture box, and a counter that tells the list to re-read.
   const [ideasView, setIdeasView] = useState(false)
   const [captureOpen, setCaptureOpen] = useState(false)
-  // Where the caret was in ideas.md when a capture re-read it, to put it back on the new page.
-  const reselect = useRef<{ from: number; to: number } | null>(null)
-  useEffect(() => {
-    const sel = reselect.current
-    if (!editor || !sel) return
-    reselect.current = null
-    const max = editor.state.doc.content.size
-    editor
-      .chain()
-      .setTextSelection({ from: Math.min(sel.from, max), to: Math.min(sel.to, max) })
-      .focus()
-      .run()
-  }, [editor])
   const [ideasVersion, setIdeasVersion] = useState(0)
   // How many ideas ideas.md holds, for the Vault's Ideas row: read again after a capture, on switching pages, and on coming back to the app.
   const [ideaCount, setIdeaCount] = useState<number | null>(null)
@@ -212,11 +219,35 @@ export function App() {
     const d = docRef.current
     fileText.set(d ? joinFrontMatter(d.rawMeta, d.meta, d.body) : '')
   }, [fileText])
-  const saveTimer = useRef<number | undefined>(undefined)
   const autosaveMs = useRef(APPEARANCE_DEFAULTS.autosaveMs)
   autosaveMs.current = settings?.autosaveMs ?? APPEARANCE_DEFAULTS.autosaveMs
   const renamed = useRef<string | null>(null)
   const opened = useRef(0)
+  const textOf = (d: Doc) => joinFrontMatter(d.rawMeta, d.meta, d.body)
+  const [store] = useState(browserStore)
+  // Everything between a keystroke and the disk: autosave, retries, conflicts (see saver.ts).
+  const [saver] = useState(
+    () =>
+      new Saver({
+        write: (path, content, opts) => api.write(path, content, opts),
+        // The page forgives `**bold **` while it's being typed; the file always gets valid Markdown.
+        content: () => (docRef.current ? { path: docRef.current.path, content: textOf(docRef.current) } : null),
+        onState: (state) => {
+          setSaved((was) => {
+            if (state === 'failed' || state === 'conflict' || state === 'gone') setSaveNews(state === 'failed' ? 'Not saved. Retrying.' : 'Not saved.')
+            else if (state === 'saved' && (was === 'failed' || was === 'conflict' || was === 'gone')) setSaveNews('Saved.')
+            return state
+          })
+          if (state === 'saved') setVersionsTick((t) => t + 1) // a save can keep a version
+        },
+        onConflict: setConflict,
+        onGone: () => setConflict(null),
+        store,
+        delay: () => autosaveMs.current,
+      }),
+  )
+  // File operations (rename, move, star, …) run one at a time, each after the open document is saved.
+  const [queue] = useState(createQueue)
 
   // The vault's documents. Until the first listing arrives, neither the welcome card nor a page shows.
   const [filesLoaded, setFilesLoaded] = useState(false)
@@ -339,8 +370,9 @@ export function App() {
   // Once started (see "Where Ekdanta starts"), the open page stays a real one: when it goes (deleted, or an
   // import undone) the first page opens, never ideas.md, which is material rather than a page; with no
   // pages left the welcome card shows. A page that has gone is never read, which would be an error banner.
+  // The open one stays even if its file has gone on disk, so the writer can put it back (see the deleted bar).
   useEffect(() => {
-    if (!started || (path && files.some((f) => f.path === path))) return
+    if (!started || (path && (files.some((f) => f.path === path) || docRef.current?.path === path))) return
     setPath(pages.length ? pages[0].path : null)
   }, [started, files, pages, path, setPath])
 
@@ -350,31 +382,57 @@ export function App() {
       renamed.current = null // same document under a new name: nothing to reload
       return
     }
+    // Leaving a document stops its saves; text that never reached the disk stays in this browser, offered when it opens again.
+    if (saver.base && saver.base.path !== path) saver.close()
     let cancelled = false
+    let retry: number | undefined
     if (briefFor.current !== path) briefFor.current = null
     setBrief(null)
     setBriefEditing(false)
     // The page and its brief arrive together (a brief that can't be read stays null: nothing to edit or overwrite).
-    Promise.all([api.read(path), api.brief(path).catch(() => null)])
-      .then(([content, b]) => {
-        if (cancelled) return
-        const { meta, body, raw } = splitFrontMatter(content)
-        const d = (docRef.current = { path, meta, body, rawMeta: raw })
-        const caret = pendingCaret.current?.path === path ? pendingCaret.current.caret : null
-        pendingCaret.current = null
-        syncText()
-        // A fresh key for every opening: a new untitled.md can reuse the name of a draft just titled and renamed.
-        setLoaded({ ...d, key: `${path}#${++opened.current}`, caret })
-        setBodyEmpty(!body.trim())
-        setSaved('saved')
-        if (b !== null) setBrief({ doc: d, text: b })
-        // Opened from its ⋯ menu to pin a brief (asked for before or while it loaded).
-        if (briefFor.current === path) {
-          briefFor.current = null
-          setBriefEditing(b !== null)
-        }
-      })
-      .catch((e) => !cancelled && fail(e))
+    const load = (attempt: number) =>
+      Promise.all([api.readFile(path), api.brief(path).catch(() => null)])
+        .then(([{ content, mtime }, b]) => {
+          if (cancelled) return
+          // Typed into the page being left while this one loaded: kept in this browser, offered when it opens again.
+          if (!saver.base && saver.dirty) saver.close()
+          const { meta, body, raw } = splitFrontMatter(content)
+          const d = (docRef.current = { path, meta, body, rawMeta: raw })
+          const caret = pendingCaret.current?.path === path ? pendingCaret.current.caret : null
+          pendingCaret.current = null
+          syncText()
+          // A fresh key for every opening: a new untitled.md can reuse the name of a draft just titled and renamed.
+          setLoaded({ ...d, key: `${path}#${++opened.current}`, caret })
+          setBodyEmpty(!body.trim())
+          saver.open(path, mtime, content)
+          setConflict(null)
+          setOpenFailed(null)
+          const draft = draftToOffer(store, path, content)
+          setOffer(draft && { ...draft, path })
+          if (b !== null) setBrief({ doc: d, text: b })
+          // Opened from its ⋯ menu to pin a brief (asked for before or while it loaded).
+          if (briefFor.current === path) {
+            briefFor.current = null
+            setBriefEditing(b !== null)
+          }
+        })
+        .catch((e) => {
+          if (cancelled) return
+          if (e instanceof ApiError && e.status === 404) {
+            setOpenFailed(null)
+            return refreshFiles() // gone: the list moves on
+          }
+          // The server is away. The page being left mustn't stay on screen looking editable (nothing would
+          // save it), so it goes, and this one is read again until the server answers.
+          if (docRef.current && docRef.current.path !== path) {
+            saver.close() // anything typed meanwhile stays in this browser
+            docRef.current = null
+            setLoaded(null)
+          }
+          setOpenFailed(path)
+          retry = window.setTimeout(() => load(attempt + 1), retryDelay(attempt))
+        })
+    load(0)
     api
       .history(path)
       .then((h) => !cancelled && setHistory(h as HistoryItem[]))
@@ -387,35 +445,63 @@ export function App() {
       .catch(() => {})
     return () => {
       cancelled = true
+      window.clearTimeout(retry)
     }
-  }, [path, started, fail])
+  }, [path, started, saver, store, refreshFiles, syncText])
 
   // The open page's brief: only while it belongs to the page on screen (every switch re-renders).
   const openBrief = brief && brief.doc === docRef.current ? brief : null
 
-  const save = useCallback(async () => {
-    window.clearTimeout(saveTimer.current)
-    saveTimer.current = undefined
-    const d = docRef.current
-    if (!d) return
-    setSaved('saving')
-    // The page forgives `**bold **` while it's being typed; the file always gets valid Markdown.
-    await api.write(d.path, joinFrontMatter(d.rawMeta, d.meta, d.body))
-    setSaved('saved')
-    setVersionsTick((t) => t + 1) // a save can keep a version
-  }, [])
+  /** Save now (⌘S, or before something reads the saved file). Never throws: a failure shows on the chip. */
+  const save = useCallback(() => saver.flush(), [saver])
 
   const onChange = useCallback(
     (text: string) => {
       if (docRef.current) docRef.current.body = text
       setBodyEmpty(!text.trim())
       syncText()
-      setSaved('unsaved')
-      window.clearTimeout(saveTimer.current)
-      saveTimer.current = window.setTimeout(save, autosaveMs.current)
+      saver.edited()
     },
-    [save, syncText],
+    [saver, syncText],
   )
+
+  // Leaving with unsaved text: the browser asks first, and the text is kept here in case they go anyway.
+  useEffect(() => {
+    // The dev server restarting reloads the page once it's back. That isn't the writer leaving: no
+    // question, and the text goes to the server (up again by then) and stays in this browser.
+    let serverRestart = false
+    const hot = import.meta.hot
+    const away = () => (serverRestart = true)
+    const back = () => (serverRestart = false)
+    hot?.on('vite:ws:disconnect', away)
+    hot?.on('vite:ws:connect', back)
+    const before = (e: BeforeUnloadEvent) => {
+      if (!saver.busy) return
+      saver.keepDraft()
+      if (serverRestart) return
+      e.preventDefault()
+      e.returnValue = '' // older browsers need this to ask
+    }
+    const hide = () => {
+      if (!saver.dirty) return
+      saver.keepDraft()
+      // One last try that outlives the page, also after failed saves; the base mtime keeps it from
+      // overwriting anything newer. Not for a conflict or a deleted file: those wait for the writer.
+      const d = docRef.current
+      const live = saver.state === 'unsaved' || saver.state === 'saving' || saver.state === 'failed'
+      const now = d && saver.base?.path === d.path && live ? { path: d.path, content: textOf(d), baseMtime: saver.base.mtime } : null
+      if (now && now.content.length < 60_000) fetch('/api/file', { method: 'PUT', keepalive: true, headers: { 'content-type': 'application/json' }, body: JSON.stringify(now) }).catch(() => {})
+    }
+    window.addEventListener('beforeunload', before)
+    window.addEventListener('pagehide', hide)
+    return () => {
+      hot?.off?.('vite:ws:disconnect', away)
+      hot?.off?.('vite:ws:connect', back)
+      window.removeEventListener('beforeunload', before)
+      window.removeEventListener('pagehide', hide)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saver])
 
   /** The open document as it is on screen, front matter included: what a version keeps. */
   const currentText = useCallback(() => {
@@ -441,7 +527,7 @@ export function App() {
     async (name: string) => {
       const d = docRef.current
       if (!d) return
-      if (saveTimer.current !== undefined) await save()
+      await save()
       const { version } = await api.snapshot(d.path, { reason: 'saved by you', name: name || undefined, content: currentText() })
       bumpVersions()
       notify(version ? (name ? `Saved version “${name}”` : 'Saved a version') : 'Nothing new to save · the last version is the same')
@@ -454,7 +540,7 @@ export function App() {
     const d = docRef.current
     const row = preview
     if (!d) return
-    if (saveTimer.current !== undefined) await save()
+    await save()
     await api.snapshot(d.path, { reason: 'before restore', content: currentText() })
     window.dispatchEvent(new CustomEvent('ekdanta:replace-body', { detail: { body: splitFrontMatter(content).body } }))
     await save()
@@ -472,9 +558,13 @@ export function App() {
     async (next: string, newly = false) => {
       const d = docRef.current
       if (d && d.path !== next) {
-        if (saveTimer.current !== undefined) await save()
-        if (!d.meta.title?.trim() && !d.body.trim()) {
-          const { discarded } = await api.discard(d.path)
+        // A save that fails here leaves the text in this browser, offered when the document opens again.
+        const clean = await saver.flush()
+        if (clean && !d.meta.title?.trim() && !d.body.trim()) {
+          const discarded = await api
+            .discard(d.path)
+            .then((r) => r.discarded)
+            .catch(() => false)
           if (discarded) await refreshFiles()
         }
       }
@@ -484,8 +574,228 @@ export function App() {
       if (!newly) setLivePreview(chosenView)
       setPath(next)
     },
-    [save, refreshFiles, setPath, chosenView],
+    [saver, refreshFiles, setPath, chosenView],
   )
+
+  // ---- Taking in versions from disk ---------------------------------------------------------
+  // Where the caret was when the page was re-read, so it lands back there.
+  const caret = useRef<{ from: number; to: number; focused: boolean; scroll: number; at: number } | null>(null)
+
+  /** Show a new version of the open document's text, keeping the caret where it was. */
+  const showText = useCallback(
+    (content: string) => {
+      const d = docRef.current
+      if (!d) return
+      const { meta, body, raw } = splitFrontMatter(content)
+      const bodyChanged = body !== d.body
+      d.meta = meta
+      d.rawMeta = raw
+      d.body = body
+      syncText()
+      setBodyEmpty(!body.trim())
+      if (!bodyChanged) return setLoaded((l) => (l ? { ...l, meta, rawMeta: raw } : l))
+      const ed = editorRef.current
+      caret.current = { from: ed?.state.selection.from ?? 0, to: ed?.state.selection.to ?? 0, focused: !!ed?.isFocused, scroll: document.querySelector('.page-area')?.scrollTop ?? 0, at: Date.now() }
+      setLoaded({ ...d, key: `${d.path}#${++opened.current}`, caret: null }) // a new key: the page is read afresh
+    },
+    [syncText],
+  )
+
+  const onEditor = useCallback((ed: TiptapEditor | null) => {
+    setEditor(ed)
+    const c = caret.current
+    if (!ed || !c || Date.now() - c.at > 2000) return
+    caret.current = null
+    try {
+      const at = (n: number) => Math.max(1, Math.min(n, ed.state.doc.content.size - 1))
+      ed.commands.setTextSelection({ from: at(c.from), to: at(c.to) })
+    } catch {
+      /* the text is shorter now */
+    }
+    if (c.focused) ed.commands.focus(null, { scrollIntoView: false })
+    const area = document.querySelector('.page-area')
+    if (area) area.scrollTop = c.scroll
+  }, [])
+
+  /**
+   * A version of the open document is on disk that its text isn't based on. `ours`: Ekdanta wrote it
+   * (a relink, a star, a template) and it merges into anything typed meanwhile. Otherwise someone else
+   * did: it replaces untouched text, and asks the writer if they have unsaved changes.
+   */
+  const takeIn = useCallback(
+    (disk: { content: string; mtime: number }, ours: boolean) => {
+      const d = docRef.current
+      const base = saver.base
+      if (!d || !base) return
+      const mine = textOf(d)
+      if (disk.content === base.content || disk.content === mine) return saver.adopt(disk.mtime, disk.content, !saver.dirty || disk.content === mine)
+      if (!saver.dirty) {
+        showText(disk.content)
+        saver.adopt(disk.mtime, disk.content, true)
+        if (!ours) notify('Updated from disk')
+        return
+      }
+      const merged = ours ? rebase(base.content, disk.content, mine) : null
+      if (merged !== null) {
+        showText(merged)
+        saver.adopt(disk.mtime, disk.content, merged === disk.content)
+        return
+      }
+      saver.clash({ path: d.path, ...disk })
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [saver, showText, notify],
+  )
+
+  /** After a file operation: if it rewrote the open document, take in the new version. */
+  const absorb = async (touched: Touched[] | undefined) => {
+    const d = docRef.current
+    const t = touched?.find((x) => x.path === d?.path)
+    if (!d || !t || !saver.base || t.mtime === saver.base.mtime) return
+    // The list first: a page read afresh shows its [[links]] against the names they have now.
+    await refreshFiles()
+    const disk = await api.readFile(d.path).catch(() => null)
+    if (disk && docRef.current === d && saver.base?.path === d.path && disk.mtime !== saver.base.mtime) takeIn(disk, true)
+  }
+
+  /** Run a file operation: after the open document is saved, with autosave held until it's done, one at a time. */
+  const op = <T,>(job: () => Promise<T>) =>
+    queue(async () => {
+      await saver.flush()
+      saver.pause()
+      try {
+        return await job()
+      } finally {
+        saver.resume()
+      }
+    })
+  const failed = (what: string) => (e: unknown) => notify(`Couldn’t ${what}: ${e instanceof Error ? e.message : 'the app’s server didn’t answer'}`)
+
+  /** A poll found changes on disk. Is the open document among them? */
+  const checkOpen = async (c: Changes) => {
+    const d = docRef.current
+    const base = saver.base
+    if (!d || !base || base.path !== d.path) return
+    const mentioned = c.reset || c.deleted.includes(d.path) || [...c.changed, ...c.created].some((x) => x.path === d.path && x.mtime !== base.mtime)
+    if (!mentioned) return
+    await saver.settled() // our own save may be what changed it
+    let disk: { content: string; mtime: number }
+    try {
+      disk = await api.readFile(d.path)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404 && docRef.current === d && saver.state !== 'gone') saver.gone()
+      return
+    }
+    if (docRef.current !== d || saver.base?.path !== d.path || disk.mtime === saver.base.mtime) return
+    if (saver.state === 'conflict') return setConflict({ path: d.path, ...disk }) // theirs moved on again
+    takeIn(disk, false)
+  }
+  const checkOpenRef = useRef(checkOpen)
+  checkOpenRef.current = checkOpen
+
+  // Watch the vault for changes made elsewhere (Obsidian, a shell, another tab), while the page is in view.
+  useEffect(() => {
+    let since: number | undefined
+    let timer: number | undefined
+    let running = false
+    let stopped = false
+    const poll = async () => {
+      window.clearTimeout(timer)
+      if (running || stopped) return
+      running = true
+      try {
+        if (document.visibilityState === 'visible') {
+          const c = await api.changes(since)
+          const first = since === undefined
+          since = c.now
+          if (!first && (c.reset || c.changed.length || c.created.length || c.deleted.length)) {
+            refreshFiles()
+            await queue(() => checkOpenRef.current(c))
+          }
+        }
+      } catch {
+        /* the server is away; try again next time */
+      } finally {
+        running = false
+        if (!stopped) timer = window.setTimeout(poll, 5000)
+      }
+    }
+    const onVisible = () => document.visibilityState === 'visible' && poll()
+    poll()
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [queue, refreshFiles])
+
+  /**
+   * Text that is about to leave the screen without reaching the disk, kept so it can come back: put back
+   * on the page if its document is still the open one, else kept in this browser and offered when it opens.
+   */
+  const putBack = (d: Doc, text: string) => {
+    if (docRef.current === d && saver.base?.path === d.path) {
+      showText(text)
+      saver.edited()
+      return
+    }
+    writeDraft(store, d.path, { content: text, at: Date.now() })
+    notify(`Kept in this browser: it’s offered when “${d.meta.title || d.path}” opens`)
+  }
+
+  const [compare, setCompare] = useState<'conflict' | 'draft' | null>(null)
+  const loadTheirs = () => {
+    const d = docRef.current
+    if (!conflict || !d || conflict.path !== d.path) return setConflict(null)
+    const mine = textOf(d)
+    showText(conflict.content)
+    saver.adopt(conflict.mtime, conflict.content, true)
+    setConflict(null)
+    setCompare(null)
+    // Undo is for this document only: by then another may be open, and this text must never land there.
+    notify('Loaded the version on disk', () => putBack(d, mine))
+  }
+  const keepMine = () => {
+    if (conflict) saver.keepMine(conflict.mtime)
+    setConflict(null)
+    setCompare(null)
+  }
+  const restoreDraft = () => {
+    const d = docRef.current
+    if (!offer || !d || offer.path !== d.path) return setOffer(null)
+    const now = textOf(d)
+    const draft = offer
+    showText(draft.content)
+    saver.edited()
+    setOffer(null)
+    setCompare(null)
+    // The text that was on the page (perhaps typed since it opened) can come back.
+    notify('Restored the unsaved changes', () => putBack(d, now))
+  }
+  const discardDraft = () => {
+    if (!offer) return
+    const draft = offer
+    dropDraft(store, draft.path)
+    setOffer(null)
+    setCompare(null)
+    notify('Discarded the unsaved changes', () => {
+      writeDraft(store, draft.path, { content: draft.content, at: draft.at })
+      if (docRef.current?.path === draft.path) setOffer(draft)
+    })
+  }
+  const recreate = () => {
+    saver.recreate()
+    saver.settled().then(refreshFiles)
+  }
+  /** The deleted file's notice, dismissed: the page closes; text not on disk stays in this browser, offered if the file comes back. */
+  const closeGone = () => {
+    saver.close()
+    docRef.current = null
+    setLoaded(null)
+    setPath(pages.find((f) => f.path !== path)?.path ?? null)
+    refreshFiles()
+  }
 
   const newDraft = useCallback(
     async (folder?: string) => {
@@ -560,8 +870,7 @@ export function App() {
   /** Notes the import just took back out: the open one can't stay open (a save would bring it back). */
   const importUndone = async (paths: string[]) => {
     if (docRef.current && paths.includes(docRef.current.path)) {
-      window.clearTimeout(saveTimer.current)
-      saveTimer.current = undefined
+      saver.close()
       docRef.current = null
       setLoaded(null)
     }
@@ -590,13 +899,18 @@ export function App() {
     d.meta = applyPatch(d.meta, patch)
     syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
-    save().then(refreshFiles).catch(fail)
+    saver.edited()
+    saver.flush().then(refreshFiles)
   }
 
   /** Change front matter of a given file: the open one through the editor's copy, any other on disk. */
   const setMetaOf = async (rel: string, patch: MetaPatch) => {
     if (docRef.current?.path === rel) setMeta(patch)
-    else await api.patchMeta(rel, patch).then(refreshFiles).catch(fail)
+    else
+      await op(async () => {
+        await absorb((await api.patchMeta(rel, patch)).touched)
+        await refreshFiles()
+      }).catch(failed('change it'))
   }
 
   /** A title written for the first time also names the file, and fills a template's {{title}} if it's still there. */
@@ -612,10 +926,16 @@ export function App() {
       }
     }
     d.meta = { ...d.meta, title }
+    syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
-    await save()
-    follow((await api.name(d.path, title)).path)
-    refreshFiles()
+    saver.edited()
+    await op(async () => {
+      if (docRef.current !== d) return
+      const { path: next, touched } = await api.name(d.path, title)
+      follow(next)
+      await absorb(touched)
+      refreshFiles()
+    }).catch(failed('name the file'))
   }
 
   /** A new platform moves the piece into that platform's folder. */
@@ -623,22 +943,31 @@ export function App() {
     const d = docRef.current
     if (!d) return
     d.meta = applyPatch(d.meta, { platform })
+    syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta } : l))
-    await save()
-    follow((await api.place(d.path)).path)
-    refreshFiles()
-    refreshVoices()
+    saver.edited()
+    await op(async () => {
+      if (docRef.current !== d) return
+      const { path: next, touched } = await api.place(d.path)
+      follow(next)
+      await absorb(touched)
+      refreshFiles()
+      refreshVoices()
+    }).catch(failed('move it to its folder'))
   }
 
   /** Read the open document again after the server rewrote it, with the caret at `caret` (an offset into the body). */
   const reloadOpen = async (caret: number | null) => {
     const d = docRef.current
     if (!d) return
-    const { meta, body, raw } = splitFrontMatter(await api.read(d.path))
+    const { content, mtime } = await api.readFile(d.path)
+    if (docRef.current !== d) return
+    const { meta, body, raw } = splitFrontMatter(content)
     docRef.current = { path: d.path, meta, body, rawMeta: raw }
+    syncText()
     setLoaded({ ...docRef.current, key: `${d.path}#${++opened.current}`, caret })
     setBodyEmpty(!body.trim())
-    setSaved('saved')
+    saver.open(d.path, mtime, content)
   }
 
   const templateFailed = (e: unknown) => {
@@ -657,18 +986,18 @@ export function App() {
     if (!d) return
     const typed = (document.querySelector('.doc-title')?.textContent ?? '').replace(/\s+/g, ' ').trim()
     if (typed && typed !== (d.meta.title ?? '')) await setTitle(typed)
-    if (saveTimer.current !== undefined) await save()
+    await save()
     const doc = docRef.current
     if (!doc) return
     const ed = editorRef.current
     if (!livePreview || !ed) {
-      try {
+      // The server fills the file, with autosave held so nothing typed meanwhile is written over it.
+      await op(async () => {
+        if (docRef.current !== doc) return
         const { cursor } = await api.applyTemplate(doc.path, t.path)
         await reloadOpen(cursor)
         refreshFiles()
-      } catch (e) {
-        templateFailed(e)
-      }
+      }).catch(templateFailed)
       return
     }
     let raw: string
@@ -734,66 +1063,53 @@ export function App() {
     return added.length
   }
 
-  /** Re-read the open document's front-matter after the server changed it (a move can set the platform). */
-  const reloadMeta = async () => {
-    const d = docRef.current
-    if (!d) return
-    const { meta, raw } = splitFrontMatter(await api.read(d.path))
-    d.meta = meta
-    d.rawMeta = raw
-    setLoaded((l) => (l ? { ...l, meta } : l))
-  }
-
-  /** Everything a page's ⋯ menu does. The open page saves first, so nothing typed is lost. */
+  /** Everything a page's ⋯ menu does. Each waits its turn, after the open page is saved, so nothing typed is lost. */
   const fileActions: FileActions = {
-    rename: async (rel, title) => {
-      const isOpen = docRef.current?.path === rel
-      if (isOpen && saveTimer.current !== undefined) await save()
-      const { path: next } = await api.rename(rel, title)
-      if (isOpen) {
-        follow(next)
-        await reloadMeta()
-      }
-      refreshFiles()
-      refreshVoices()
-    },
-    move: async (rel, folder) => {
-      const isOpen = docRef.current?.path === rel
-      if (isOpen && saveTimer.current !== undefined) await save()
-      const { path: next } = await api.move(rel, folder)
-      if (isOpen) {
-        follow(next)
-        await reloadMeta()
-      }
-      await refreshFiles()
-      refreshVoices()
-      notify(`Moved to ${folder.split('/').pop()}`, () => fileActions.move(next, rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''))
-    },
+    rename: (rel, title) =>
+      op(async () => {
+        const { path: next, touched } = await api.rename(rel, title)
+        if (docRef.current?.path === rel) follow(next)
+        await absorb(touched)
+        refreshFiles()
+        refreshVoices()
+      }).catch(failed('rename')),
+    move: (rel, folder) =>
+      op(async () => {
+        const { path: next, touched } = await api.move(rel, folder)
+        if (docRef.current?.path === rel) follow(next)
+        await absorb(touched)
+        await refreshFiles()
+        refreshVoices()
+        notify(`Moved to ${folder.split('/').pop()}`, () => fileActions.move(next, rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''))
+      }).catch(failed('move')),
     duplicate: async (rel) => {
-      if (docRef.current?.path === rel && saveTimer.current !== undefined) await save()
-      const { path: next } = await api.duplicate(rel)
+      const next = await op(async () => (await api.duplicate(rel)).path).catch(failed('duplicate'))
+      if (!next) return
       await refreshFiles()
       await openDoc(next)
     },
-    remove: async (rel) => {
-      const isOpen = docRef.current?.path === rel
-      if (isOpen) {
-        if (saveTimer.current !== undefined) await save()
-        docRef.current = null // nothing left to save to
-      }
-      const item = await api.remove(rel)
-      const left = (await api.files()).filter((f) => f.path !== rel)
-      setFiles(left)
-      if (isOpen) {
-        setLoaded(null)
-        // The next page, not ideas.md; with no pages left the welcome card takes over.
-        const next = left.find((f) => !isSpecialFile(f.path))
-        if (next) openDoc(next.path)
-      }
-      refreshTrash()
-      refreshVoices()
-      notify(`Deleted “${item.title}”`, () => restore(item.id))
-    },
+    remove: (rel) =>
+      op(async () => {
+        const isOpen = docRef.current?.path === rel
+        const item = await api.remove(rel)
+        if (isOpen) {
+          // Text that never reached the disk stays in this browser under its path: Undo (or a restore from
+          // the trash) brings the file back to the same place, and the text is offered again there.
+          saver.close()
+          docRef.current = null // nothing left to save to
+        }
+        const left = (await api.files()).filter((f) => f.path !== rel)
+        setFiles(left)
+        if (isOpen) {
+          setLoaded(null)
+          // The next page, not ideas.md; with no pages left the welcome card takes over.
+          const next = left.find((f) => !isSpecialFile(f.path))
+          if (next) openDoc(next.path)
+        }
+        refreshTrash()
+        refreshVoices()
+        notify(`Deleted “${item.title}”`, () => restore(item.id))
+      }).catch(failed('delete')),
     pinBrief: (rel) => void pinBrief(rel),
     hasBrief: (rel) => (openBrief && rel === openBrief.doc.path ? openBrief.text.trim() !== '' : !!files.find((f) => f.path === rel)?.brief),
   }
@@ -856,7 +1172,8 @@ export function App() {
   }
 
   const restore = async (id: string) => {
-    const { path: back } = await api.restore(id)
+    const back = await op(async () => (await api.restore(id)).path).catch(failed('restore'))
+    if (!back) return
     await refreshFiles()
     refreshTrash()
     refreshVoices()
@@ -870,6 +1187,7 @@ export function App() {
     if (!d || next === d.path) return
     const prev = d.path
     d.path = next
+    saver.retarget(next) // its unsaved draft, if any, goes with it
     renamed.current = next
     // Rename it in the list now too, or the app would think the open file had gone.
     setFiles((fs) => fs.map((f) => (f.path === prev ? { ...f, path: next, folder: next.includes('/') ? next.slice(0, next.lastIndexOf('/')) : '' } : f)))
@@ -879,14 +1197,15 @@ export function App() {
   }
 
   /** Settings → Kinds: move a kind's pieces out of a doubled-plural folder, following the open document if it moves. */
-  const renameKindFolder = async (id: string) => {
-    if (saveTimer.current !== undefined) await save()
-    const { settings: next, moved } = await api.renameKindFolder(id)
-    setSettings(next)
-    const mine = moved.find((m) => m.from === docRef.current?.path)
-    if (mine) follow(mine.to)
-    await refreshFiles()
-  }
+  const renameKindFolder = (id: string) =>
+    op(async () => {
+      const { settings: next, moved, touched } = await api.renameKindFolder(id)
+      setSettings(next)
+      const mine = moved.find((m) => m.from === docRef.current?.path)
+      if (mine) follow(mine.to)
+      await absorb(touched)
+      await refreshFiles()
+    })
 
   /** ★ a document as an exemplar of its platform, or un-star it. */
   const toggleExemplar = async (rel: string) => {
@@ -912,18 +1231,16 @@ export function App() {
 
   /** Add an idea to ideas.md. If ideas.md is the open page, it's saved first and re-read after, so neither edit is lost. */
   const captureIdea = async (text: string) => {
-    const d = docRef.current
-    const isOpen = d?.path.toLowerCase() === IDEAS_FILE
-    if (isOpen && saveTimer.current !== undefined) await save()
-    const { added } = await api.captureIdea(text)
-    if (isOpen && added && docRef.current === d) {
-      // The line goes at the end, so the caret's place is unchanged: put it back once the page is re-read.
-      const sel = editor && !editor.isDestroyed ? editor.state.selection : null
-      reselect.current = sel ? { from: sel.from, to: sel.to } : null
-      const { meta, body, raw } = splitFrontMatter(await api.read(d.path))
-      docRef.current = { path: d.path, meta, body, rawMeta: raw }
-      setLoaded({ ...docRef.current, key: `${d.path}#${Date.now()}` })
-    }
+    // With ideas.md open, it's saved first and autosave held, and the new line merges into anything typed since.
+    const added = await op(async () => {
+      const r = await api.captureIdea(text)
+      await absorb(r.touched)
+      return r.added
+    }).catch((e) => {
+      notify(`Couldn’t save the idea: ${e instanceof Error ? e.message : 'the app’s server didn’t answer'}`)
+      return null
+    })
+    if (added === null) return
     if (added && !files.some((f) => f.path.toLowerCase() === IDEAS_FILE)) refreshFiles()
     setIdeasVersion((v) => v + 1)
     notify(added ? 'Saved to Ideas' : 'Already in Ideas today')
@@ -958,7 +1275,7 @@ export function App() {
       const frags = (thinking?.canvas.nodes ?? []).filter((n) => n.type === 'text' && n.text?.trim()).map((n) => ({ id: n.id, text: n.text! }))
       if (!d || !frags.length) return
       materialTimer.current = window.setTimeout(async () => {
-        if (saveTimer.current !== undefined) await save() // coverage reads the saved draft
+        await save() // coverage reads the saved draft
         api
           .thinkingMaterial(d.path, frags, paragraph.current)
           .then(setMaterial)
@@ -1079,7 +1396,7 @@ export function App() {
     const appActions: Partial<Record<CommandId, () => void>> = {
       focus: () => setFocus((f) => !f),
       panel: () => setPanelOpen((o) => !o),
-      save: () => save(),
+      save: () => void save(),
       star: () => void (docRef.current && toggleExemplar(docRef.current.path)),
       settings: () => setSettingsOpen((o) => !o),
       newDraft: () => newDraft(),
@@ -1088,7 +1405,7 @@ export function App() {
       // The Thinking Space closes itself with the same key.
       thinking: () => {
         if (docRef.current && !thinkingOpen) {
-          if (saveTimer.current !== undefined) save()
+          save()
           setThinkingOpen(true)
         }
       },
@@ -1144,8 +1461,6 @@ export function App() {
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
   const title = loaded ? (loaded.meta.title ?? current?.title ?? '') : ''
   const isNew = !!loaded && fresh === loaded.path
-  const editorRef = useRef<TiptapEditor | null>(null)
-  editorRef.current = editor
   const templateItems = useMemo(() => ({ list: () => templatesRef.current, insert: (t: TemplateInfo) => insertAtCaretRef.current(t), browse: () => setPicker('insert') }), [])
   const insertAtCaretRef = useRef(insertAtCaret)
   insertAtCaretRef.current = insertAtCaret
@@ -1169,14 +1484,20 @@ export function App() {
       const hit = files.find((f) => f.path.replace(/\.md$/, '') === target || f.path.replace(/\.md$/, '').split('/').pop() === target)
       if (hit) return openDoc(hit.path)
       const folder = files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
-      const { path: created } = await api.create(folder)
       const title = target.replace(/[-_]+/g, ' ').replace(/^./, (c) => c.toUpperCase())
-      await api.patchMeta(created, { title })
-      // Keep the name the link uses, so the link finds it.
-      const { path: named } = await api.rename(created, title)
+      const named = await op(async () => {
+        const { path: created } = await api.create(folder)
+        await api.patchMeta(created, { title })
+        // Keep the name the link uses, so the link finds it.
+        const { path: named, touched } = await api.rename(created, title)
+        await absorb(touched)
+        return named
+      }).catch(failed('make the page'))
+      if (!named) return
       await refreshFiles()
       openDoc(named)
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [files, openDoc, refreshFiles],
   )
 
@@ -1265,7 +1586,7 @@ export function App() {
           {(loaded || !filesLoaded || pages.length > 0) && <b>{title || 'Untitled'}</b>}
         </div>
         <div className="titlebar-meta">
-          {loaded && <span className={`save-state is-${saved}`}>{saved === 'saved' ? 'Saved' : saved === 'saving' ? 'Saving…' : 'Edited'}</span>}
+          {loaded && <SaveChip state={saved} onRetry={() => saver.retry()} />}
           <button className="icon-btn" title={titled('Focus mode', 'focus')} onClick={() => setFocus(true)}>
             <Icon name="focus" />
           </button>
@@ -1355,6 +1676,29 @@ export function App() {
         {voiceView && <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />}
         {ideasView && !voiceView && <IdeasPage version={ideasVersion} onCapture={captureIdea} onStart={startIdea} onOpenDoc={openDoc} />}
         {loaded && !voiceView && !ideasView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={chooseView} />}
+        {/* Saving needs the writer. In focus mode the title bar is hidden, so a failing save shows here too. */}
+        {loaded && !voiceView && !ideasView && focus && saved === 'failed' && <SaveChip state={saved} onRetry={() => saver.retry()} floating />}
+        {!loaded && openFailed && !voiceView && !ideasView && <NoticeBar text="Couldn’t open the page: the app’s server isn’t answering. Trying again…" actions={[]} />}
+        {loaded && !voiceView && !ideasView && conflict && conflict.path === loaded.path && <ConflictBar onTheirs={loadTheirs} onMine={keepMine} onCompare={() => setCompare('conflict')} />}
+        {loaded && !voiceView && !ideasView && saved === 'gone' && (
+          <NoticeBar
+            text="This file was deleted on disk"
+            actions={[
+              { label: 'Recreate', title: 'Write it back with the text on screen', run: recreate },
+              { label: 'Close', title: 'Close it (text that wasn’t saved stays in this browser)', run: closeGone },
+            ]}
+          />
+        )}
+        {loaded && !voiceView && !ideasView && offer && offer.path === loaded.path && !conflict && (
+          <NoticeBar
+            text={`Unsaved changes from ${whenKept(offer.at)}`}
+            actions={[
+              { label: 'Compare', title: 'See them beside the page, word by word', run: () => setCompare('draft') },
+              { label: 'Restore', title: 'Put back the text that wasn’t saved (Undo brings this text back)', run: restoreDraft },
+              { label: 'Discard', title: 'Keep the page as it is', run: discardDraft },
+            ]}
+          />
+        )}
         {loaded && !voiceView && !ideasView && (
           <div className="page">
             <div className="doc-meta">
@@ -1391,7 +1735,7 @@ export function App() {
                 key={loaded.key}
                 docKey={loaded.key}
                 // Opened to pin a brief: the paste box keeps the focus.
-                autoFocus={!isNew && !briefEditing}
+                autoFocus={!isNew && !briefEditing && !(caret.current && Date.now() - caret.current.at < 2000)}
                 caret={loaded.caret}
                 templates={templateItems}
                 initial={docRef.current?.body ?? loaded.body}
@@ -1406,7 +1750,7 @@ export function App() {
                 openPage={openPage}
                 saveImage={saveImage}
                 assetUrl={assetUrl}
-                onEditor={setEditor}
+                onEditor={onEditor}
                 onFormat={setFormat}
                 onOutline={setOutline}
                 spellcheck={spellcheck}
@@ -1485,8 +1829,9 @@ export function App() {
           {toast.undo && (
             <button
               onClick={() => {
-                toast.undo!()
+                // Closed first, so an Undo that has something to say can say it in a new toast.
                 setToast(null)
+                toast.undo!()
               }}
             >
               Undo
@@ -1494,6 +1839,22 @@ export function App() {
           )}
         </div>
       )}
+      {compare === 'conflict' && conflict && docRef.current && (
+        <CompareModal theirs={conflict.content} mine={textOf(docRef.current)} onClose={() => setCompare(null)} onTheirs={loadTheirs} onMine={keepMine} />
+      )}
+      {compare === 'draft' && offer && docRef.current && (
+        <CompareModal
+          theirs={textOf(docRef.current)}
+          mine={offer.content}
+          labels={{ theirs: 'Only on the page', mine: 'Only in the unsaved changes', useTheirs: 'Discard them', useMine: 'Restore them' }}
+          onClose={() => setCompare(null)}
+          onTheirs={discardDraft}
+          onMine={restoreDraft}
+        />
+      )}
+      <span className="sr-only" role="status" aria-live="polite">
+        {saveNews}
+      </span>
       {captureOpen && <CaptureBox onCapture={captureIdea} onClose={() => setCaptureOpen(false)} />}
       {thinkingOpen && loaded && <ThinkingSpace doc={loaded.path} title={title} onClose={closeThinking} />}
 
@@ -1581,6 +1942,36 @@ export function App() {
 }
 
 const platformLabel = (p: string) => kindName(kinds(), p)
+
+const SAVE_LABEL: Record<SaveState, string> = { saved: 'Saved', saving: 'Saving…', unsaved: 'Edited', failed: 'Not saved', conflict: 'Not saved', gone: 'Not saved' }
+
+/**
+ * Saved / Saving… / Edited / Not saved · Retry. Not a live region: announcing every typing pause would
+ * talk over dictation and screen readers. Only a save going wrong, and coming right, is announced (saveNews).
+ */
+function SaveChip({ state, onRetry, floating }: { state: SaveState; onRetry: () => void; floating?: boolean }) {
+  return (
+    <span className={`save-state is-${state}${floating ? ' is-floating' : ''}`}>
+      {state === 'failed' ? (
+        <>
+          Not saved ·{' '}
+          <button className="save-retry" title="Try saving again now (it also retries by itself)" onClick={onRetry}>
+            Retry
+          </button>
+        </>
+      ) : (
+        SAVE_LABEL[state]
+      )}
+    </span>
+  )
+}
+
+/** 14:05 today, or 3 Nov 14:05. */
+function whenKept(at: number) {
+  const d = new Date(at)
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`
+}
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */
 function TitleField({ value, autoFocus, spellcheck, onCommit, onHelp }: { value: string; autoFocus: boolean; spellcheck: boolean; onCommit: (t: string) => void; onHelp?: (level: number) => void }) {

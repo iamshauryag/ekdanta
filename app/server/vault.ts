@@ -1,4 +1,5 @@
 // Reading and writing the vault: a plain folder of Markdown files.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { constants, promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -54,6 +55,28 @@ export const statAll = (): Promise<FileStat[]> => cache.statAll()
 
 export async function readDoc(rel: string) {
   return fs.readFile(resolveInVault(rel), 'utf8')
+}
+
+/** A document's text and the mtime of exactly that text (both read from one open file), or null if it isn't there. */
+export async function readWithMtime(rel: string): Promise<{ content: string; mtime: number } | null> {
+  return readCurrent(resolveInVault(rel))
+}
+
+async function readCurrent(abs: string): Promise<{ content: string; mtime: number } | null> {
+  let fh
+  try {
+    fh = await fs.open(abs, 'r')
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw e
+  }
+  try {
+    // A save replaces the file by renaming a new one over it, so this handle keeps seeing one version.
+    const [stat, content] = await Promise.all([fh.stat(), fh.readFile('utf8')])
+    return { content, mtime: stat.mtimeMs }
+  } finally {
+    await fh.close()
+  }
 }
 
 // ---- Writing --------------------------------------------------------------------------------
@@ -120,16 +143,58 @@ function oneAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
  */
 export const betweenWrites = <T>(rel: string, fn: () => Promise<T>): Promise<T> => oneAtATime(resolveInVault(rel), fn)
 
-export async function writeDoc(rel: string, content: string, opts: { reason?: string } = {}): Promise<{ mtime: number }> {
-  const abs = resolveInVault(rel)
-  if (!abs.endsWith('.md')) throw new Error('Only .md files can be written')
-  return oneAtATime(abs, () => writeNow(rel, abs, content, opts.reason ?? 'save'))
+/** The file changed on disk since the version the writer's text is based on. */
+export class StaleWrite extends Error {
+  readonly mtime: number
+  readonly content: string
+  constructor(rel: string, disk: { mtime: number; content: string }) {
+    super(`${rel} changed on disk`)
+    this.mtime = disk.mtime
+    this.content = disk.content
+  }
 }
 
-async function writeNow(rel: string, abs: string, content: string, reason: string): Promise<{ mtime: number }> {
+/** The file isn't there any more (deleted, or renamed elsewhere), and the write didn't ask to create it. */
+export class MissingDoc extends Error {
+  constructor(rel: string) {
+    super(`${rel} is not in the vault`)
+  }
+}
+
+export interface WriteOptions {
+  /** Why it's being written (see BeforeWrite.reason). Default 'save'. */
+  reason?: string
+  /** The mtime of the version this text was based on. If the file has changed since, nothing is written and StaleWrite is thrown. */
+  baseMtime?: number
+  /** False: a missing file is not created (MissingDoc is thrown). Default true. */
+  create?: boolean
+}
+
+/**
+ * Write a document. Writing what's already there changes nothing, not even the mtime. The checks
+ * and the write happen in one turn of the document's queue, so nothing can slip in between them.
+ */
+export async function writeDoc(rel: string, content: string, opts: WriteOptions = {}): Promise<{ mtime: number }> {
+  const abs = resolveInVault(rel)
+  if (!abs.endsWith('.md')) throw new Error('Only .md files can be written')
+  const result = await oneAtATime(abs, () => writeNow(rel, abs, content, opts))
+  touch(rel, result.mtime)
+  return result
+}
+
+async function writeNow(rel: string, abs: string, content: string, opts: WriteOptions): Promise<{ mtime: number }> {
+  const reason = opts.reason ?? 'save'
+  const disk = await readCurrent(abs)
+  if (!disk && opts.create === false) throw new MissingDoc(rel)
+  if (disk && disk.content === content) {
+    // Nothing to write. Bring the record up to date if the same text arrived from outside.
+    const rec = await lastWritten(rel)
+    if (!rec || rec.mtime !== disk.mtime || rec.hash !== hashOf(content)) await record(rel, disk.mtime, content)
+    return { mtime: disk.mtime }
+  }
+  if (disk && opts.baseMtime !== undefined && disk.mtime !== opts.baseMtime) throw new StaleWrite(rel, disk)
   if (writeHooks.length) {
-    const oldContent = await fs.readFile(abs, 'utf8').catch(() => null)
-    const w: BeforeWrite = { path: rel, oldContent, newContent: content, reason }
+    const w: BeforeWrite = { path: rel, oldContent: disk?.content ?? null, newContent: content, reason }
     for (const hook of writeHooks) {
       try {
         await hook(w)
@@ -141,13 +206,113 @@ async function writeNow(rel: string, abs: string, content: string, reason: strin
   await atomicWrite(abs, content)
   cache.invalidate(rel)
   const { mtimeMs: mtime } = await fs.stat(abs)
+  await record(rel, mtime, content)
+  return { mtime }
+}
+
+async function record(rel: string, mtime: number, content: string) {
   try {
     await atomicWrite(writtenBody(rel), content)
     await atomicWrite(writtenInfo(rel), JSON.stringify({ mtime, hash: hashOf(content) }))
   } catch (e) {
     console.error(`[ekdanta] couldn't record the write of ${rel}:`, e)
   }
-  return { mtime }
+}
+
+// ---- Touched documents ------------------------------------------------------------------------
+// A route that changes documents (a rename relinks others, a star rewrites front matter) reports
+// each document it wrote or moved, with its new mtime. The open document is often among them, and
+// the app adopts the new version instead of mistaking it for someone else's edit.
+
+export interface Touched {
+  path: string
+  mtime: number
+}
+const touchedStore = new AsyncLocalStorage<Map<string, number>>()
+
+/** Run `fn`, collecting every document written or moved while it runs (the last mtime of each). */
+export async function collectTouched<T>(fn: () => Promise<T>): Promise<{ result: T; touched: Touched[] }> {
+  const seen = new Map<string, number>()
+  const result = await touchedStore.run(seen, fn)
+  return { result, touched: [...seen].map(([path, mtime]) => ({ path, mtime })) }
+}
+
+function touch(rel: string, mtime: number) {
+  touchedStore.getStore()?.set(rel, mtime)
+}
+
+async function touchOnDisk(rel: string) {
+  if (!touchedStore.getStore()) return
+  const stat = await fs.stat(resolveInVault(rel)).catch(() => null)
+  if (stat) touch(rel, stat.mtimeMs)
+}
+
+// ---- Changes on disk --------------------------------------------------------------------------
+// The app polls for changes made outside it (Obsidian, a shell, another tab). Each poll stats the
+// vault (never reading a file) and compares it with the last scan; what differs is logged with the
+// time it was seen. A client passes back the `now` it was given and gets everything seen since.
+
+export interface Changes {
+  now: number
+  /** The log no longer reaches back to `since`: refresh everything. */
+  reset?: boolean
+  changed: Touched[]
+  created: Touched[]
+  deleted: string[]
+}
+type Seen = { at: number; path: string; kind: 'changed' | 'created' | 'deleted'; mtime: number }
+const KEEP_CHANGES_MS = 10 * 60_000
+let snapshot: Map<string, number> | null = null
+let changeLog: Seen[] = []
+let logFrom = 0 // the log is complete from this time on
+let lastScan = 0
+let scanning: Promise<void> = Promise.resolve()
+
+async function scan() {
+  const stats = await statAll()
+  const at = Math.max(Date.now(), lastScan + 1) // strictly increasing, so `since` never skips a scan
+  const next = new Map(stats.map((s) => [s.path, s.mtime]))
+  if (snapshot) {
+    for (const [p, mtime] of next) {
+      const before = snapshot.get(p)
+      if (before === undefined) changeLog.push({ at, path: p, kind: 'created', mtime })
+      else if (before !== mtime) changeLog.push({ at, path: p, kind: 'changed', mtime })
+    }
+    for (const p of snapshot.keys()) if (!next.has(p)) changeLog.push({ at, path: p, kind: 'deleted', mtime: 0 })
+  } else logFrom = at
+  snapshot = next
+  lastScan = at
+  const cutoff = at - KEEP_CHANGES_MS
+  if (changeLog.length && changeLog[0].at <= cutoff) {
+    changeLog = changeLog.filter((c) => c.at > cutoff)
+    logFrom = cutoff
+  }
+}
+
+/** What changed in the vault since `since` (a `now` from an earlier call). Without `since`, just the current `now`. */
+export async function changesSince(since?: number): Promise<Changes> {
+  scanning = scanning.then(scan, scan)
+  await scanning
+  const now = lastScan
+  if (since === undefined || !Number.isFinite(since)) return { now, changed: [], created: [], deleted: [] }
+  if (since < logFrom) return { now, reset: true, changed: [], created: [], deleted: [] }
+  // Fold several sightings of one path into what's different now from then.
+  const net = new Map<string, Seen>()
+  for (const c of changeLog) {
+    if (c.at <= since) continue
+    const prev = net.get(c.path)
+    if (!prev) net.set(c.path, c)
+    else if (prev.kind === 'created' && c.kind === 'deleted') net.delete(c.path)
+    else if (prev.kind === 'created') net.set(c.path, { ...c, kind: 'created' })
+    else if (prev.kind === 'deleted' && c.kind === 'created') net.set(c.path, { ...c, kind: 'changed' })
+    else net.set(c.path, c)
+  }
+  const out: Changes = { now, changed: [], created: [], deleted: [] }
+  for (const c of net.values()) {
+    if (c.kind === 'deleted') out.deleted.push(c.path)
+    else out[c.kind].push({ path: c.path, mtime: c.mtime })
+  }
+  return out
 }
 
 export const hashOf = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
@@ -244,6 +409,7 @@ async function moveDoc(rel: string, next: string) {
     await fs.mkdir(path.dirname(dest), { recursive: true })
     await fs.rename(from, dest).catch((e) => console.error(`[ekdanta] couldn't move ${name} for ${rel}:`, e))
   }
+  await touchOnDisk(next)
   return next
 }
 
@@ -466,6 +632,7 @@ export async function restoreDoc(id: string) {
     await fs.rename(path.join(dir, from), to).catch(() => {})
   }
   cache.invalidate(rel)
+  await touchOnDisk(rel)
   await fs.rm(dir, { recursive: true, force: true })
   return rel
 }

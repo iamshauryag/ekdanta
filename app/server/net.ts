@@ -81,9 +81,12 @@ export function isLocalRequest(req: RequestLike): boolean {
 /** An error with an HTTP status, for the API router to answer with. */
 export class HttpError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  /** More for the client than the message: sent alongside `error` in the JSON answer. */
+  readonly data?: Record<string, unknown>
+  constructor(status: number, message: string, data?: Record<string, unknown>) {
     super(message)
     this.status = status
+    this.data = data
   }
 }
 

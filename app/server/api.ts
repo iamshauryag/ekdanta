@@ -27,7 +27,11 @@ import { applyTemplateTo, listTemplates, seedTemplates } from './templates.ts'
 import { listSnippets, readSnippet } from './snippets.ts'
 import {
   VAULT,
+  MissingDoc,
+  StaleWrite,
   appendHistory,
+  changesSince,
+  collectTouched,
   clearHistory,
   copySampleVault,
   vaultProblem,
@@ -47,6 +51,7 @@ import {
   trashDoc,
   readDoc,
   readHistory,
+  readWithMtime,
   splitFrontMatter,
   writeDoc,
 } from './vault.ts'
@@ -135,51 +140,70 @@ const routes: Record<string, Handler> = {
     return result
   }),
   'GET /api/file': async (_req, url) => {
-    const path = url.searchParams.get('path') ?? ''
     // Changed outside Ekdanta since we last wrote it? Keep both sides as versions before it's edited.
-    const content = await checkOutside(path)
-    return { content }
+    const doc = await checkOutside(url.searchParams.get('path') ?? '')
+    if (!doc) throw new HttpError(404, 'Not in the vault')
+    return doc
   },
+  // A save from the editor. With baseMtime, a file changed on disk since then isn't overwritten (409,
+  // with what's there now). A file that has gone isn't brought back unless the writer asked (create).
   'PUT /api/file': async (req) => {
-    const { path, content } = await body<{ path: string; content: string }>(req)
-    await writeDoc(path, content)
-    refresh().catch(() => {}) // re-index in the background
-    return { ok: true }
+    const { path, content, baseMtime, create } = await body<{ path: string; content: string; baseMtime?: number; create?: boolean }>(req)
+    if (typeof content !== 'string') throw new HttpError(400, 'No content')
+    try {
+      const { mtime } = await writeDoc(path, content, { baseMtime: typeof baseMtime === 'number' ? baseMtime : undefined, create: create === true })
+      refresh().catch(() => {}) // re-index in the background
+      return { ok: true, mtime }
+    } catch (e) {
+      if (e instanceof StaleWrite) throw new HttpError(409, 'Changed on disk', { mtime: e.mtime, content: e.content })
+      if (e instanceof MissingDoc) throw new HttpError(404, 'Not in the vault')
+      throw e
+    }
+  },
+  // What changed in the vault since the last poll, from file stats alone.
+  'GET /api/changes': async (_req, url) => {
+    const since = url.searchParams.get('since')
+    return changesSince(since === null || since === '' ? undefined : Number(since))
   },
   'POST /api/new': async (req) => {
     const { folder, platform } = await body<{ folder?: string; platform?: string }>(req)
     return { path: await createDoc((await loadSettings()).kinds, folder ?? '', platform) }
   },
+  // Routes that change documents answer with `touched`: every document they wrote or moved, and its
+  // new mtime, so the app can take in a change to the open document without calling it a conflict.
   'POST /api/name': async (req) => {
     const { path, title } = await body<{ path: string; title: string }>(req)
-    const next = await nameDoc(path, title)
+    const { result: next, touched } = await collectTouched(() => nameDoc(path, title))
     if (next !== path) refresh().catch(() => {})
-    return { path: next }
+    return { path: next, touched }
   },
   'POST /api/place': async (req) => {
     const { path } = await body<{ path: string }>(req)
     await keepBefore(path, 'before move')
-    const next = await placeDoc((await loadSettings()).kinds, path)
+    const kinds = (await loadSettings()).kinds
+    const { result: next, touched } = await collectTouched(() => placeDoc(kinds, path))
     if (next !== path) refresh().catch(() => {})
-    return { path: next }
+    return { path: next, touched }
   },
   'POST /api/rename': async (req) => {
     const { path, title } = await body<{ path: string; title: string }>(req)
     await keepBefore(path, 'before rename')
-    const next = await renameDoc(path, title)
+    const { result: next, touched } = await collectTouched(() => renameDoc(path, title))
     refresh().catch(() => {})
-    return { path: next }
+    return { path: next, touched }
   },
   'POST /api/move': async (req) => {
     const { path, folder } = await body<{ path: string; folder: string }>(req)
     await keepBefore(path, 'before move')
-    const next = await moveToFolder((await loadSettings()).kinds, path, folder)
+    const kinds = (await loadSettings()).kinds
+    const { result: next, touched } = await collectTouched(() => moveToFolder(kinds, path, folder))
     refresh().catch(() => {})
-    return { path: next }
+    return { path: next, touched }
   },
   'POST /api/duplicate': async (req) => {
     const { path } = await body<{ path: string }>(req)
-    return { path: await duplicateDoc(path) }
+    const { result: next, touched } = await collectTouched(() => duplicateDoc(path))
+    return { path: next, touched }
   },
   'POST /api/delete': async (req) => {
     const { path } = await body<{ path: string }>(req)
@@ -195,9 +219,9 @@ const routes: Record<string, Handler> = {
   'GET /api/trash': async () => listTrash(),
   'POST /api/restore': async (req) => {
     const { id } = await body<{ id: string }>(req)
-    const path = await restoreDoc(id)
+    const { result: path, touched } = await collectTouched(() => restoreDoc(id))
     refresh().catch(() => {})
-    return { path }
+    return { path, touched }
   },
   'POST /api/discard': async (req) => {
     const { path } = await body<{ path: string }>(req)
@@ -244,17 +268,19 @@ const routes: Record<string, Handler> = {
     if (!kind || !to) throw new Error('That kind’s folder needs no renaming')
     const owner = kinds.find((k) => k !== kind && k.folder === to)
     if (owner) throw new Error(`${to}/ is already the ${owner.name} folder`)
-    const moved = await renameFolder(kind.folder, to)
+    const { result: moved, touched } = await collectTouched(() => renameFolder(kind.folder, to))
     const settings = await saveSettings({ kinds: kinds.map((k) => (k === kind ? { ...k, folder: to } : k)) })
     refresh().catch(() => {})
-    return { settings, moved }
+    return { settings, moved, touched }
   },
   // Front-matter changes to a document that isn't open in the editor (starring it from the Vault, say).
   'POST /api/meta': async (req) => {
     const { path, patch } = await body<{ path: string; patch: MetaPatch }>(req)
-    const { meta, body: text, raw } = splitFull(await readDoc(path))
-    await writeDoc(path, joinFrontMatter(raw, applyPatch(meta, patch), text), { reason: 'meta' })
-    return { ok: true }
+    const { touched } = await collectTouched(async () => {
+      const { meta, body: text, raw } = splitFull(await readDoc(path))
+      await writeDoc(path, joinFrontMatter(raw, applyPatch(meta, patch), text), { reason: 'meta' })
+    })
+    return { ok: true, touched }
   },
   'GET /api/voice': async () => summaries(),
   'GET /api/voice/profile': async (_req, url) => ({ content: await readProfile(url.searchParams.get('platform') ?? '') }),
@@ -303,9 +329,9 @@ const routes: Record<string, Handler> = {
   // Fill an empty new piece from a template: front matter merged, body filled in.
   'POST /api/templates/apply': async (req) => {
     const { path, template } = await body<{ path: string; template: string }>(req)
-    const result = await applyTemplateTo(path, template)
+    const { result, touched } = await collectTouched(() => applyTemplateTo(path, template))
     refresh().catch(() => {})
-    return result
+    return { ...result, touched }
   },
   // The starter set, written only when the writer asks; files already there are never replaced.
   'POST /api/templates/seed': async () => seedTemplates(),
@@ -314,7 +340,8 @@ const routes: Record<string, Handler> = {
   'GET /api/ideas': async () => listIdeas(),
   'POST /api/ideas': async (req) => {
     const { text } = await body<{ text: string }>(req)
-    return captureIdea(typeof text === 'string' ? text : '')
+    const { result, touched } = await collectTouched(() => captureIdea(typeof text === 'string' ? text : ''))
+    return { ...result, touched }
   },
   'POST /api/ideas/star': async (req) => {
     const { text, starred } = await body<{ text: string; starred: boolean }>(req)
@@ -381,7 +408,7 @@ export function ekdantaApi(): Plugin {
           res.statusCode = statusOf(e)
           res.setHeader('content-type', 'application/json')
           const code = e instanceof HttpError && 'code' in e ? e.code : undefined
-          res.end(JSON.stringify({ error: (e as Error).message, code }))
+          res.end(JSON.stringify({ ...(e instanceof HttpError ? e.data : undefined), error: (e as Error).message, code }))
         }
       })
     },
