@@ -33,7 +33,7 @@ export function MoreMenu({ items }: { items: MoreItem[] }) {
   return (
     <div className="more-wrap" ref={box}>
       <button className={`rail-btn${open ? ' is-on' : ''}`} title="More" aria-label="More" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <Icon name="more" />
+        <Icon name="moreRail" />
       </button>
       {open && (
         <div

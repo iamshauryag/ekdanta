@@ -33,7 +33,7 @@ import { IdeasPage } from './components/IdeasPage.tsx'
 import { IDEAS_FILE, isSpecialFile, isSpecialPath } from './lib/special.ts'
 import type { Reading } from './components/ReaderList.tsx'
 import { mergeClusters, newId, withoutFragment } from './lib/thinking.ts'
-import { binding, isMac as isMacKeys, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
+import { COMMANDS, binding, isMac as isMacKeys, matches, setOverrides, titled, type CommandId } from './lib/keys.ts'
 import { authorOf, templateBody, templateMeta, type TemplateInfo } from './lib/templates.ts'
 import { StartFrom, TemplatePicker } from './components/TemplatePicker.tsx'
 import { insertTemplate, replacePlaceholder } from './editor/prompts.ts'
@@ -50,6 +50,12 @@ function browserStore(): Store | null {
     return null
   }
 }
+import { runCommand } from './editor/commands.ts'
+import { searchKey, searchState, setSearch } from './editor/search.ts'
+import { pushRecent } from './lib/fuzzy.ts'
+import { Palette } from './components/Palette.tsx'
+import { Switcher } from './components/Switcher.tsx'
+import type { SearchState } from './components/SearchPane.tsx'
 
 function usePref<T>(key: string, initial: T) {
   const [value, setValue] = useState<T>(() => {
@@ -69,6 +75,9 @@ function usePref<T>(key: string, initial: T) {
   }, [key, value])
   return [value, setValue] as const
 }
+
+/** A help card, ghost or proposal is on the page: the palette and switcher wait until it's dealt with. */
+const HELP_OPEN = '.hl-card, .hl-line, .hl-nudge, .hl-bar, .cm-ins, .hl-ghost'
 
 interface Doc {
   path: string
@@ -120,6 +129,12 @@ export function App() {
   const [preview, setPreview] = useState<VersionRow | null>(null)
   const bumpVersions = useCallback(() => setVersionsTick((t) => t + 1), [])
   const [focus, setFocus] = useState(false)
+  // Navigate: the command palette and quick switcher (one at a time), and the search pane's state.
+  const [overlay, setOverlay] = useState<null | 'palette' | 'switcher'>(null)
+  const [recentCommands, setRecentCommands] = usePref<string[]>('recentCommands', [])
+  const [recentDocs, setRecentDocs] = usePref<string[]>('recentDocs', [])
+  const [search, setSearchState] = useState<SearchState>({ query: '', matchCase: false, meaning: false })
+  const [searchFocus, setSearchFocus] = useState(0)
   // The writer's own Page/Markdown choice, remembered between sessions, and the view on screen now.
   // A new draft may open in the other view (Settings · Writing · New documents open in); opening an
   // existing document comes back to the writer's choice, so the new-draft view never becomes the view for everything.
@@ -399,6 +414,11 @@ export function App() {
     if (!started || (path && (files.some((f) => f.path === path) || docRef.current?.path === path))) return
     setPath(pages.length ? pages[0].path : null)
   }, [started, files, pages, path, setPath])
+
+  // The quick switcher's recent documents.
+  useEffect(() => {
+    if (path) setRecentDocs((r) => (r[0] === path ? r : pushRecent(r, path)))
+  }, [path, setRecentDocs])
 
   useEffect(() => {
     if (!path || !started) return
@@ -1236,6 +1256,7 @@ export function App() {
     setLoaded((l) => (l ? { ...l, path: next } : l))
     setFresh((f) => (f === prev ? next : f))
     setLayoutFor((f) => (f === prev ? next : f))
+    setRecentDocs((r) => r.map((p) => (p === prev ? next : p)))
     setPath(next)
   }
 
@@ -1309,6 +1330,65 @@ export function App() {
       setSidebarOpen(true)
     }
   }
+
+  // ---- Navigate: palette, switcher, search ----------------------------------------------------
+
+  // A sheet or space that owns the keyboard while it's up. The palette, quick open and search wait
+  // until it's closed: over it, Esc and the caret would land in the page hidden behind it.
+  const layer = settingsOpen ? 'Settings' : thinkingOpen ? 'the Thinking Space' : picker ? 'the template picker' : importing ? 'the Import sheet' : captureOpen ? 'the idea box' : null
+  const layerNow = useRef(layer)
+  layerNow.current = layer
+  const overlayNow = useRef(overlay)
+  overlayNow.current = overlay
+  /** Where focus was when the palette or quick open came up: it goes back there when they close. */
+  const overlayFrom = useRef<Element | null>(null)
+
+  /** Back to the writing: the page (with its selection as it was), or the Markdown view. */
+  const focusEditor = useCallback(() => {
+    // The view's own focus is immediate (Tiptap's focus command waits a frame).
+    if (editor && livePreview && !editor.isDestroyed) editor.view.focus()
+    else focusText()
+  }, [editor, livePreview])
+  // At once, not on a later frame: a key pressed straight after (⌘O again) must not lose its focus to this.
+  const restoreFocus = useCallback(() => {
+    const back = overlayFrom.current
+    overlayFrom.current = null
+    const inPage = back && editor && !editor.isDestroyed && editor.view.dom.contains(back)
+    if (back instanceof HTMLElement && back.isConnected && back !== document.body && !inPage) back.focus({ preventScroll: true })
+    else if (!layerNow.current) focusEditor()
+  }, [editor, focusEditor])
+  const closeOverlay = useCallback(() => {
+    setOverlay(null)
+    restoreFocus()
+  }, [restoreFocus])
+
+  /** Open the palette or the switcher, or close it if it's the one showing. Not over a help card or a sheet. */
+  const toggleOverlay = useCallback(
+    (which: 'palette' | 'switcher') => {
+      const o = overlayNow.current
+      if (o === which) return closeOverlay()
+      if (o) return setOverlay(which)
+      if (layerNow.current) return notify(`Close ${layerNow.current} first`)
+      if (document.querySelector(HELP_OPEN)) return
+      overlayFrom.current = document.activeElement
+      setOverlay(which)
+    },
+    [closeOverlay, notify],
+  )
+  // A sheet opened while the palette was up (its shortcut, typed there) takes over: the palette goes.
+  useEffect(() => {
+    if (!layer) return
+    overlayFrom.current = null
+    setOverlay(null)
+  }, [layer])
+
+  /** ⌘⇧F: the search pane, with the caret in its box (pressed again, it selects what's there). */
+  const openSearch = useCallback(() => {
+    if (layerNow.current) return notify(`Close ${layerNow.current} first`)
+    setSidebarMode('search')
+    setSidebarOpen(true)
+    setSearchFocus((n) => n + 1)
+  }, [setSidebarMode, setSidebarOpen, notify])
 
   /** Ask which fragments the draft covers, and which is nearest the paragraph being written. */
   const checkMaterial = useCallback(
@@ -1430,6 +1510,8 @@ export function App() {
     api.appendHistory(d.path, item)
   }, [])
 
+  // The app commands below, for the palette and the More menu to run.
+  const actionsRef = useRef<Partial<Record<CommandId, () => void>>>({})
   // Window-level shortcuts. Each app command is one line here; the first whose key matches runs.
   useEffect(() => {
     const openTab = (tab: 'material' | 'outline' | 'history' | 'piece') => {
@@ -1462,6 +1544,9 @@ export function App() {
         if (d) setLayoutFor((f) => (f === d.path ? null : d.path))
       },
       sparks: () => setSparksOpen(true),
+      palette: () => toggleOverlay('palette'),
+      switcher: () => toggleOverlay('switcher'),
+      search: () => openSearch(),
       versions: () => {
         openTab('history')
         setHistorySeg('versions')
@@ -1486,6 +1571,7 @@ export function App() {
         setReaderFocus((n) => n + 1)
       },
     }
+    actionsRef.current = appActions
     const onKey = (e: KeyboardEvent) => {
       // The editor dismisses help itself; from the panel or a card's buttons, ⌘0 and Esc do it here.
       const fromAside = (e.target as Element | null)?.closest?.('.panel, .hl-card, .hl-nudge, .hl-bar, .hl-line')
@@ -1504,7 +1590,7 @@ export function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, ceiling, livePreview, notify, startImport])
+  }, [focus, save, newDraft, setPanelOpen, setPanelTab, setHistorySeg, files, thinkingOpen, ceiling, livePreview, notify, startImport, toggleOverlay, openSearch])
 
   const current = files.find((f) => f.path === path)
   const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
@@ -1550,25 +1636,11 @@ export function App() {
     async (target: string) => {
       const hit = files.find((f) => f.path.replace(/\.md$/, '') === target || f.path.replace(/\.md$/, '').split('/').pop() === target)
       if (hit) return openDoc(hit.path)
-      const folder = files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
-      const title = target.replace(/[-_]+/g, ' ').replace(/^./, (c) => c.toUpperCase())
-      const named = await op(async () => {
-        const { path: created } = await api.create(folder)
-        await api.patchMeta(created, { title })
-        // Keep the name the link uses, so the link finds it.
-        const { path: named, touched } = await api.rename(created, title)
-        await absorb(touched)
-        return named
-      }).catch(failed('make the page'))
-      if (!named) return
-      await refreshFiles()
-      openDoc(named)
+      return createPage(target.replace(/[-_]+/g, ' ').replace(/^./, (c) => c.toUpperCase()))
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [files, openDoc, refreshFiles],
   )
-
-  const moreItems = [{ id: 'sparks', label: 'Sparks', run: () => setSparksOpen(true) }]
 
   const startedFromSpark = async (next: string) => {
     setSparksOpen(false)
@@ -1582,6 +1654,79 @@ export function App() {
       setThinkingOpen(true)
     }
   }, [loaded])
+
+  /** A new page with this title, next to the open one, and open it (a [[link]] to nowhere, or the switcher's Create). */
+  const createPage = async (title: string) => {
+    const folder = files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
+    const named = await op(async () => {
+      const { path: created } = await api.create(folder)
+      await api.patchMeta(created, { title })
+      // Keep the name the link uses, so the link finds it.
+      const { path: named, touched } = await api.rename(created, title)
+      await absorb(touched)
+      return named
+    }).catch(failed('make the page'))
+    if (!named) return
+    await refreshFiles()
+    await openDoc(named)
+  }
+
+  // ---- Navigate: running a command from the palette, and revealing a search match ---------------
+
+  /** Why a command can't run right now, for the palette to grey it with. */
+  const whyNot = (id: string): string | undefined => {
+    const group = COMMANDS.find((c) => c.id === id)?.group
+    const onPage = group === 'Text' || group === 'Blocks' || id === 'find' || id === 'readAloud'
+    const needsDoc = onPage || ['save', 'star', 'thinking', 'brief', 'saveVersion', 'readAs'].includes(id)
+    if (needsDoc && (!loaded || voiceView || ideasView)) return 'No document open'
+    if (onPage && !livePreview) return 'Not in Markdown view'
+    if (id === 'readAs' && ceiling < 2) return 'Needs help ceiling 2 or more'
+    if (onPage && thinkingOpen) return 'Thinking Space is open'
+    if (onPage && !editor) return 'No document open'
+  }
+  const runFromPalette = (id: string) => {
+    setOverlay(null)
+    restoreFocus()
+    setRecentCommands((r) => pushRecent(r, id, 8))
+    const group = COMMANDS.find((c) => c.id === id)?.group
+    // After the palette has gone, so the command acts on the page (and its selection) as it was.
+    requestAnimationFrame(() => {
+      if ((group === 'Text' || group === 'Blocks' || id === 'find') && editor) runCommand(editor, id)
+      else actionsRef.current[id as CommandId]?.()
+    })
+  }
+
+  // A search result: open its document and select the match there, through the page's own find.
+  const reveal = useRef<{ path: string; text: string; nth: number } | null>(null)
+  const tryReveal = useCallback(() => {
+    const r = reveal.current
+    if (!r || !livePreview) return void (reveal.current = null)
+    // The editor of the document being revealed, not the one it replaced.
+    if (!editor || editor.isDestroyed || !editor.view.dom.isConnected || docRef.current?.path !== r.path) return
+    reveal.current = null
+    const view = editor.view
+    setSearch(view, { query: r.text, matchCase: true, current: 0 })
+    const n = searchState(view.state).matches.length
+    if (n) setSearch(view, { current: Math.min(r.nth, n - 1) })
+    // Leave the selection, not find's highlights.
+    view.dispatch(view.state.tr.setMeta(searchKey, { query: '' }))
+    view.focus()
+  }, [editor, livePreview])
+  useEffect(() => {
+    tryReveal()
+  }, [tryReveal, loaded?.key])
+  const openAt = (target: string, select?: { text: string; nth: number }) => {
+    reveal.current = select ? { path: target, ...select } : null
+    if (docRef.current?.path === target && loaded?.key === target && !voiceView && !ideasView) tryReveal()
+    else openDoc(target)
+  }
+
+  const moreItems = [
+    { id: 'palette', label: 'All commands', run: () => toggleOverlay('palette') },
+    { id: 'switcher', label: 'Quick open', run: () => toggleOverlay('switcher') },
+    { id: 'search', label: 'Search', run: openSearch },
+    { id: 'sparks', label: 'Sparks', run: () => setSparksOpen(true) },
+  ]
 
   /** Images are linked relative to the document, and served from the vault. */
   const assetUrl = useCallback((src: string) => {
@@ -1728,6 +1873,14 @@ export function App() {
           actions={fileActions}
           trash={trash}
           onRestore={restore}
+          search={{
+            state: search,
+            onState: (patch) => setSearchState((s) => ({ ...s, ...patch })),
+            focusTick: searchFocus,
+            current: voiceView || ideasView ? null : path,
+            onReveal: openAt,
+            onClose: () => setSidebarMode('vault'),
+          }}
           onImport={startImport}
         />
       )}
@@ -2002,6 +2155,25 @@ export function App() {
           }}
           onStarted={startedFromSpark}
           onClose={() => setSparksOpen(false)}
+        />
+      )}
+
+      {overlay === 'palette' && <Palette whyNot={whyNot} run={runFromPalette} recent={recentCommands} onClose={closeOverlay} />}
+      {overlay === 'switcher' && (
+        <Switcher
+          files={pages}
+          current={voiceView || ideasView ? null : path}
+          recent={recentDocs}
+          onOpen={(p) => {
+            if (p === path && !voiceView && !ideasView) return closeOverlay()
+            setOverlay(null)
+            openDoc(p)
+          }}
+          onCreate={(title) => {
+            setOverlay(null)
+            createPage(title)
+          }}
+          onClose={closeOverlay}
         />
       )}
 

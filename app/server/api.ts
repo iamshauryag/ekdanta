@@ -22,7 +22,8 @@ import { runReader, type ReaderRequest } from './reader.ts'
 import { HttpError, isLocalRequest, isSameOrigin, local, statusOf } from './net.ts'
 import { addUpload, commit, convert, openBatch, preview, undo } from './import/index.ts'
 import { exportDoc, pandoc, type ExportRequest } from './export.ts'
-import { indexState, refresh, search, paragraphs } from './recall.ts'
+import { indexState, isReady, refresh, search, paragraphs } from './recall.ts'
+import { searchVault } from './search.ts'
 import { checkOutside, keepBefore, listVersions, nameVersion, readVersion, snapshot } from './versions.ts'
 import { applyTemplateTo, listTemplates, seedTemplates } from './templates.ts'
 import { listSnippets, readSnippet } from './snippets.ts'
@@ -330,6 +331,15 @@ const routes: Record<string, Handler> = {
   'POST /api/sparks/start': async (req) => {
     const { card, kind } = await body<{ card: Card; kind?: string }>(req)
     return startPiece(card, kind)
+  },
+  // Search across the vault: GET /api/search?q=slow+kind:essay&case=1&limit=200 (see src/lib/searchQuery.ts).
+  'GET /api/search': async (_req, url) => searchVault(url.searchParams.get('q') ?? '', { matchCase: url.searchParams.get('case') === '1', limit: Number(url.searchParams.get('limit')) || undefined }),
+  // The same words searched by meaning, through Recall's index. Not ready until the index has been built once.
+  'GET /api/search/meaning': async (_req, url) => {
+    const q = (url.searchParams.get('q') ?? '').trim()
+    if (!isReady()) return { ready: false, results: [] }
+    if (q.length < 2) return { ready: true, results: [] }
+    return { ready: true, results: await search(q, { limit: 12 }) }
   },
   'GET /api/versions': async (_req, url) => listVersions(url.searchParams.get('doc') ?? ''),
   'GET /api/version': async (_req, url) => ({ content: await readVersion(url.searchParams.get('doc') ?? '', url.searchParams.get('id') ?? '') }),

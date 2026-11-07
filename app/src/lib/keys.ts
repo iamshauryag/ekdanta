@@ -40,6 +40,10 @@ const COMMAND_LIST = [
   { id: 'find', label: 'Find and replace', group: 'Editing', key: 'Mod-f' },
   { id: 'save', label: 'Save now', group: 'Editing', key: 'Mod-s' },
 
+  { id: 'palette', label: 'All commands', group: 'Navigate', key: 'Mod-Shift-p' },
+  { id: 'switcher', label: 'Quick open', group: 'Navigate', key: 'Mod-o' },
+  { id: 'search', label: 'Search the vault', group: 'Navigate', key: 'Mod-Shift-f' },
+
   { id: 'newDraft', label: 'New draft', group: 'App', key: 'Alt-n' },
   { id: 'newFromTemplate', label: 'New from template…', group: 'App', key: '' },
   { id: 'thinking', label: 'Thinking Space', group: 'App', key: 'Alt-t' },

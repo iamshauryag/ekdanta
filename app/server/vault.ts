@@ -8,6 +8,7 @@ import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
 import { docDefaults } from '../src/lib/docstyle.ts'
 import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 import { docSlug, sameName, slug } from '../src/lib/slug.ts'
+import { frontMatterList } from '../src/lib/searchQuery.ts'
 import { createFileCache, type FileStat } from './cache.ts'
 import { META_DIR, VAULT } from './paths.ts'
 
@@ -20,6 +21,8 @@ export interface FileEntry {
   platform?: string
   exemplar: boolean
   mtime: number
+  /** Other names for the page, from front-matter `aliases` (the quick switcher finds it by them). */
+  aliases?: string[]
   /** The idea from ideas.md this piece was started from (front matter `from-idea`). */
   fromIdea?: string
 }
@@ -42,8 +45,14 @@ const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
     exemplar: meta.exemplar === 'true',
     mtime: stat.mtime,
     ...(meta['from-idea']?.trim() ? { fromIdea: meta['from-idea'] } : {}),
+    ...aliasesOf(raw),
   }
 })
+
+function aliasesOf(raw: string) {
+  const aliases = frontMatterList(raw, 'aliases')
+  return aliases.length ? { aliases } : {}
+}
 
 /**
  * Every document in the vault, sorted by path. Only files changed since the last call are read.

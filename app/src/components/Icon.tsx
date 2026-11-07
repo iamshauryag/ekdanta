@@ -7,12 +7,17 @@ const PATHS: Record<string, string[]> = {
   history: ['M10 3.5a6.5 6.5 0 110 13 6.5 6.5 0 010-13z', 'M10 6.5V10l2.5 1.75'],
   piece: ['M5.5 3.5h6l3 3v10h-9z', 'M11.5 3.5v3h3', 'M8 10h4M8 12.5h4'],
   compose: ['M9.5 4.5h-4a1 1 0 00-1 1v9a1 1 0 001 1h9a1 1 0 001-1v-4', 'M14.25 3.75a1.4 1.4 0 012 2L10.5 11.5l-2.5.5.5-2.5z'],
-  settings: ['M15.38 8.44L17.14 8.75L17.14 11.25L15.38 11.56L14.91 12.7L15.93 14.17L14.17 15.93L12.7 14.91L11.56 15.38L11.25 17.14L8.75 17.14L8.44 15.38L7.3 14.91L5.83 15.93L4.07 14.17L5.09 12.7L4.62 11.56L2.86 11.25L2.86 8.75L4.62 8.44L5.09 7.3L4.07 5.83L5.83 4.07L7.3 5.09L8.44 4.62L8.75 2.86L11.25 2.86L11.56 4.62L12.7 5.09L14.17 4.07L15.93 5.83L14.91 7.3z', 'M10 7.6a2.4 2.4 0 110 4.8 2.4 2.4 0 010-4.8z'],
+  settings: [
+    'M15.38 8.44L17.14 8.75L17.14 11.25L15.38 11.56L14.91 12.7L15.93 14.17L14.17 15.93L12.7 14.91L11.56 15.38L11.25 17.14L8.75 17.14L8.44 15.38L7.3 14.91L5.83 15.93L4.07 14.17L5.09 12.7L4.62 11.56L2.86 11.25L2.86 8.75L4.62 8.44L5.09 7.3L4.07 5.83L5.83 4.07L7.3 5.09L8.44 4.62L8.75 2.86L11.25 2.86L11.56 4.62L12.7 5.09L14.17 4.07L15.93 5.83L14.91 7.3z',
+    'M10 7.6a2.4 2.4 0 110 4.8 2.4 2.4 0 010-4.8z',
+  ],
   star: ['M10 3.25l2.05 4.15 4.58.67-3.32 3.23.79 4.56L10 13.7l-4.1 2.16.79-4.56-3.32-3.23 4.58-.67z'],
   voice: ['M4 9v2', 'M7 6.5v7', 'M10 4v12', 'M13 6.5v7', 'M16 9v2'],
   idea: ['M7.5 13.5c0-1.5-2-2.6-2-5.25a4.5 4.5 0 019 0c0 2.65-2 3.75-2 5.25z', 'M8 15.75h4', 'M8.75 17.75h2.5'],
   plus: ['M10 4.5v11M4.5 10h11'],
   more: ['M5.5 10h.01M10 10h.01M14.5 10h.01'],
+  // The rail's ⋯ More: the same dots, drawn heavier so they hold their own beside the rail's other icons.
+  moreRail: ['M4.5 10h.01M10 10h.01M15.5 10h.01'],
   bold: ['M6.5 4.5h4.75a2.75 2.75 0 010 5.5H6.5z', 'M6.5 10h5.5a3 3 0 010 6H6.5z'],
   italic: ['M9 4.5h6', 'M5 15.5h6', 'M12.5 4.5l-4 11'],
   underline: ['M6 4v5.5a4 4 0 008 0V4', 'M5 16.5h10'],
@@ -36,8 +41,8 @@ const PATHS: Record<string, string[]> = {
   outline: ['M4 5.5h12M6 9h10M8 12.5h8M6 16h10'],
 }
 
-// Bold reads as bold only drawn heavier than the other glyphs.
-const WEIGHT: Record<string, number> = { bold: 2.1 }
+// Bold reads as bold, and the rail's dots as a button, only drawn heavier than the other glyphs.
+const WEIGHT: Record<string, number> = { bold: 2.1, moreRail: 2.8 }
 
 export function Icon({ name }: { name: keyof typeof PATHS | string }) {
   return (

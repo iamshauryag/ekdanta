@@ -32,6 +32,10 @@ const INDEX_PATH = path.join(META_DIR, 'index.json')
 let index: IndexFile | null = null
 let building: Promise<IndexFile> | null = null
 let again: Promise<IndexFile> | null = null
+let built = false
+
+/** Has the index been brought up to date at least once since the server started (so a search by meaning is worth asking)? */
+export const isReady = () => built
 
 /** Paragraphs worth recalling: prose, not headings, lists of links, one-liners or a template's prompts. */
 export function paragraphs(body: string): string[] {
@@ -101,6 +105,7 @@ export function refresh(): Promise<IndexFile> {
       }
     }
     if (changed) await save(ix)
+    built = true
     return ix
   })().finally(() => (building = null))
   return building

@@ -4,10 +4,12 @@ import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
 import { Icon } from './Icon.tsx'
 import { briefLabel } from '../lib/brief.ts'
 import { helpMod } from '../editor/help.ts'
+import { SearchPane, type SearchProps } from './SearchPane.tsx'
 import { titled } from '../lib/keys.ts'
 import { IDEAS_FILE, isSpecialFile } from '../lib/special.ts'
 
-export type SidebarMode = 'vault' | 'exemplars' | 'voice'
+/** 'search' has no rail button: it shows while it's in use (⌘⇧F), and its × goes back to the Vault. */
+export type SidebarMode = 'vault' | 'exemplars' | 'voice' | 'search'
 
 interface Props {
   mode: SidebarMode
@@ -22,6 +24,7 @@ interface Props {
   actions: FileActions
   trash: Trashed[]
   onRestore: (id: string) => void
+  search: SearchProps
   /** Bring files in: the file chooser, or files dropped on the sidebar. */
   onImport: (files?: File[]) => void
   /** Whether the Ideas page fills the page. */
@@ -55,7 +58,7 @@ export function Sidebar(p: Props) {
   return (
     <aside
       className={`sidebar${dropping ? ' is-dropping' : ''}`}
-      aria-label={p.mode === 'vault' ? 'Vault' : p.mode === 'exemplars' ? 'Exemplars' : 'Voice'}
+      aria-label={p.mode === 'vault' ? 'Vault' : p.mode === 'exemplars' ? 'Exemplars' : p.mode === 'search' ? 'Search' : 'Voice'}
       // Files dropped here are imported (after review).
       onDragOver={(e) => {
         if (!e.dataTransfer.types.includes('Files')) return
@@ -71,7 +74,7 @@ export function Sidebar(p: Props) {
         p.onImport([...e.dataTransfer.files])
       }}
     >
-      {p.mode === 'vault' ? <Vault {...p} /> : p.mode === 'exemplars' ? <Exemplars {...p} /> : <Voices {...p} />}
+      {p.mode === 'vault' ? <Vault {...p} /> : p.mode === 'exemplars' ? <Exemplars {...p} /> : p.mode === 'search' ? <SearchPane {...p.search} /> : <Voices {...p} />}
     </aside>
   )
 }

@@ -16,6 +16,41 @@ export interface FileEntry {
   brief?: boolean
   /** The idea this piece was started from. */
   fromIdea?: string
+  aliases?: string[]
+}
+
+export type Range = [number, number]
+export interface SearchHit {
+  line: number
+  text: string
+  ranges: Range[]
+  select: { text: string; nth: number }
+}
+export interface SearchFile {
+  path: string
+  title: string
+  folder: string
+  platform?: string
+  titleRanges: Range[]
+  hits: SearchHit[]
+}
+export interface SearchResult {
+  files: SearchFile[]
+  /** Result rows found (lines with a match, or a document matched by title or filters alone): what More… pages through. */
+  total: number
+  /** Occurrences found, in text and titles. */
+  matches: number
+  /** Documents that matched, shown or not. */
+  documents: number
+  more: boolean
+  error?: string
+}
+export interface MeaningHit {
+  doc: string
+  title: string
+  folder: string
+  text: string
+  score: number
 }
 
 export interface Status {
@@ -277,6 +312,9 @@ export const api = {
   keepSpark: (card: SparkCard) => fetch('/api/sparks/keep', send('POST', card)).then(json<{ path: string; bullet: string }>),
   dismissSpark: (key: string) => fetch('/api/sparks/dismiss', send('POST', { key })).then(json),
   startFromSpark: (card: SparkCard, kind: string) => fetch('/api/sparks/start', send('POST', { card, kind })).then(json<{ path: string }>),
+  search: (q: string, opts: { matchCase?: boolean; limit?: number } = {}, signal?: AbortSignal) =>
+    fetch(`/api/search?q=${encodeURIComponent(q)}${opts.matchCase ? '&case=1' : ''}${opts.limit ? '&limit=' + opts.limit : ''}`, { signal }).then(json<SearchResult>),
+  searchMeaning: (q: string, signal?: AbortSignal) => fetch('/api/search/meaning?q=' + encodeURIComponent(q), { signal }).then(json<{ ready: boolean; results: MeaningHit[] }>),
   versions: (doc: string) => fetch('/api/versions?doc=' + encodeURIComponent(doc)).then(json<VersionRow[]>),
   version: (doc: string, id: string) =>
     fetch(`/api/version?doc=${encodeURIComponent(doc)}&id=${encodeURIComponent(id)}`)
