@@ -256,6 +256,63 @@ export interface IdeaRow {
   starred: boolean
   /** The newest piece started from it, while that piece exists. */
   started?: { path: string; title: string }
+  /** The line without its group of [[links]], which come as `sources`. */
+  shown?: string
+  /** For an idea the partner proposed: its parts, as kept. */
+  title?: string
+  hook?: string
+  angle?: string
+  platforms?: string[]
+  /** The notes it links to; no `path` when the note is gone. */
+  sources?: { name: string; path?: string }[]
+}
+
+/** The idea partner (server/idea-partner.ts). */
+export type PartnerScope = 'ask' | 'recent' | 'highlights' | 'note'
+export interface PartnerAsk {
+  ask?: string
+  scope?: PartnerScope
+  doc?: string
+  platform?: string
+  history?: { ask: string; titles: string[] }[]
+  avoid?: string[]
+  allowOnce?: boolean
+}
+export interface PartnerSource {
+  id: string
+  doc: string
+  title: string
+  folder: string
+  text: string
+  type: 'note' | 'highlight' | 'idea'
+  sourceType?: string
+  platform?: string
+}
+export interface PartnerIdea {
+  key: string
+  title: string
+  hook?: string
+  angle: string
+  platforms: string[]
+  sources: PartnerSource[]
+}
+export interface PartnerResult {
+  mode: 'ideas' | 'material'
+  ideas: PartnerIdea[]
+  material: PartnerSource[]
+  reply?: string
+  message?: string
+  note?: string
+  level: number
+  canAllowOnce?: boolean
+}
+export interface IdeaStarted {
+  path: string
+  /** Its Thinking Space holds the idea's sources. */
+  seeded: boolean
+  /** Source notes no longer in the vault. */
+  missing: number
+  touched?: Touched[]
 }
 
 export type ImportStatus = 'pending' | 'converted' | 'review' | 'failed' | 'duplicate' | 'unsupported'
@@ -398,7 +455,11 @@ export const api = {
   ideas: () => fetch('/api/ideas').then(json<{ exists: boolean; ideas: IdeaRow[] }>),
   captureIdea: (text: string) => fetch('/api/ideas', send('POST', { text })).then(json<{ added: boolean; text: string; date: string; touched?: Touched[] }>),
   starIdea: (text: string, starred: boolean) => fetch('/api/ideas/star', send('POST', { text, starred })).then(json<{ starred: boolean }>),
-  startIdea: (text: string, kind: string) => fetch('/api/ideas/start', send('POST', { text, kind })).then(json<{ path: string }>),
+  /** Start a piece from an idea in the list, or from a partner idea (kept on the way). */
+  startIdea: (text: string, kind: string, idea?: PartnerIdea) => fetch('/api/ideas/start', send('POST', { text, kind, idea })).then(json<IdeaStarted>),
+  ideaPartner: (req: PartnerAsk) => fetch('/api/ideas/partner', send('POST', req)).then(json<PartnerResult>),
+  keepIdea: (idea: PartnerIdea) => fetch('/api/ideas/keep', send('POST', idea)).then(json<{ added: boolean; text: string; date: string; key: string; touched?: Touched[] }>),
+  discardIdea: (title: string) => fetch('/api/ideas/discard', send('POST', { title })).then(json),
   reindex: () => fetch('/api/index', send('POST', {})).then(json<{ files: number; paragraphs: number }>),
   readAs: (req: { doc: string; platform: string; reader: Reader; text: string; selection: boolean }) => fetch('/api/reader', send('POST', req)).then(json<ReaderReply>),
   exportEngine: () => fetch('/api/export/engine').then(json<{ pandoc: string | null }>),

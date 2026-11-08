@@ -1388,13 +1388,19 @@ export function App() {
     notify(added ? 'Saved to Ideas' : 'Already in Ideas today')
   }
 
-  /** Begin a piece of a kind from an idea, and open it with the caret in its title. */
-  const startIdea = async (text: string, kind: string) => {
+  /**
+   * Begin a piece of a kind from an idea (one in the list, or one the idea partner proposed), and open it:
+   * in its Thinking Space when the idea's sources wait there, otherwise with the caret in its title.
+   */
+  const startIdea = async (text: string, kind: string, idea?: Parameters<typeof api.startIdea>[2]) => {
     try {
-      const { path: rel } = await api.startIdea(text, kind)
+      const r = await api.startIdea(text, kind, idea)
+      await absorb(r.touched)
       await refreshFiles()
-      setFresh(rel)
-      await openDoc(rel)
+      if (r.seeded) thinkOnLoad.current = r.path
+      else setFresh(r.path)
+      await openDoc(r.path)
+      if (r.missing) notify(r.missing === 1 ? 'Started. One note it came from is no longer in your vault.' : `Started. ${r.missing} notes it came from are no longer in your vault.`)
     } catch (e) {
       notify(`Couldn't start it: ${(e as Error).message}`)
     }
@@ -2036,7 +2042,9 @@ export function App() {
         )}
         {voiceView && <VoicePage platform={voiceView} summary={voices.find((v) => v.platform === voiceView)} onOpenDoc={openDoc} onChanged={refreshVoices} />}
         {brainView && !voiceView && <BrainPage folder={brainFolder} onOpenDoc={openDoc} run={op} onChanged={brainChanged} />}
-        {ideasView && !voiceView && <IdeasPage version={ideasVersion} onCapture={captureIdea} onStart={startIdea} onOpenDoc={openDoc} />}
+        {ideasView && !voiceView && (
+          <IdeasPage version={ideasVersion} onCapture={captureIdea} onStart={startIdea} onStartIdea={(idea, kind) => startIdea('', kind, idea)} onOpenDoc={openDoc} ceiling={ceiling} notes={pages} />
+        )}
         {loaded && !voiceView && !ideasView && !brainView && !focus && <Toolbar editor={editor} format={format} livePreview={livePreview} onLivePreview={chooseView} />}
         {/* Saving needs the writer. In focus mode the title bar is hidden, so a failing save shows here too. */}
         {loaded && !voiceView && !ideasView && !brainView && focus && saved === 'failed' && <SaveChip state={saved} onRetry={() => saver.retry()} floating />}

@@ -1,14 +1,17 @@
 // Ideas: one-line ideas the writer captures in a couple of seconds, kept in `ideas.md` at the top of the
 // vault as a plain Markdown list ("- idea (6 Nov 2026)"), readable in Obsidian or on a phone. The app only
-// ever appends to that file. What the app adds on top (stars) lives in .ekdanta/ideas.json, keyed by the
-// idea's text; which ideas were started is read from the pieces' own `from-idea` front matter.
+// ever appends to that file. What the app adds on top (stars, and the parts of ideas the idea partner
+// proposed: title, hook, angle, kinds, sources) lives in .ekdanta/ideas.json, keyed by the idea's text;
+// which ideas were started is read from the pieces' own `from-idea` front matter.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { joinDoc, patchFrontMatter, splitFrontMatter } from '../src/lib/frontmatter.ts'
 import { findKind, kindName, type Kind } from '../src/lib/kinds.ts'
-import { IDEAS_FILE } from '../src/lib/special.ts'
+import { IDEAS_FILE, isSpecialFile } from '../src/lib/special.ts'
+import { writeBrief } from './brief.ts'
 import { HttpError } from './net.ts'
-import { META_DIR, atomicWrite, createDoc, listFiles, placeDoc, readDoc, resolveInVault, writeDoc } from './vault.ts'
+import { seedThinking } from './thinking.ts'
+import { META_DIR, atomicWrite, createDoc, listFiles, nameDoc, placeDoc, readDoc, resolveInVault, writeDoc } from './vault.ts'
 
 export { IDEAS_FILE }
 
@@ -140,6 +143,79 @@ export function appendIdea(raw: string | null, text: string, date: string): { co
   return { content: current.replace(/\n*$/, '\n') + line + '\n', added: true }
 }
 
+// ---- Ideas with more to them: the idea partner's (pure) ---------------------------------------
+
+/** Where an idea grew from: a note or past piece, a highlight kept in the Brain, or another captured idea. */
+export interface IdeaSource {
+  doc: string
+  title: string
+  /** The passage it drew on, as it was when the idea was kept. */
+  text?: string
+  type?: 'note' | 'highlight' | 'idea'
+}
+
+/** What the app keeps beside an idea the partner proposed: ideas.md holds only its one line. */
+export interface IdeaDetail {
+  title: string
+  hook?: string
+  angle: string
+  /** Kind ids it would suit, best first. */
+  platforms: string[]
+  sources: IdeaSource[]
+}
+
+/** The [[links]] in a line, by target: "[[a/b|shown]]" is "a/b". */
+export function wikiLinks(text: string): string[] {
+  const out: string[] = []
+  for (const m of String(text ?? '').matchAll(/\[\[([^\]|#\n]+)(?:[#|][^\]\n]*)?\]\]/g)) {
+    const t = m[1].trim()
+    if (t && !out.includes(t)) out.push(t)
+  }
+  return out
+}
+
+/** The line without its group of links at the end ("… ([[a]], [[b]])"), for showing beside the links as chips. */
+export const withoutLinkGroup = (text: string) => text.replace(/\s*\((?:\s*\[\[[^\]\n]+\]\]\s*,?)+\)\s*$/, '').trim()
+
+/** A link's note, as Obsidian finds it: by path, or else by file name; case doesn't matter. */
+export function resolveLink<T extends { path: string }>(target: string, files: T[]): T | undefined {
+  const t = target.replace(/\.md$/i, '').replace(/^\/+/, '').toLowerCase()
+  const bare = (p: string) => p.replace(/\.md$/i, '').toLowerCase()
+  return files.find((f) => bare(f.path) === t) ?? files.find((f) => bare(f.path).split('/').pop() === t.split('/').pop())
+}
+
+/** How a note is linked: its file name, or its path when two notes share that name. */
+export function linkName(doc: string, files: { path: string }[]): string {
+  const name = doc.replace(/\.md$/i, '').split('/').pop()!
+  const clash = files.filter((f) => f.path.replace(/\.md$/i, '').split('/').pop()!.toLowerCase() === name.toLowerCase()).length > 1
+  return clash ? doc.replace(/\.md$/i, '') : name
+}
+
+/** The ideas.md line for a kept idea: "Title — angle ([[note]], [[other]])". Captured ideas it drew on aren't linked. */
+export function detailLine(d: IdeaDetail, files: { path: string }[]): string {
+  const docs = [...new Set(d.sources.filter((s) => !isSpecialFile(s.doc)).map((s) => s.doc))]
+  const links = docs.map((doc) => `[[${linkName(doc, files)}]]`).join(', ')
+  return cleanIdea(`${d.title} — ${d.angle}${links ? ` (${links})` : ''}`)
+}
+
+/**
+ * The brief pinned to a piece started from an idea: what it is, its angle and hook, the kinds it
+ * suits, and the notes it came from. The writer can edit or unpin it like any brief.
+ */
+export function ideaBrief(idea: string, detail: IdeaDetail | undefined, sources: { doc: string; title: string }[], kinds: Kind[]): string {
+  const lines: string[] = []
+  if (detail) {
+    lines.push(`Idea: ${detail.title}`)
+    if (detail.hook) lines.push(`Hook: ${detail.hook}`)
+    lines.push(`Angle: ${detail.angle}`)
+    const names = detail.platforms.map((id) => findKind(kinds, id)?.name).filter(Boolean)
+    if (names.length) lines.push(`For: ${names.join(', ')}`)
+  } else lines.push(`Idea: ${withoutLinkGroup(idea) || idea}`)
+  const notes = [...new Map(sources.filter((s) => !isSpecialFile(s.doc)).map((s) => [s.doc, s])).values()]
+  if (notes.length) lines.push(`From: ${notes.map((s) => `[[${s.doc.replace(/\.md$/i, '')}|${s.title.replace(/[\]|[]/g, '') || s.doc}]]`).join(', ')}`)
+  return lines.join('\n')
+}
+
 /** Escape what Markdown would read as formatting, so an idea shows as written inside the prompt's italics. */
 export const escapeMarkdown = (text: string) => text.replace(/([\\`*_[\]<>~=|#])/g, '\\$1')
 
@@ -161,15 +237,45 @@ const STATE = path.join(META_DIR, 'ideas.json')
 
 interface IdeasState {
   starred: string[]
+  /** What the idea partner proposed for ideas the writer kept, by the idea's key. */
+  partner: Record<string, IdeaDetail>
+  /** Titles of partner ideas the writer discarded, newest last, so they aren't proposed again. */
+  dismissed: string[]
+}
+
+/** The most kept ideas' details and discarded titles remembered, so the file stays small. */
+const MAX_DETAILS = 500
+const MAX_DISMISSED = 300
+
+const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+
+/** A stored detail, checked: the file is the writer's to edit, so anything odd in it is left out. */
+function checkDetail(v: unknown): IdeaDetail | null {
+  const d = v as Partial<IdeaDetail> | null
+  if (!d || typeof d.title !== 'string' || typeof d.angle !== 'string') return null
+  const sources = (Array.isArray(d.sources) ? d.sources : []).filter((s): s is IdeaSource => !!s && typeof s.doc === 'string' && typeof s.title === 'string')
+  return { title: d.title, angle: d.angle, ...(typeof d.hook === 'string' && d.hook ? { hook: d.hook } : {}), platforms: strings(d.platforms), sources }
 }
 
 async function readState(): Promise<IdeasState> {
   try {
     const s = JSON.parse(await fs.readFile(STATE, 'utf8')) as Partial<IdeasState>
-    return { starred: Array.isArray(s.starred) ? s.starred.filter((x): x is string => typeof x === 'string') : [] }
+    const partner: Record<string, IdeaDetail> = {}
+    for (const [k, v] of Object.entries(s.partner && typeof s.partner === 'object' ? s.partner : {})) {
+      const d = checkDetail(v)
+      if (d) partner[k] = d
+    }
+    return { starred: strings(s.starred), partner, dismissed: strings(s.dismissed) }
   } catch {
-    return { starred: [] }
+    return { starred: [], partner: {}, dismissed: [] }
   }
+}
+
+async function writeState(state: IdeasState) {
+  const keys = Object.keys(state.partner)
+  const partner = keys.length > MAX_DETAILS ? Object.fromEntries(keys.slice(-MAX_DETAILS).map((k) => [k, state.partner[k]])) : state.partner
+  await fs.mkdir(META_DIR, { recursive: true })
+  await atomicWrite(STATE, JSON.stringify({ ...state, partner, dismissed: state.dismissed.slice(-MAX_DISMISSED) }, null, 2))
 }
 
 // One change at a time, so two quick captures (or stars) can't each miss the other's.
@@ -209,24 +315,48 @@ export interface IdeaRow extends Idea {
   starred: boolean
   /** The newest piece started from this idea, while it still exists. */
   started?: { path: string; title: string }
+  /** The line as shown: without its group of [[links]], which come as `sources` instead. */
+  shown?: string
+  /** For an idea the partner proposed: its parts, as kept. */
+  title?: string
+  hook?: string
+  angle?: string
+  platforms?: string[]
+  /** The notes it links to or came from; `path` is missing when the note is no longer in the vault. */
+  sources?: { name: string; path?: string }[]
 }
 
-/** The list for the Ideas page: newest first, with stars and started pieces. */
+/** The list for the Ideas page: newest first, with stars, started pieces and the notes each came from. */
 export async function listIdeas(): Promise<{ exists: boolean; ideas: IdeaRow[] }> {
   const raw = await readIdeasFile()
-  const { starred } = await readState()
+  const { starred, partner } = await readState()
   const stars = new Set(starred)
+  const files = await listFiles()
   const started = new Map<string, { path: string; title: string; mtime: number }>()
-  for (const f of await listFiles()) {
+  for (const f of files) {
     if (!f.fromIdea) continue
     const key = ideaKey(f.fromIdea)
     const prev = started.get(key)
     if (!prev || f.mtime > prev.mtime) started.set(key, { path: f.path, title: f.title, mtime: f.mtime })
   }
-  const ideas = newestFirst(parseIdeas(raw ?? '')).map((idea) => {
+  const ideas = newestFirst(parseIdeas(raw ?? '')).map((idea): IdeaRow => {
     const key = ideaKey(idea.text)
     const s = started.get(key)
-    return { ...idea, starred: stars.has(key), ...(s ? { started: { path: s.path, title: s.title } } : {}) }
+    const d = partner[key]
+    const links = wikiLinks(idea.text)
+    const shown = links.length ? withoutLinkGroup(idea.text) : undefined
+    const sources = links.map((name) => {
+      const hit = resolveLink(name, files)
+      return hit ? { name, path: hit.path } : { name }
+    })
+    return {
+      ...idea,
+      starred: stars.has(key),
+      ...(s ? { started: { path: s.path, title: s.title } } : {}),
+      ...(shown && shown !== idea.text ? { shown } : {}),
+      ...(d ? { title: d.title, angle: d.angle, platforms: d.platforms, ...(d.hook ? { hook: d.hook } : {}) } : {}),
+      ...(sources.length ? { sources } : {}),
+    }
   })
   return { exists: raw !== null, ideas }
 }
@@ -239,23 +369,98 @@ export function starIdea(text: string, on: boolean) {
     const state = await readState()
     const starred = state.starred.filter((s) => s !== key)
     if (on) starred.push(key)
-    await fs.mkdir(META_DIR, { recursive: true })
-    await atomicWrite(STATE, JSON.stringify({ ...state, starred }, null, 2))
+    await writeState({ ...state, starred })
     return { starred: on }
   })
 }
 
+/** Every captured idea's text, and the titles of partner ideas kept or discarded: what a new batch mustn't repeat. */
+export async function knownIdeas(): Promise<{ texts: string[]; dismissed: string[] }> {
+  const raw = await readIdeasFile()
+  const state = await readState()
+  const texts = parseIdeas(raw ?? '').map((i) => withoutLinkGroup(i.text) || i.text)
+  return { texts: [...texts, ...Object.values(state.partner).map((d) => d.title)], dismissed: state.dismissed }
+}
+
+/** Keep an idea the partner proposed: its line appended to ideas.md, its parts kept beside it. */
+export async function keepDetail(detail: IdeaDetail) {
+  const text = detailLine(detail, await listFiles())
+  const captured = await captureIdea(text)
+  const key = ideaKey(captured.text)
+  await serial(async () => {
+    const state = await readState()
+    delete state.partner[key] // re-kept: it goes to the end, so the newest are the ones remembered
+    state.partner[key] = detail
+    state.dismissed = state.dismissed.filter((t) => t !== detail.title)
+    await writeState(state)
+  })
+  return { ...captured, key }
+}
+
+/** Remember a partner idea the writer discarded, by its title. */
+export function dismissIdeaTitle(title: string) {
+  return serial(async () => {
+    const t = cleanIdea(title).slice(0, 300)
+    if (!t) throw new HttpError(400, 'No idea to discard')
+    const state = await readState()
+    state.dismissed = [...state.dismissed.filter((x) => x !== t), t]
+    await writeState(state)
+  })
+}
+
+/** A note's first paragraph worth quoting: for a source known only by a [[link]]. */
+function firstParagraph(raw: string) {
+  const paras = splitFrontMatter(raw)
+    .body.split(/\n\s*\n/)
+    .map((p) => p.trim())
+  return paras.find((p) => p.length >= 60 && !/^(#|```|[-*+] |>)/.test(p)) ?? paras.find((p) => p && !p.startsWith('#')) ?? ''
+}
+
+/** The most source passages a new piece's Thinking Space is seeded with. */
+const MAX_SEED = 8
+
+/**
+ * The sources an idea came from, as they are now: a note that moved is found by its file name, as a
+ * link would be; one that's gone is counted, not quoted. A source known only by a link brings its
+ * first paragraph. A captured idea it drew on comes as a fragment of its own.
+ */
+export async function liveSources(sources: IdeaSource[]) {
+  const files = await listFiles()
+  const found: { doc: string; title: string; folder: string; text: string; idea?: boolean }[] = []
+  let missing = 0
+  for (const s of sources.slice(0, MAX_SEED)) {
+    if (isSpecialFile(s.doc)) {
+      if (s.text) found.push({ doc: IDEAS_FILE, title: 'Ideas', folder: '', text: s.text, idea: true })
+      continue
+    }
+    const f = files.find((x) => x.path === s.doc) ?? resolveLink(s.doc, files)
+    if (!f) {
+      missing++
+      continue
+    }
+    const text = s.text?.trim() || firstParagraph(await readDoc(f.path).catch(() => ''))
+    if (text) found.push({ doc: f.path, title: f.title || s.title, folder: f.folder, text: text.slice(0, 2000) })
+  }
+  return { found, missing }
+}
+
 /**
  * Start a piece of the given kind from an idea: a new draft filed with that kind, its template's body
- * if the kind has one, and the idea as a faded prompt at the top. `from-idea` in its front matter is
- * how the Ideas page knows it was started.
+ * if the kind has one, and a pinned brief from the idea. A plain captured idea also sits at the top as
+ * a faded prompt; one the partner proposed names the piece instead. Whatever the idea came from (its
+ * sources, or the notes it links to) waits in the piece's Thinking Space, quoted with chips that open
+ * them. `from-idea` in its front matter is how the Ideas page knows it was started.
  */
-export async function startIdea(kinds: Kind[], text: string, kindId: string): Promise<string> {
+export async function startIdeaPiece(kinds: Kind[], text: string, kindId: string): Promise<{ path: string; seeded: boolean; missing: number }> {
   // The idea exactly as the list keys it, so its row shows Started (a cleaned copy could differ).
   const idea = ideaKey(text)
   if (!idea) throw new HttpError(400, 'No idea to start from')
   const kind = findKind(kinds, kindId)
   if (!kind) throw new HttpError(400, 'Unknown kind of writing')
+  const detail = (await readState()).partner[idea]
+  const sources = detail ? detail.sources : wikiLinks(idea).map((name) => ({ doc: name, title: name }))
+  const { found, missing } = await liveSources(sources)
+
   const rel = await createDoc(kinds, '', kind.id)
   const fm = splitFrontMatter(await readDoc(rel))
   const { meta, body } = fm
@@ -264,7 +469,23 @@ export async function startIdea(kinds: Kind[], text: string, kindId: string): Pr
     const tpl = await readDoc(kind.template).catch(() => null)
     if (tpl !== null) template = templateBody(tpl, { date: meta.created ?? '', kind: kindName(kinds, kind.id) })
   }
-  const next = [ideaPrompt(idea), template.trim(), body.trim()].filter(Boolean).join('\n\n') + '\n'
-  await writeDoc(rel, joinDoc({ ...patchFrontMatter(fm, { 'from-idea': idea }), body: next }), { reason: 'create' })
-  return placeDoc(kinds, rel)
+  const next = [detail ? '' : ideaPrompt(idea), template.trim(), body.trim()].filter(Boolean).join('\n\n') + '\n'
+  const patch: Record<string, string> = { 'from-idea': idea, ...(detail ? { title: detail.title } : {}) }
+  await writeDoc(rel, joinDoc({ ...patchFrontMatter(fm, patch), body: next }), { reason: 'create' })
+  const named = detail ? await nameDoc(rel, detail.title) : rel
+  const placed = await placeDoc(kinds, named)
+
+  await writeBrief(placed, ideaBrief(idea, detail, found, kinds))
+  const heads = [
+    ...(detail ? [{ text: detail.angle, mark: 'Idea' }] : []),
+    ...(detail?.hook ? [{ text: detail.hook, mark: 'Hook' }] : []),
+    ...found.filter((s) => s.idea).map((s) => ({ text: s.text, mark: 'Your idea' })),
+  ]
+  const quotes = found.filter((s) => !s.idea).map((s) => ({ text: s.text, from: { doc: s.doc, title: s.title, folder: s.folder } }))
+  const seeded = quotes.length > 0 || (detail !== undefined && heads.length > 0)
+  if (seeded) await seedThinking(placed, [...heads, ...quotes])
+  return { path: placed, seeded, missing }
 }
+
+/** Start a piece from an idea, and say only where it is (see startIdeaPiece). */
+export const startIdea = async (kinds: Kind[], text: string, kindId: string): Promise<string> => (await startIdeaPiece(kinds, text, kindId)).path
