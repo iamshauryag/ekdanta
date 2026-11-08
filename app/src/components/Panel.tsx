@@ -13,8 +13,9 @@ import { VersionsList } from './VersionsList.tsx'
 import { BriefCard } from './BriefCard.tsx'
 import { EDGE_LIMITS, EDGE_NAMES, showSuggestLink, type EdgeSlot } from '../lib/edge.ts'
 import { ReaderList, type Reading } from './ReaderList.tsx'
+import { AssistantTab } from './AssistantTab.tsx'
 
-export type PanelTab = 'material' | 'outline' | 'history' | 'piece'
+export type PanelTab = 'material' | 'outline' | 'history' | 'piece' | 'assistant'
 /** The History tab's two halves: the document's versions, and the log of help asked for. */
 export type HistorySeg = 'versions' | 'help'
 
@@ -99,6 +100,7 @@ export function Panel(p: Props) {
     { id: 'outline', icon: 'outline', key: formatKey(binding('outline')), label: 'Outline' },
     { id: 'history', icon: 'history', key: formatKey(binding('history')), label: 'History' },
     { id: 'piece', icon: 'piece', key: formatKey(binding('piece')), label: 'Piece' },
+    { id: 'assistant', icon: 'assistant', key: formatKey(binding('assistant')), label: 'Assistant' },
   ]
   return (
     <aside className="panel" aria-label="Right panel">
@@ -136,6 +138,21 @@ export function Panel(p: Props) {
           </>
         )}
         {p.tab === 'piece' && <Piece {...p} />}
+        {/* Kept mounted while another tab shows, so an answer being written isn't lost by looking elsewhere. */}
+        <div className="as-host" hidden={p.tab !== 'assistant'}>
+          <AssistantTab
+            key={p.path ?? ''}
+            active={p.tab === 'assistant'}
+            editor={p.editor}
+            doc={p.source ? null : p.path}
+            platform={p.platform}
+            ceiling={p.ceiling}
+            status={p.status}
+            onOpenDoc={p.onOpenDoc}
+            onPiece={() => p.onTab('piece')}
+            notify={p.notify}
+          />
+        </div>
       </div>
     </aside>
   )

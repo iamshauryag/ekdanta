@@ -54,6 +54,7 @@ const COMMAND_LIST = [
   { id: 'outline', label: 'Panel: Outline', group: 'App', key: 'Ctrl-Alt-2' },
   { id: 'history', label: 'Panel: History', group: 'App', key: 'Ctrl-Alt-3' },
   { id: 'piece', label: 'Panel: Piece', group: 'App', key: 'Ctrl-Alt-4' },
+  { id: 'assistant', label: 'Panel: Assistant', group: 'App', key: 'Ctrl-Alt-5' },
   { id: 'brief', label: 'Pin a brief', group: 'App', key: '' },
   { id: 'settings', label: 'Settings', group: 'App', key: 'Alt-,' },
   { id: 'documentLayout', label: 'Document layout…', group: 'App', key: '' },

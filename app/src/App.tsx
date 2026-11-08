@@ -1554,7 +1554,7 @@ export function App() {
   const actionsRef = useRef<Partial<Record<CommandId, () => void>>>({})
   // Window-level shortcuts. Each app command is one line here; the first whose key matches runs.
   useEffect(() => {
-    const openTab = (tab: 'material' | 'outline' | 'history' | 'piece') => {
+    const openTab = (tab: PanelTab) => {
       setPanelOpen(true)
       setPanelTab(tab)
     }
@@ -1579,6 +1579,11 @@ export function App() {
       outline: () => openTab('outline'),
       history: () => openTab('history'),
       piece: () => openTab('piece'),
+      // Opens the Assistant and puts the caret in its ask box.
+      assistant: () => {
+        openTab('assistant')
+        requestAnimationFrame(() => window.dispatchEvent(new Event('ekdanta:assistant')))
+      },
       documentLayout: () => {
         const d = docRef.current
         if (d) setLayoutFor((f) => (f === d.path ? null : d.path))

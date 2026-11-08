@@ -71,6 +71,8 @@ export type Help =
       instruction: string
       bar: boolean // keep the instruction bar open above, for refining
       sideBySide: boolean
+      /** Proposed from the Assistant tab, which hears how it was decided. */
+      source?: 'assistant'
     }
 
 interface HelpState {
@@ -161,6 +163,18 @@ export interface WidgetHooks {
   stepHunk(delta: number): void
   focusEditor(): void
   current(): Help | null
+  propose(p: PageProposal): boolean
+}
+
+/** A change from the Assistant tab, for the page to show as a diff (or apply at once, when accepted from the tab). */
+export interface PageProposal {
+  from: number
+  to: number
+  text: string
+  level: 3 | 4 | 5
+  instruction: string
+  accept?: boolean
+  onDone?: (outcome: 'accepted' | 'rejected' | 'partly accepted') => void
 }
 
 let hooks: WidgetHooks | null = null
@@ -169,6 +183,9 @@ export function setWidgetHooks(h: WidgetHooks) {
 }
 
 export const helpShowing = () => !!hooks?.current()
+
+/** Show a change from the Assistant tab on the page. False when it changes nothing or no page is open. */
+export const proposeOnPage = (p: PageProposal) => hooks?.propose(p) ?? false
 
 /** Dismiss the help showing on the page, from outside the editor (the panel, a card's buttons). False if none is showing. */
 export function dismissHelp() {

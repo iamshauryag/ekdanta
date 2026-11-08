@@ -36,6 +36,7 @@ The writer sets a default ceiling (for example "never above level 3 unless I ask
 | Coding style | A voice profile, learned per kind of writing (essay, LinkedIn post, email, or any kind the writer adds) |
 | Tab completion | Short continuation — **only on request** (level 4) |
 | Cmd+K inline edit | Select → instruct → word-level diff → accept or reject |
+| Chat panel (Cmd+L) | The Assistant tab in the right panel: a chat about the open piece whose edits come back as proposals |
 | Agent | Bounded tasks across files: "turn this essay into a LinkedIn post", "find every place I've used this idea" |
 | @-mentions | @book, @note, @quote, @web to pull in sources deliberately |
 | Linter | Optional checks: unsupported claims, repeated ideas, misquotes, tone drift for the platform |
@@ -79,6 +80,18 @@ No model training in v1.
 
   A fast tier (a small model such as Claude Haiku) serves Word; a strong tier (such as Claude Sonnet) serves Nudge, Sentence and Passage.
 - **Embeddings:** Recall uses a small embedding model that runs inside the app (bge-small, about 33 MB, downloaded once). There is nothing to install, and nothing leaves the machine for Recall.
+
+## The Assistant
+
+A permanent **Assistant** tab in the right panel (Ctrl+Alt+5, or *Panel: Assistant* in the command palette) for talking about the piece that's open, the way Cursor's chat sits beside the code. It is the help ladder in conversation form, under the same rules.
+
+- **What it knows.** The draft as it is on the page, unsaved edits included; the selection, shown as a chip the writer can remove before asking; the title, kind, pinned brief and the voice profile for that kind. Recall finds up to three of the writer's own notes for each ask (never highlights from the Brain); the notes the model says it drew on come back as chips that open them.
+- **It never edits.** A change to the text comes back as a proposal: the exact words it replaces and what they become, shown as a word diff in the chat. *Accept* applies it as one step that Cmd+Z takes back; *Review on page* shows it with the help ladder's own diff (Tab, ↵, ⌫ for each change, Cmd+↵ for all). Several proposals can be accepted or reviewed together. Every decision goes into the help log. A proposal only ever replaces text that is in the draft: the server checks each one against the draft before the writer sees it, and the page finds it again in the text as it is now (or says it has changed).
+- **The help ceiling holds, on the server too.** 0: off. 1: Recall only, the writer's own notes and no model. 2: questions and directions, no wording and no proposals. 3: a word or short phrase per change. 4: one sentence per change. 5: passages. Proposals past the ceiling are dropped and counted; *Allow once* asks the same again at level 5, once, as pressing a help key twice does. A proposal that would replace most of the piece is dropped unless the writer asked for the whole piece in so many words.
+- **Its language.** It answers in plain words, in the language the writer asks in, briefly. Options the writer asked for (hooks, titles, angles) come as a list in the reply, not as edits.
+- **Conversations.** One per document, kept in `.ekdanta/assistant/` under the document's key, so it follows the document through rename, move, trash and restore. *New chat* clears it.
+- **While it works.** No streaming: a progress line and Stop. An answer that arrives after Stop is never saved. With no model available, the tab says so and how to set one up.
+- **Safety.** Its routes answer only this computer, bodies are capped (1 MB; a 4,000-character ask; a 200,000-character draft), and the model runs with no tools.
 
 ## Weighting the writer's past work
 
