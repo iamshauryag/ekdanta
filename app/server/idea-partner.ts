@@ -5,6 +5,7 @@
 // and checks every reply in code: citations it made up are dropped, an idea that cites nothing is
 // dropped, ideas the writer already has or discarded are dropped. Nothing is written until the writer
 // keeps an idea (a line in ideas.md, see ideas.ts) or starts a piece from one.
+import { randomBytes } from 'node:crypto'
 import type { Provider } from './ai.ts'
 import { HttpError } from './net.ts'
 import type { Chunk } from './recall.ts'
@@ -33,8 +34,8 @@ export interface PartnerRequest {
   history?: { ask: string; titles: string[] }[]
   /** Titles already shown this time, not to propose again. */
   avoid?: string[]
-  /** Below help ceiling 2: the writer allowed this one batch. */
-  allowOnce?: boolean
+  /** Below help ceiling 2: the one-use allowance the server gave with its last answer (see mintAllowance). */
+  allowToken?: string
 }
 
 export interface PartnerSource {
@@ -72,8 +73,9 @@ export interface PartnerResult {
   note?: string
   /** The help level the batch was made at (0 or 1: no model). */
   level: number
-  /** The writer may allow one batch past the ceiling. */
+  /** The writer may allow one batch past the ceiling, by sending `allowToken` back once. */
   canAllowOnce?: boolean
+  allowToken?: string
 }
 
 // ---- Limits: what reaches the model stays small whatever the size of the vault ------------------
@@ -242,6 +244,7 @@ ${items}
 /** A one-sentence-ish line: no line breaks, no list or heading marks, at most `maxWords` words. */
 function line(v: unknown, maxWords: number) {
   const t = clean(v)
+    .replace(/\[\[|\]\]/g, '') // a link the model wrote would become a real one in ideas.md
     .replace(/^["“](.*)["”]$/s, '$1')
     .replace(/^(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)/, '')
   if (!t) return ''
@@ -275,8 +278,41 @@ export function validateIdeas(raw: unknown, labels: Map<string, PartnerSource>, 
   return { reply, ideas: out }
 }
 
-/** The help level a batch is made at: the ceiling, or 2 once when the writer allowed it below that. */
-export const partnerLevel = (ceiling: number, allowOnce = false) => (ceiling >= 2 ? Math.min(5, Math.round(ceiling)) : allowOnce ? 2 : Math.max(0, Math.round(ceiling)))
+/**
+ * The help level a batch is made at: the ceiling, or 2 once when the writer allowed it at ceiling 1.
+ * At 0 help is off, and allowing once doesn't lift it.
+ */
+export const partnerLevel = (ceiling: number, allowOnce = false) => {
+  const c = Math.max(0, Math.min(5, Math.round(ceiling)))
+  return c >= 2 ? c : c === 1 && allowOnce ? 2 : c
+}
+
+// ---- Allow once: a one-use allowance the server records -----------------------------------------
+// Below ceiling 2 an answer carries a token; sending it back runs one batch at level 2. The server
+// keeps the token, so it is spent once, expires, and holds only at the ceiling it was given at.
+
+/** How long an allowance lasts, and the most kept at once. */
+export const ALLOW_TTL_MS = 10 * 60 * 1000
+const ALLOW_MAX = 50
+const allowances = new Map<string, { ceiling: number; expires: number }>()
+
+/** A new allowance, for an answer given at this ceiling. */
+export function mintAllowance(ceiling: number, now = Date.now()): string {
+  for (const [k, a] of allowances) if (a.expires <= now) allowances.delete(k)
+  while (allowances.size >= ALLOW_MAX) allowances.delete(allowances.keys().next().value!)
+  const token = randomBytes(16).toString('hex')
+  allowances.set(token, { ceiling, expires: now + ALLOW_TTL_MS })
+  return token
+}
+
+/** Spend an allowance: true once, while it is fresh and the ceiling is the one it was given at (and not 0). */
+export function spendAllowance(token: string | undefined, ceiling: number, now = Date.now()): boolean {
+  if (!token) return false
+  const a = allowances.get(token)
+  if (!a) return false
+  allowances.delete(token)
+  return a.expires > now && a.ceiling === ceiling && partnerLevel(ceiling, true) === 2 && ceiling < 2 && ceiling > 0
+}
 
 /** A request as it arrived, checked and trimmed: anything malformed is the caller's mistake (400). */
 export function checkRequest(body: unknown): PartnerRequest {
@@ -293,7 +329,8 @@ export function checkRequest(body: unknown): PartnerRequest {
     .filter((h): h is { ask: string; titles: unknown[] } => !!h && typeof h.ask === 'string')
     .map((h) => ({ ask: h.ask.slice(0, 300), titles: (Array.isArray(h.titles) ? h.titles : []).filter((t): t is string => typeof t === 'string').slice(0, LIMITS.batch) }))
   const avoid = (Array.isArray(b.avoid) ? b.avoid : []).filter((t): t is string => typeof t === 'string').slice(-LIMITS.avoid)
-  return { ask, scope, doc, platform: str(b.platform, 60) || undefined, history, avoid, allowOnce: b.allowOnce === true }
+  const allowToken = typeof b.allowToken === 'string' && /^[0-9a-f]{32}$/.test(b.allowToken) ? b.allowToken : undefined
+  return { ask, scope, doc, platform: str(b.platform, 60) || undefined, history, avoid, ...(allowToken ? { allowToken } : {}) }
 }
 
 // ---- Gathering the material ---------------------------------------------------------------------
@@ -414,23 +451,21 @@ export interface PartnerDeps {
 
 /**
  * Ideas for a request. The help ceiling holds here, on the server: at 0 nothing runs; at 1 the writer
- * sees their own passages on it, with no model; at 2 and 3, titles and angles; from 4, a hook too.
- * Below 2 a batch runs only when the writer allowed it once.
+ * sees their own passages on it, with no model, and an allowance to ask once; at 2 and 3, titles and
+ * angles; from 4, a hook too. Spending the allowance runs one batch at level 2.
  */
 export async function runPartner(body: unknown, deps: PartnerDeps = {}): Promise<PartnerResult> {
   const req = checkRequest(body)
   const settings = deps.ceiling === undefined || !deps.kinds ? await loadSettings() : null
   const ceiling = deps.ceiling ?? settings!.ceiling
   const kinds = deps.kinds ?? settings!.kinds
-  const level = partnerLevel(ceiling, req.allowOnce)
+  // A kind that no longer exists (deleted since the page loaded) is no filter at all.
+  if (req.platform && !kinds.some((k) => k.id === req.platform)) req.platform = undefined
+  // Allowing once is spent here, against the server's record, before anything else runs.
+  const allowed = ceiling < 2 && spendAllowance(req.allowToken, ceiling)
+  const level = partnerLevel(ceiling, allowed)
   const empty = { ideas: [], material: [] as PartnerSource[], level }
-  if (level === 0)
-    return {
-      mode: 'material',
-      ...empty,
-      message: 'Help is off (help ceiling 0), so the idea partner doesn’t look through your notes. Raise the ceiling in the Piece panel, or allow this once.',
-      canAllowOnce: true,
-    }
+  if (level === 0) return { mode: 'material', ...empty, message: 'Help is off (help ceiling 0), so the idea partner doesn’t look through your notes. Raise the ceiling in the Piece panel to use it.' }
 
   const found = await (deps.gather ?? gather)(req)
   if (!found.items.length) return { mode: 'material', ...empty, message: found.message }
@@ -441,8 +476,9 @@ export async function runPartner(body: unknown, deps: PartnerDeps = {}): Promise
       ...empty,
       material,
       note: found.note,
-      message: `At help ceiling ${ceiling} the idea partner only shows what you’ve written on this; asking a model for ideas is help level 2. Allow once for one batch.`,
+      message: `${req.allowToken ? 'That Allow once was already used or has expired. ' : ''}At help ceiling ${ceiling} the idea partner only shows what you’ve written on this; asking a model for ideas is help level 2. Allow once for one batch.`,
       canAllowOnce: true,
+      allowToken: mintAllowance(ceiling),
     }
 
   // The models are loaded only when a batch needs one (and never when a test stands in for them).
@@ -461,7 +497,8 @@ export async function runPartner(body: unknown, deps: PartnerDeps = {}): Promise
   const known = await (deps.known ?? knownIdeas)()
   const labels = labelMaterial(material)
   const system = partnerSystem(level)
-  const avoid = [...known.texts.slice(-30), ...known.dismissed.slice(-15), ...(req.avoid ?? [])]
+  // Each list capped on its own, so a long list from the page can't push out what the server knows.
+  const avoid = [...known.texts.slice(-30), ...known.dismissed.slice(-15), ...(req.avoid ?? []).slice(-15)]
   const prompt = partnerPrompt({ ask: req.ask ?? '', platform: req.platform, history: req.history, avoid }, labels, kinds)
   let checked: { reply: string; ideas: PartnerIdea[] }
   try {
@@ -473,7 +510,9 @@ export async function runPartner(body: unknown, deps: PartnerDeps = {}): Promise
       { hooks: level >= 4 },
     )
   } catch (err) {
-    return { mode: 'material', ...empty, material, message: `The model didn’t answer (${(err as Error).message}), so here’s what you have on this.` }
+    // The details go to the server's log, not the page: an error can carry a provider's raw output.
+    console.warn('[idea partner] the model failed:', (err as Error).message)
+    return { mode: 'material', ...empty, material, message: 'The model didn’t answer this time, so here’s what you have on this. Try again in a moment.' }
   }
   const old = [...known.texts, ...known.dismissed, ...(req.avoid ?? [])]
   let ideas = checked.ideas.filter((i) => !old.some((t) => sameIdea(t, i.title) || sameIdea(t, `${i.title} — ${i.angle}`)))
@@ -528,6 +567,8 @@ export async function checkIdea(body: unknown, kinds: Kind[]): Promise<IdeaDetai
     } catch {
       continue
     }
+    // Nothing from the app's own or hidden folders (.ekdanta, .obsidian, .git…).
+    if (s.doc.split(/[\\/]/).some((part) => part.startsWith('.'))) continue
     if (isSpecialPath(s.doc, excludedFolders) && !isBrainPath(s.doc, brainFolder)) continue
     const raw = await readDoc(s.doc).catch(() => null)
     if (raw === null || !norm(raw).includes(probe)) continue

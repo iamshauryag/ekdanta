@@ -50,10 +50,10 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
   const [note, setNote] = useState('')
   const [running, setRunning] = useState(false)
   const [index, setIndex] = useState<IndexState | null>(null)
-  // Below help ceiling 2, Allow once means one batch each time the partner is opened.
-  const [usedOnce, setUsedOnce] = useState(false)
   const input = useRef<HTMLInputElement>(null)
-  const off = ceiling < 2
+  // At 0 the partner is off. At 1 an ask shows the writer's own material, and its answer carries a
+  // one-use allowance the server keeps: Allow once spends it on one batch of ideas.
+  const off = ceiling < 1
   const allKinds = kinds()
 
   useEffect(() => {
@@ -70,14 +70,13 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
 
   const show = () => {
     setOpen(true)
-    setUsedOnce(false)
     window.setTimeout(() => input.current?.focus(), 0)
   }
 
   /** Titles shown so far this time: follow-ups know them, and none is proposed twice. */
   const shownTitles = () => turns.flatMap((t) => t.result?.ideas.map((i) => i.title) ?? [])
 
-  const run = async (req: PartnerAsk, label: string, allowOnce = false) => {
+  const run = async (req: PartnerAsk, label: string, allowToken?: string) => {
     if (running) return
     const id = Date.now()
     const history = turns
@@ -85,12 +84,11 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
       .reverse()
       .filter((t) => t.result)
       .map((t) => ({ ask: t.label, titles: t.result!.ideas.map((i) => i.title) }))
-    const full: PartnerAsk = { ...req, platform: platform || undefined, history, avoid: shownTitles(), ...(allowOnce ? { allowOnce: true } : {}) }
+    const full: PartnerAsk = { ...req, platform: platform || undefined, history, avoid: shownTitles(), ...(allowToken ? { allowToken } : {}) }
     setTurns((ts) => [{ id, label, req, result: null }, ...ts])
     setRunning(true)
     try {
       const result = await api.ideaPartner(full)
-      if (allowOnce) setUsedOnce(true)
       setTurns((ts) => ts.map((t) => (t.id === id ? { ...t, result } : t)))
     } catch (e) {
       setTurns((ts) => ts.map((t) => (t.id === id ? { ...t, error: (e as Error).message } : t)))
@@ -100,16 +98,16 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
     }
   }
 
-  const askNow = (allowOnce = false) => {
+  const askNow = () => {
     if (picking) {
       const hit = notes.find((n) => n.title === note || n.path === note)
       if (!hit) return
-      run({ scope: 'note', doc: hit.path, ask: ask.trim() || undefined }, `Angles on “${hit.title || hit.path}”${ask.trim() ? `: ${ask.trim()}` : ''}`, allowOnce)
+      run({ scope: 'note', doc: hit.path, ask: ask.trim() || undefined }, `Angles on “${hit.title || hit.path}”${ask.trim() ? `: ${ask.trim()}` : ''}`)
       return
     }
     const a = ask.trim()
     if (!a) return
-    run({ scope: 'ask', ask: a }, a, allowOnce)
+    run({ scope: 'ask', ask: a }, a)
     setAsk('')
   }
 
@@ -125,7 +123,6 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
       </div>
     )
 
-  const spent = off && usedOnce
   const canAsk = picking ? notes.some((n) => n.title === note || n.path === note) : !!ask.trim()
 
   return (
@@ -140,11 +137,11 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
 
       <div className="ip-quick">
         {QUICK.map((q) => (
-          <button key={q.label} className="ip-chip" disabled={running || spent} title={off ? 'Allows one batch past your help ceiling' : undefined} onClick={() => run(q.req, q.label, off)}>
-            {off ? `Allow once: ${q.label.replace(/^./, (c) => c.toLowerCase())}` : q.label}
+          <button key={q.label} className="ip-chip" disabled={running || off} onClick={() => run(q.req, q.label)}>
+            {q.label}
           </button>
         ))}
-        <button className={`ip-chip${picking ? ' is-on' : ''}`} aria-pressed={picking} onClick={() => setPicking((p) => !p)}>
+        <button className={`ip-chip${picking ? ' is-on' : ''}`} aria-pressed={picking} disabled={off} onClick={() => setPicking((p) => !p)}>
           Angles on a note…
         </button>
       </div>
@@ -195,15 +192,13 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
         )}
       </form>
 
-      {off && (
+      {ceiling < 2 && (
         <div className="sp-off">
           <p>
-            At help ceiling {ceiling} the idea partner {ceiling === 1 ? 'only shows what you’ve written on a topic' : 'is off'}. Asking a model for ideas is help level 2. Change the ceiling in the
-            Piece panel, or allow one batch.
+            {off
+              ? 'The idea partner is off at help ceiling 0. Raise the ceiling in the Piece panel to use it.'
+              : 'At help ceiling 1 the idea partner shows what you’ve written on a topic. Asking a model for ideas is help level 2: raise the ceiling in the Piece panel, or allow it once under an answer.'}
           </p>
-          <button className="btn" type="button" disabled={!canAsk || running || spent} onClick={() => askNow(true)}>
-            {spent ? 'Allowed once' : 'Allow once'}
-          </button>
         </div>
       )}
 
@@ -249,9 +244,24 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
                   />
                 ))}
                 {t.result.mode === 'material' && t.result.material.length > 0 && <Material items={t.result.material} onOpenDoc={onOpenDoc} />}
-                {n === 0 && t.result.mode === 'ideas' && !spent && (
-                  <button className="btn ip-more" disabled={running} onClick={() => run(t.req, `More like “${t.label}”`, off)}>
-                    {off ? 'Allow once: more ideas' : 'More ideas'}
+                {t.result.canAllowOnce && t.result.allowToken && (
+                  <button
+                    className="btn ip-more"
+                    disabled={running}
+                    title="Asks a model for one batch of ideas, past your help ceiling"
+                    onClick={() => {
+                      const token = t.result!.allowToken
+                      // Spent on the server with this click; the button goes so it isn't offered twice.
+                      setTurns((ts) => ts.map((x) => (x.id === t.id && x.result ? { ...x, result: { ...x.result, allowToken: undefined } } : x)))
+                      run(t.req, `${t.label} (allowed once)`, token)
+                    }}
+                  >
+                    Allow once: ask for ideas
+                  </button>
+                )}
+                {n === 0 && t.result.mode === 'ideas' && ceiling >= 2 && (
+                  <button className="btn ip-more" disabled={running} onClick={() => run(t.req, `More like “${t.label}”`)}>
+                    More ideas
                   </button>
                 )}
               </>

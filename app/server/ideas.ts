@@ -271,7 +271,19 @@ async function readState(): Promise<IdeasState> {
   }
 }
 
+/** The keys of every idea in ideas.md now, or null when the file can't be read (a missing file has none). */
+async function presentKeys(): Promise<Set<string> | null> {
+  try {
+    return new Set(parseIdeas((await readIdeasFile()) ?? '').map((i) => ideaKey(i.text)))
+  } catch {
+    return null
+  }
+}
+
 async function writeState(state: IdeasState) {
+  // The parts of ideas whose line the writer deleted from ideas.md go too: the line is the idea.
+  const present = await presentKeys()
+  if (present) for (const k of Object.keys(state.partner)) if (!present.has(k)) delete state.partner[k]
   const keys = Object.keys(state.partner)
   const partner = keys.length > MAX_DETAILS ? Object.fromEntries(keys.slice(-MAX_DETAILS).map((k) => [k, state.partner[k]])) : state.partner
   await fs.mkdir(META_DIR, { recursive: true })
@@ -378,8 +390,14 @@ export function starIdea(text: string, on: boolean) {
 export async function knownIdeas(): Promise<{ texts: string[]; dismissed: string[] }> {
   const raw = await readIdeasFile()
   const state = await readState()
-  const texts = parseIdeas(raw ?? '').map((i) => withoutLinkGroup(i.text) || i.text)
-  return { texts: [...texts, ...Object.values(state.partner).map((d) => d.title)], dismissed: state.dismissed }
+  const ideas = parseIdeas(raw ?? '')
+  const texts = ideas.map((i) => withoutLinkGroup(i.text) || i.text)
+  // Only kept ideas still in ideas.md: one whose line the writer deleted may be proposed again.
+  const present = new Set(ideas.map((i) => ideaKey(i.text)))
+  const titles = Object.entries(state.partner)
+    .filter(([k]) => present.has(k))
+    .map(([, d]) => d.title)
+  return { texts: [...texts, ...titles], dismissed: state.dismissed }
 }
 
 /** Keep an idea the partner proposed: its line appended to ideas.md, its parts kept beside it. */
@@ -451,7 +469,7 @@ export async function liveSources(sources: IdeaSource[]) {
  * sources, or the notes it links to) waits in the piece's Thinking Space, quoted with chips that open
  * them. `from-idea` in its front matter is how the Ideas page knows it was started.
  */
-export async function startIdeaPiece(kinds: Kind[], text: string, kindId: string): Promise<{ path: string; seeded: boolean; missing: number }> {
+export async function startIdeaPiece(kinds: Kind[], text: string, kindId: string): Promise<{ path: string; seeded: boolean; missing: number; warning?: string }> {
   // The idea exactly as the list keys it, so its row shows Started (a cleaned copy could differ).
   const idea = ideaKey(text)
   if (!idea) throw new HttpError(400, 'No idea to start from')
@@ -475,16 +493,27 @@ export async function startIdeaPiece(kinds: Kind[], text: string, kindId: string
   const named = detail ? await nameDoc(rel, detail.title) : rel
   const placed = await placeDoc(kinds, named)
 
-  await writeBrief(placed, ideaBrief(idea, detail, found, kinds))
+  // The draft exists now: whatever fails from here is reported with it, never as an error without it.
+  const failed: string[] = []
+  await writeBrief(placed, ideaBrief(idea, detail, found, kinds)).catch((e) => {
+    console.warn('[ideas] the brief could not be pinned:', (e as Error).message)
+    failed.push('the brief')
+  })
   const heads = [
     ...(detail ? [{ text: detail.angle, mark: 'Idea' }] : []),
     ...(detail?.hook ? [{ text: detail.hook, mark: 'Hook' }] : []),
     ...found.filter((s) => s.idea).map((s) => ({ text: s.text, mark: 'Your idea' })),
   ]
   const quotes = found.filter((s) => !s.idea).map((s) => ({ text: s.text, from: { doc: s.doc, title: s.title, folder: s.folder } }))
-  const seeded = quotes.length > 0 || (detail !== undefined && heads.length > 0)
-  if (seeded) await seedThinking(placed, [...heads, ...quotes])
-  return { path: placed, seeded, missing }
+  let seeded = quotes.length > 0 || (detail !== undefined && heads.length > 0)
+  if (seeded)
+    await seedThinking(placed, [...heads, ...quotes]).catch((e) => {
+      console.warn('[ideas] the Thinking Space could not be seeded:', (e as Error).message)
+      failed.push('its Thinking Space')
+      seeded = false
+    })
+  const warning = failed.length ? `Started, but ${failed.join(' and ')} couldn’t be written.` : undefined
+  return { path: placed, seeded, missing, ...(warning ? { warning } : {}) }
 }
 
 /** Start a piece from an idea, and say only where it is (see startIdeaPiece). */

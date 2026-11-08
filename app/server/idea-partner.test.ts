@@ -162,23 +162,37 @@ test('hooks are kept only when allowed, and only as one short line; a batch has 
   assert.deepEqual(partner.validateIdeas('nonsense', labels, kindIds).ideas, [])
 })
 
-test('the help level: the ceiling, or 2 once when allowed below it', () => {
+test('the help level: the ceiling, or 2 once when allowed at 1; never lifted at 0', () => {
   assert.equal(partner.partnerLevel(5), 5)
   assert.equal(partner.partnerLevel(2), 2)
   assert.equal(partner.partnerLevel(1), 1)
   assert.equal(partner.partnerLevel(1, true), 2)
-  assert.equal(partner.partnerLevel(0, true), 2)
+  assert.equal(partner.partnerLevel(0, true), 0)
   assert.equal(partner.partnerLevel(4, true), 4)
+})
+
+test('an allowance is spent once, expires, and holds only at the ceiling it was given at', () => {
+  const t = partner.mintAllowance(1)
+  assert.match(t, /^[0-9a-f]{32}$/)
+  assert.ok(partner.spendAllowance(t, 1))
+  assert.ok(!partner.spendAllowance(t, 1)) // spent
+  assert.ok(!partner.spendAllowance(partner.mintAllowance(1), 0)) // the ceiling went down to 0
+  assert.ok(!partner.spendAllowance(partner.mintAllowance(0), 0)) // nothing lifts 0
+  const now = Date.now()
+  assert.ok(!partner.spendAllowance(partner.mintAllowance(1, now), 1, now + partner.ALLOW_TTL_MS + 1)) // expired
+  assert.ok(!partner.spendAllowance('f'.repeat(32), 1)) // never given
+  assert.ok(!partner.spendAllowance(undefined, 1))
 })
 
 test('a malformed request is the caller’s mistake', () => {
   assert.throws(() => partner.checkRequest({ scope: 'ask', ask: '  ' }), /Ask for something/)
   assert.throws(() => partner.checkRequest({ scope: 'note' }), /Pick a note/)
   assert.throws(() => partner.checkRequest({ scope: 'everything' }), /Not a way/)
-  const r = partner.checkRequest({ scope: 'recent', history: [{ ask: 'x', titles: ['a', 3] }, 'junk'], avoid: ['a', 1], allowOnce: 'yes' })
+  const r = partner.checkRequest({ scope: 'recent', history: [{ ask: 'x', titles: ['a', 3] }, 'junk'], avoid: ['a', 1], allowOnce: true, allowToken: 'not-a-token' })
   assert.deepEqual(r.history, [{ ask: 'x', titles: ['a'] }])
   assert.deepEqual(r.avoid, ['a'])
-  assert.equal(r.allowOnce, false)
+  assert.equal(r.allowToken, undefined)
+  assert.ok(!('allowOnce' in r))
 })
 
 // ---- A batch, with the vault and the model stood in for -----------------------------------------
@@ -193,34 +207,42 @@ const reply = JSON.stringify({
 })
 const base = { kinds: DEFAULT_KINDS, gather: async () => ({ items: material }), known: async () => ({ texts: [], dismissed: [] }) }
 
-test('at ceiling 0 nothing is read and no model is asked', async () => {
+test('at ceiling 0 nothing is read, no model is asked, and nothing can be allowed once', async () => {
   let gathered = false
   let asked = false
-  const r = await partner.runPartner(
-    { scope: 'recent' },
-    {
-      ...base,
-      ceiling: 0,
-      gather: async () => ((gathered = true), { items: material }),
-      ask: async () => ((asked = true), reply),
-    },
-  )
+  const deps = { ...base, ceiling: 0, gather: async () => ((gathered = true), { items: material }), ask: async () => ((asked = true), reply) }
+  const r = await partner.runPartner({ scope: 'recent' }, deps)
   assert.equal(r.mode, 'material')
-  assert.ok(r.canAllowOnce && !gathered && !asked)
   assert.match(r.message!, /help ceiling 0/)
+  assert.ok(!r.canAllowOnce && !r.allowToken)
+  // Neither the old flag nor a token minted at another ceiling lifts it.
+  await partner.runPartner({ scope: 'recent', allowOnce: true }, deps)
+  await partner.runPartner({ scope: 'recent', allowToken: partner.mintAllowance(1) }, deps)
+  assert.ok(!gathered && !asked)
 })
 
-test('at ceiling 1 the writer sees their own material, no model; allowing once makes one batch at level 2', async () => {
+test('at ceiling 1 the writer sees their own material with a one-use allowance; spent once, at level 2', async () => {
   let asked = 0
   const ask = async (system: string) => (asked++, assert.ok(!/"hook":/.test(system)), reply)
   const r = await partner.runPartner({ scope: 'recent' }, { ...base, ceiling: 1, ask })
   assert.equal(r.mode, 'material')
   assert.equal(r.material.length, 3)
   assert.equal(asked, 0)
-  const once = await partner.runPartner({ scope: 'recent', allowOnce: true }, { ...base, ceiling: 1, ask })
+  assert.ok(r.canAllowOnce && r.allowToken)
+  // The old stateless flag does nothing.
+  assert.equal((await partner.runPartner({ scope: 'recent', allowOnce: true }, { ...base, ceiling: 1, ask })).mode, 'material')
+  assert.equal(asked, 0)
+  const once = await partner.runPartner({ scope: 'recent', allowToken: r.allowToken }, { ...base, ceiling: 1, ask })
   assert.equal(once.mode, 'ideas')
   assert.equal(once.level, 2)
+  assert.equal(asked, 1)
   assert.ok(once.ideas.every((i) => i.hook === undefined)) // a hook the model sent anyway is dropped
+  // The same token again: refused, no model, and a fresh allowance offered instead.
+  const again = await partner.runPartner({ scope: 'recent', allowToken: r.allowToken }, { ...base, ceiling: 1, ask })
+  assert.equal(again.mode, 'material')
+  assert.equal(asked, 1)
+  assert.match(again.message!, /already used or has expired/)
+  assert.ok(again.allowToken && again.allowToken !== r.allowToken)
 })
 
 test('a batch at ceiling 4: ideas with hooks, kinds and the sources they cite', async () => {
@@ -238,6 +260,17 @@ test('a batch at ceiling 4: ideas with hooks, kinds and the sources they cite', 
     r.ideas[1].sources.map((s) => s.type),
     ['idea', 'note'],
   )
+})
+
+test('a long avoid list from the page cannot push the server’s own known ideas out of the prompt', async () => {
+  const avoid = Array.from({ length: 200 }, (_, i) => `page title ${i}`)
+  let prompt = ''
+  await partner.runPartner(
+    { ask: 'hiring', avoid },
+    { ...base, ceiling: 5, ask: async (_s: string, p: string) => ((prompt = p), reply), known: async () => ({ texts: ['kept idea one'], dismissed: ['discarded idea two'] }) },
+  )
+  assert.ok(prompt.includes('"kept idea one"') && prompt.includes('"discarded idea two"'))
+  assert.ok(prompt.includes('"page title 199"') && !prompt.includes('"page title 100"'))
 })
 
 test('ideas the writer already has, discarded, or saw this time are not offered again', async () => {
@@ -275,15 +308,26 @@ test('an empty vault, no model, or a model that fails: no ideas, and a plain rea
       },
     },
   )
-  assert.match(failed.message!, /timed out/)
+  assert.match(failed.message!, /didn’t answer/)
+  assert.ok(!failed.message!.includes('timed out')) // the raw error stays in the server's log
   assert.equal(failed.material.length, 3)
   const junk = await partner.runPartner({ scope: 'recent' }, { ...base, ceiling: 5, ask: async () => 'I would rather write the post for you.' })
   assert.equal(junk.mode, 'material')
 })
 
-test('asking for one kind marks every idea for it', async () => {
+test('asking for one kind marks every idea for it; a kind that doesn’t exist is ignored', async () => {
   const r = await partner.runPartner({ ask: 'hiring', platform: 'essay' }, { ...base, ceiling: 5, ask: async () => reply })
   assert.ok(r.ideas.every((i) => i.platforms[0] === 'essay'))
+  let prompt = ''
+  const bad = await partner.runPartner({ ask: 'hiring', platform: 'gone-kind' }, { ...base, ceiling: 5, ask: async (_s: string, p: string) => ((prompt = p), reply) })
+  assert.ok(bad.ideas.every((i) => !i.platforms.includes('gone-kind')))
+  assert.ok(!prompt.includes('gone-kind'))
+})
+
+test('a link the model writes in a title or angle is not kept as a link', () => {
+  const { ideas: out } = partner.validateIdeas({ ideas: [{ title: 'On [[secret-note]]', angle: 'See [[other]].', sources: ['n1'] }] }, partner.labelMaterial([src(1)]), kindIds)
+  assert.equal(out[0].title, 'On secret-note')
+  assert.equal(out[0].angle, 'See other.')
 })
 
 // ---- ideas.md lines and briefs (pure) ---------------------------------------------------------
@@ -440,4 +484,48 @@ test('a discarded idea is remembered, so it is not proposed again', async () => 
   await ideas.dismissIdeaTitle('Ten tips for hiring')
   assert.ok((await ideas.knownIdeas()).dismissed.includes('Ten tips for hiring'))
   await assert.rejects(ideas.dismissIdeaTitle('  '), /No idea/)
+})
+
+test('a kept idea whose line the writer deleted from ideas.md may be proposed again, and its parts are pruned', async () => {
+  const kept = await ideas.keepDetail({ title: 'Deleted later by the writer', angle: 'An angle.', platforms: [], sources: [] })
+  assert.ok((await ideas.knownIdeas()).texts.includes('Deleted later by the writer'))
+  const file = path.join(root, 'ideas.md')
+  const raw = await fs.readFile(file, 'utf8')
+  await vault.writeDoc(
+    'ideas.md',
+    raw
+      .split('\n')
+      .filter((l) => !l.includes('Deleted later by the writer'))
+      .join('\n'),
+  )
+  assert.ok(!(await ideas.knownIdeas()).texts.includes('Deleted later by the writer'))
+  // The next write of the app's notes drops the orphaned parts.
+  await ideas.starIdea('a plain idea', true)
+  const state = JSON.parse(await fs.readFile(path.join(root, '.ekdanta', 'ideas.json'), 'utf8'))
+  assert.equal(state.partner[kept.key], undefined)
+  assert.ok(Object.keys(state.partner).length > 0) // the ones still in ideas.md stay
+})
+
+test('sources in hidden or app folders are never kept', async () => {
+  await fs.mkdir(path.join(root, '.obsidian'), { recursive: true })
+  await fs.writeFile(path.join(root, '.obsidian', 'notes.md'), 'A hidden passage that is long enough to look like a real one.\n')
+  const d = await partner.checkIdea({ title: 'Hidden', angle: 'x', sources: [{ doc: '.obsidian/notes.md', title: 'n', text: 'A hidden passage that is long enough', type: 'note' }] }, DEFAULT_KINDS)
+  assert.deepEqual(d.sources, [])
+})
+
+test('a brief that can’t be pinned still leaves the started post, with a warning instead of an error', async () => {
+  const kept = await ideas.keepDetail({ title: 'Brief will fail', angle: 'An angle that seeds.', platforms: [], sources: [] })
+  const briefs = path.join(root, '.ekdanta', 'briefs')
+  const saved = path.join(root, '.ekdanta', 'briefs-saved')
+  await fs.rename(briefs, saved).catch(() => {})
+  await fs.writeFile(briefs, 'not a folder') // writing a brief now fails
+  try {
+    const r = await ideas.startIdeaPiece(DEFAULT_KINDS, kept.text, 'essay')
+    assert.match(r.warning!, /^Started, but the brief couldn’t be written\.$/)
+    await fs.access(path.join(root, r.path)) // the draft is there
+    assert.ok(r.seeded)
+  } finally {
+    await fs.rm(briefs, { force: true })
+    await fs.rename(saved, briefs).catch(() => {})
+  }
 })

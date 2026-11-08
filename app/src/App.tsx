@@ -1400,7 +1400,8 @@ export function App() {
       if (r.seeded) thinkOnLoad.current = r.path
       else setFresh(r.path)
       await openDoc(r.path)
-      if (r.missing) notify(r.missing === 1 ? 'Started. One note it came from is no longer in your vault.' : `Started. ${r.missing} notes it came from are no longer in your vault.`)
+      if (r.warning) notify(r.warning)
+      else if (r.missing) notify(r.missing === 1 ? 'Started. One note it came from is no longer in your vault.' : `Started. ${r.missing} notes it came from are no longer in your vault.`)
     } catch (e) {
       notify(`Couldn't start it: ${(e as Error).message}`)
     }

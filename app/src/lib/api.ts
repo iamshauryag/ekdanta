@@ -276,7 +276,8 @@ export interface PartnerAsk {
   platform?: string
   history?: { ask: string; titles: string[] }[]
   avoid?: string[]
-  allowOnce?: boolean
+  /** The one-use allowance from an answer below help ceiling 2. */
+  allowToken?: string
 }
 export interface PartnerSource {
   id: string
@@ -305,6 +306,7 @@ export interface PartnerResult {
   note?: string
   level: number
   canAllowOnce?: boolean
+  allowToken?: string
 }
 export interface IdeaStarted {
   path: string
@@ -312,6 +314,8 @@ export interface IdeaStarted {
   seeded: boolean
   /** Source notes no longer in the vault. */
   missing: number
+  /** Started, but the brief or Thinking Space couldn't be written. */
+  warning?: string
   touched?: Touched[]
 }
 
