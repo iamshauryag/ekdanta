@@ -11,6 +11,7 @@ import { HttpError } from './net.ts'
 import { refresh, type Chunk } from './recall.ts'
 import { loadSettings } from './settings.ts'
 import { seedThinking } from './thinking.ts'
+import { writeBrief } from './brief.ts'
 import { META_DIR, createDoc, listFiles, nameDoc, readDoc, writeDoc } from './vault.ts'
 import { joinDoc, patchFrontMatter, splitFrontMatter } from '../src/lib/frontmatter.ts'
 import { MAX_SOURCES, SPARK_KEY, candidateGroups, clean, cosine, keyOf, mmr, passageId, sample, seenBefore, shortTitle, validateSparks, appendBullet, type Passage, type Spark } from './sparks.ts'
@@ -314,9 +315,10 @@ export async function keepSpark(card: { key: string; title?: string; angle?: str
 
 /**
  * Start a piece from a spark: a new document of the chosen kind whose body stays empty (even if
- * the kind has a template), with the passages and the spark's angle waiting in its Thinking Space.
+ * the kind has a template), with the passages and the spark's angle waiting in its Thinking Space
+ * and a brief pinned from the spark.
  */
-export async function startPiece(card: { key: string; title?: string; angle?: string; sources: { id: string }[] }, kindId?: string) {
+export async function startPiece(card: { key: string; title?: string; angle?: string; why?: string; sources: { id: string }[] }, kindId?: string) {
   checkCard(card)
   const passages = await verify(card)
   const { kinds } = await loadSettings()
@@ -329,6 +331,10 @@ export async function startPiece(card: { key: string; title?: string; angle?: st
   const rel = title ? await nameDoc(created, title) : created
   const angle = clean(card.angle)
   await seedThinking(rel, [...(angle ? [{ text: angle, mark: 'Spark' }] : []), ...passages.map((p) => ({ text: p.text, from: { doc: p.doc, title: p.title, folder: p.folder } }))])
+  // A pinned brief from the spark, as a piece started from an idea gets: what it is, its angle, where it came from.
+  const why = clean(card.why)
+  const from = [...new Map(passages.map((p) => [p.doc, p])).values()].map((p) => `[[${p.doc.replace(/\.md$/, '')}|${p.title.replace(/[\]|[]/g, '') || p.doc}]]`)
+  await writeBrief(rel, [title && `Idea: ${title}`, angle && `Angle: ${angle}`, why && `Why: ${why}`, `From: ${from.join(', ')}`].filter(Boolean).join('\n'))
   refresh().catch(() => {})
   return { path: rel }
 }
