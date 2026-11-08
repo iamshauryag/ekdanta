@@ -10,7 +10,7 @@ import { status } from './ai.ts'
 import { claudePool, closeClaudePools } from './claude-pool.ts'
 import { embedder, warmEmbedder } from './embed.ts'
 import { patchContent, type MetaPatch } from '../src/lib/frontmatter.ts'
-import { listTags } from './tags.ts'
+import { editDocTags, listTags } from './tags.ts'
 import { material, readThinking, recallChips, suggestClusters, suggestLinks, writeThinking, type Fragment } from './thinking.ts'
 import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
@@ -49,7 +49,9 @@ import {
   saveAsset,
   moveToFolder,
   nameDoc,
-  placeDoc,
+  existingDoc,
+  fileByKind,
+  unfileDoc,
   renameDoc,
   renameFolder,
   duplicateDoc,
@@ -180,12 +182,23 @@ const routes: Record<string, Handler> = {
     if (next !== path) refresh().catch(() => {})
     return { path: next, touched }
   },
+  // After a kind change: file the document in its kind's folder. `stay` says why it didn't move, when it
+  // didn't; `undo` is a token for putting it back, given only when the app says the kind it had (`was`).
   'POST /api/place': async (req) => {
-    const { path } = await body<{ path: string }>(req)
+    const { path: asked, was } = await body<{ path: string; was?: string }>(req)
+    const path = await existingDoc(asked)
     await keepBefore(path, 'before move')
-    const kinds = (await loadSettings()).kinds
-    const { result: next, touched } = await collectTouched(() => placeDoc(kinds, path))
-    if (next !== path) refresh().catch(() => {})
+    const { kinds, excludedFolders, brainFolder } = await loadSettings()
+    const opts = { excluded: excludedFolders, brain: brainFolder, was: typeof was === 'string' ? was : undefined }
+    const { result, touched } = await collectTouched(() => fileByKind(kinds, path, opts))
+    if (result.path !== path) refresh().catch(() => {})
+    return { ...result, touched }
+  },
+  // Undo of the above, by its token: the old kind back, and the document back where it was.
+  'POST /api/place/undo': async (req) => {
+    const { token } = await body<{ token: string }>(req)
+    const { result: next, touched } = await collectTouched(() => unfileDoc(token))
+    refresh().catch(() => {})
     return { path: next, touched }
   },
   'POST /api/rename': async (req) => {
@@ -346,6 +359,13 @@ const routes: Record<string, Handler> = {
     return { ready: true, results: await search(q, { limit: 12 }) }
   },
   'GET /api/tags': async () => listTags(),
+  // Tags added or taken away from the Vault, on a note that isn't open: applied to what's on disk now.
+  'POST /api/tags/edit': async (req) => {
+    const { path, add, remove } = await body<{ path: string; add?: string[]; remove?: string[] }>(req)
+    const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+    const { result: tags, touched } = await collectTouched(() => editDocTags(path, strings(add), strings(remove)))
+    return { tags, touched }
+  },
   'GET /api/versions': async (_req, url) => listVersions(url.searchParams.get('doc') ?? ''),
   'GET /api/version': async (_req, url) => ({ content: await readVersion(url.searchParams.get('doc') ?? '', url.searchParams.get('id') ?? '') }),
   'POST /api/versions/snapshot': async (req) => {

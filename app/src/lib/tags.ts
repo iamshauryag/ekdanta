@@ -74,6 +74,17 @@ export const cleanTag = (t: string) =>
     .replace(/\s+/g, '-')
     .replace(/^\/+|\/+$/g, '')
 
+/**
+ * A note's front-matter tags with some added and some taken away, as the sidebar edits them for a
+ * note that isn't open. Case is ignored when matching, and an added tag keeps the casing typed.
+ */
+export function editTags(current: string[], add: string[] = [], remove: string[] = []): string[] {
+  const gone = new Set(remove.map((t) => cleanTag(t).toLowerCase()))
+  const out = current.filter((t) => !gone.has(t.toLowerCase()))
+  for (const t of add.map(cleanTag).filter(Boolean)) if (!out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t)
+  return out
+}
+
 /** A tag and its parents: writing/craft → writing, writing/craft. */
 export const withParents = (tag: string) => tag.split('/').map((_, i, parts) => parts.slice(0, i + 1).join('/'))
 

@@ -3,15 +3,15 @@ import type { Editor as TiptapEditor } from '@tiptap/core'
 import { Editor, type EditorFormat, type Heading } from './editor/Editor.tsx'
 import type { PageRef } from './editor/menus.ts'
 import { SourceEditor } from './editor/Source.tsx'
-import { findKind, kindName, kinds, setKinds } from './lib/kinds.ts'
+import { findKind, kindName, kinds, pieceName, setKinds } from './lib/kinds.ts'
 import { DocumentMode, DocumentPanel } from './components/DocumentMode.tsx'
 import { docOf, dueLabel, kindSwitchPatch, usesDocument } from './lib/docstyle.ts'
 import { countable, type Block } from './lib/targets.ts'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
-import { api, ApiError, type Changes, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Touched, type Trashed, type VoiceSummary } from './lib/api.ts'
+import { api, ApiError, type Changes, type FileEntry, type PlaceStay, type Settings as SettingsT, type Status, type Thinking, type Touched, type Trashed, type VoiceSummary } from './lib/api.ts'
 import { joinDoc, patchFrontMatter, splitFrontMatter, type FrontMatter, type MetaPatch } from './lib/frontmatter.ts'
-import { docTags, vaultTagCounts } from './lib/tags.ts'
+import { docTags, editTags, metaTags, vaultTagCounts } from './lib/tags.ts'
 import { Properties } from './components/Properties.tsx'
 import { Panel, type HistorySeg, type PanelTab } from './components/Panel.tsx'
 import { VersionPreview } from './components/VersionPreview.tsx'
@@ -295,11 +295,15 @@ export function App() {
           })
           if (state === 'saved') {
             setVersionsTick((t) => t + 1) // a save can keep a version
-            // Tags typed into the text show in the sidebar without re-reading the vault.
+            // Tags typed into the text, and when it last changed, show without re-reading the vault.
             const d = docRef.current
             if (d) {
               const tags = docTags(d)
-              setFiles((fs) => (fs.some((f) => f.path === d.path && f.tags?.join('\n') !== tags.join('\n')) ? fs.map((f) => (f.path === d.path ? { ...f, tags } : f)) : fs))
+              const own = metaTags(d)
+              const fmTags = own.length ? own : undefined
+              const mtime = saver.base?.path === d.path ? saver.base.mtime : undefined
+              const stale = (f: FileEntry) => f.tags?.join('\n') !== tags.join('\n') || f.fmTags?.join('\n') !== fmTags?.join('\n') || (mtime !== undefined && f.mtime !== mtime)
+              setFiles((fs) => (fs.some((f) => f.path === d.path && stale(f)) ? fs.map((f) => (f.path === d.path ? { ...f, tags, fmTags, mtime: mtime ?? f.mtime } : f)) : fs))
             }
           }
         },
@@ -1028,11 +1032,13 @@ export function App() {
     }).catch(failed('name the file'))
   }
 
-  /** A new platform moves the piece into that platform's folder. */
+  /** A new kind files the piece in that kind's folder, with an Undo that puts back both the kind and the place. */
   const setPlatform = async (platform: string) => {
     const d = docRef.current
     if (!d) return
     if (d.readonly) return notify(READONLY_META)
+    const was = d.meta.platform ?? ''
+    if (platform === was) return
     const patch: MetaPatch = { platform }
     // A new, empty piece takes its new kind's document defaults (and gives back the old kind's).
     if (fresh === d.path && !d.body.trim()) Object.assign(patch, kindSwitchPatch(d.meta, findKind(kinds(), d.meta.platform ?? '')?.doc, findKind(kinds(), platform)?.doc))
@@ -1040,15 +1046,33 @@ export function App() {
     syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta, lists: d.lists } : l))
     saver.edited()
+    // A brand-new, empty draft is only being given its kind: its move needs no news.
+    const quiet = fresh === d.path && !d.body.trim()
     await op(async () => {
       if (docRef.current !== d) return
-      const { path: next, touched } = await api.place(d.path)
+      const prev = d.path
+      const { path: next, touched, stay, folder, undo } = await api.place(prev, was)
       follow(next)
       await absorb(touched)
       refreshFiles()
       refreshVoices()
+      if (quiet) return
+      const name = pieceName(kinds(), platform, 1)
+      const where = prev.includes('/') ? prev.slice(0, prev.lastIndexOf('/')) + '/' : 'the top of the vault'
+      if (next !== prev) notify(`Moved to ${next.slice(0, next.lastIndexOf('/'))}/`, undo ? () => void unplace(next, undo) : undefined)
+      else if (stay && stay !== 'unknown-kind') notify(`Now ${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name}. It stays in ${STAY_LABELS[stay](where, `${folder ?? ''}/`)}.`)
     }).catch(failed('move it to its folder'))
   }
+
+  /** Undo a kind change: the document goes back where it was, as the kind it was. */
+  const unplace = (rel: string, token: string) =>
+    op(async () => {
+      const { path: back, touched } = await api.unplace(token)
+      if (docRef.current?.path === rel) follow(back)
+      await absorb(touched)
+      await refreshFiles()
+      refreshVoices()
+    }).catch(failed('put it back'))
 
   /** Read the open document again after the server rewrote it, with the caret at `caret` (an offset into the body). */
   const reloadOpen = async (caret: number | null) => {
@@ -1210,6 +1234,20 @@ export function App() {
     export: (rel) => setExporting(rel),
     pinBrief: (rel) => void pinBrief(rel),
     hasBrief: (rel) => (openBrief && rel === openBrief.doc.path ? openBrief.text.trim() !== '' : !!files.find((f) => f.path === rel)?.brief),
+    tag: (rel, add, remove) => {
+      const d = docRef.current
+      // The open page saves through the editor, so its tags change in the editor's copy (and Properties shows them at once).
+      if (d?.path === rel) return setMeta({ tags: editTags(metaTags(d), add, remove) })
+      // Shown at once; the listing read after the write says what the file holds.
+      setFiles((fs) => fs.map((f) => (f.path === rel ? { ...f, fmTags: editTags(f.fmTags ?? [], add, remove) } : f)))
+      op(async () => {
+        await absorb((await api.editTags(rel, add, remove)).touched)
+        await refreshFiles()
+      }).catch((e) => {
+        failed('change its tags')(e)
+        refreshFiles()
+      })
+    },
   }
 
   /** Pin a brief to a page (or edit the one it has): open the page, and the paste box in the Piece tab. */
@@ -2088,7 +2126,15 @@ export function App() {
                 onCommit={setTitle}
                 onHelp={(level) => window.dispatchEvent(new CustomEvent('ekdanta:help', { detail: { level } }))}
               />
-              <Properties key={'props:' + loaded.key} fm={loaded} open={propsOpen} onOpen={setPropsOpen} onPatch={setMeta} vaultTags={vaultTags} />
+              <Properties
+                key={'props:' + loaded.key}
+                fm={loaded}
+                open={propsOpen}
+                onOpen={setPropsOpen}
+                onPatch={setMeta}
+                vaultTags={vaultTags}
+                modified={files.find((f) => f.path === loaded.path)?.mtime}
+              />
               {isNew && !words && !sourceLabel && <PlatformPicker value={platform} onPick={setPlatform} />}
               {isNew && bodyEmpty && templates.length > 0 && (
                 <StartFrom templates={templates} platform={platform} preferred={findKind(kinds(), platform)?.template} onApply={startFrom} onAll={() => setPicker('draft')} />
@@ -2368,6 +2414,16 @@ export function App() {
 }
 
 const platformLabel = (p: string) => kindName(kinds(), p)
+
+/** Why a piece didn't move to its new kind's folder, after "It stays in": where it is, and the kind's folder. */
+const STAY_LABELS: Record<Exclude<PlaceStay, 'unknown-kind'>, (where: string, folder: string) => string> = {
+  special: (where) => `${where}, which keeps its notes whatever their kind`,
+  excluded: (where) => `${where}, a folder you've excluded`,
+  brain: () => 'the Brain',
+  'target-special': (where, folder) => `${where}: its kind's folder, ${folder}, is one Ekdanta keeps apart`,
+  'target-excluded': (where, folder) => `${where}: its kind's folder, ${folder}, is excluded`,
+  'target-brain': (where, folder) => `${where}: its kind's folder, ${folder}, is the Brain's`,
+}
 
 const SAVE_LABEL: Record<SaveState, string> = { saved: 'Saved', saving: 'Saving…', unsaved: 'Edited', failed: 'Not saved', conflict: 'Not saved', gone: 'Not saved' }
 

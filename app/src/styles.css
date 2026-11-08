@@ -6504,3 +6504,46 @@ p.brain-empty-note,
 .doc-meta .source-kind {
   font-size: 12px;
 }
+/* A page's tags from its ⋯ menu in the Vault: Properties' chips, with suggestions in the menu's flow
+   (a floating list would be clipped by the menu's own scroll box). */
+.file-tags {
+  min-width: 220px;
+}
+.file-tags .prop-chips {
+  margin: 2px 0 0;
+  padding: 2px 6px;
+  border-color: var(--line-2);
+  background: var(--page);
+}
+.menu.file-tags input.prop-chips-input {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+}
+.file-tags .prop-chips-menu {
+  position: static;
+  min-width: 0;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.file-tags-note {
+  margin: 6px 6px 2px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.props-derived {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.menu.file-tags .prop-chip-x {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 12px;
+  color: var(--accent);
+}
