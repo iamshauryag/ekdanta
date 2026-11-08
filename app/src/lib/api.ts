@@ -263,7 +263,7 @@ export type ImportStatus = 'pending' | 'converted' | 'review' | 'failed' | 'dupl
 export interface ImportItem {
   id: string
   name: string
-  type: 'docx' | 'doc' | 'html' | 'text' | 'markdown' | 'rtf' | 'csv' | 'other'
+  type: 'docx' | 'doc' | 'pdf' | 'html' | 'text' | 'markdown' | 'rtf' | 'csv' | 'other'
   size: number
   sha: string
   inbox?: string
@@ -276,6 +276,7 @@ export interface ImportItem {
   created: string
   platform?: string
   folder: string
+  tags?: string[]
   imported?: { path: string; media: string[]; hash: string }
 }
 export interface ImportBatch {
@@ -377,11 +378,12 @@ export const api = {
       body: file,
     }).then(json<ImportItem>),
   importConvert: (batch: string, id: string) => fetch('/api/import/convert', send('POST', { batch, id })).then(json<ImportItem>),
-  importPreview: (batch: string, id: string, platform: string) =>
-    fetch(`/api/import/preview?batch=${encodeURIComponent(batch)}&id=${encodeURIComponent(id)}&platform=${encodeURIComponent(platform)}`)
+  importPreview: (batch: string, id: string, platform: string, tags: string[] = []) =>
+    fetch(`/api/import/preview?${new URLSearchParams([['batch', batch], ['id', id], ['platform', platform], ...tags.map((t) => ['tag', t])])}`)
       .then(json<{ content: string }>)
       .then((d) => d.content),
-  importCommit: (batch: string, id: string, platform: string, folder: string) => fetch('/api/import/commit', send('POST', { batch, id, platform, folder })).then(json<ImportItem>),
+  importCommit: (batch: string, id: string, platform: string, folder: string, tags: string[] = []) =>
+    fetch('/api/import/commit', send('POST', { batch, id, platform, folder, tags })).then(json<ImportItem>),
   importUndo: (batch: string) => fetch('/api/import/undo', send('POST', { batch })).then(json<{ removed: string[]; trashed: string[]; missing: string[] }>),
   brief: (doc: string) =>
     fetch('/api/brief?doc=' + encodeURIComponent(doc))

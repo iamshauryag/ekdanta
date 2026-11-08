@@ -130,11 +130,11 @@ const routes: Record<string, Handler> = {
     return convert(batch, id)
   }),
   'GET /api/import/preview': local(async (_req, url) => ({
-    content: await preview(url.searchParams.get('batch') ?? '', url.searchParams.get('id') ?? '', url.searchParams.get('platform') ?? undefined),
+    content: await preview(url.searchParams.get('batch') ?? '', url.searchParams.get('id') ?? '', url.searchParams.get('platform') ?? undefined, url.searchParams.getAll('tag')),
   })),
   'POST /api/import/commit': local(async (req) => {
-    const { batch, id, platform, folder } = await body<{ batch: string; id: string; platform?: string; folder?: string }>(req)
-    const item = await commit(batch, id, { platform, folder })
+    const { batch, id, platform, folder, tags } = await body<{ batch: string; id: string; platform?: string; folder?: string; tags?: string[] }>(req)
+    const item = await commit(batch, id, { platform, folder, tags })
     refresh().catch(() => {})
     return item
   }),

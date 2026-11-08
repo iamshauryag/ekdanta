@@ -1,6 +1,7 @@
 // The front matter every imported note gets: a title, when it was written, when it was imported,
 // where it came from, and a kind only when the text makes one plain. No DOM, no file system.
-import { applyPatch, joinFrontMatter, splitFrontMatter } from '../../src/lib/frontmatter.ts'
+import { applyPatch, joinFrontMatter, splitFrontMatter, splitWords } from '../../src/lib/frontmatter.ts'
+import { cleanTag } from '../../src/lib/tags.ts'
 
 /** A date as YYYY-MM-DD in local time. */
 export const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -64,6 +65,31 @@ export interface NoteMeta {
   imported: string
   source: string
   platform?: string
+  /** Labels chosen while importing, added to the note's tags. */
+  tags?: string[]
+}
+
+/**
+ * Labels as the writer typed them, made into tags: no '#', no spaces, only letters, digits, _ - and /,
+ * each once (ignoring case), at most 30.
+ */
+export function cleanLabels(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const v of raw) {
+    if (typeof v !== 'string') continue
+    const tag = cleanTag(v)
+      .replace(/[^\p{L}\p{N}\p{M}_\-/]/gu, '')
+      .replace(/\/{2,}/g, '/')
+      .replace(/^\/+|\/+$/g, '')
+      .slice(0, 80)
+    // A tag needs a letter: '#2024' isn't one.
+    if (!/\p{L}/u.test(tag) || seen.has(tag.toLowerCase())) continue
+    seen.add(tag.toLowerCase())
+    out.push(tag)
+  }
+  return out.slice(0, 30)
 }
 
 /**
@@ -71,7 +97,8 @@ export interface NoteMeta {
  * title above the text). Front matter the source already had stays; what it lacks is added.
  */
 export function buildNote(markdown: string, m: NoteMeta): string {
-  const { meta, body, raw } = splitFrontMatter(markdown)
+  const fm = splitFrontMatter(markdown)
+  const { meta, body, raw } = fm
   let text = body.replace(/^\n+/, '')
   const h1 = text.match(/^#[ \t]+(.+?)[ \t#]*\n/)
   if (h1 && plain(h1[1]) === m.title) text = text.slice(h1[0].length).replace(/^\n+/, '')
@@ -83,8 +110,16 @@ export function buildNote(markdown: string, m: NoteMeta): string {
   }
   if (meta.platform || m.platform) patch.platform = meta.platform || m.platform || null
   patch.status = meta.status || 'imported'
+  // Labels join the tags the source already had, which stay exactly as written (only a plain
+  // `tags: a b` becomes a list); a label it already has, in any case, isn't added twice.
+  const own = fm.lists.tags ?? (meta.tags ? splitWords(meta.tags) : [])
+  // Compared as typed and as a label would be cleaned, so "V1.0" matches an existing "v1.0".
+  const have = new Set([...own.map((t) => t.replace(/^#+/, '')), ...cleanLabels(own)].map((t) => t.toLowerCase()))
+  const fresh = cleanLabels(m.tags).filter((t) => !have.has(t.toLowerCase()))
+  const tags = fresh.length ? [...own, ...fresh] : null
+  if (tags) patch.tags = tags.join(', ')
   // Ekdanta's keys first, in a fixed order, then whatever else the source had.
   const ordered = { ...patch } as Record<string, string>
   for (const [k, v] of Object.entries(meta)) if (!(k in ordered)) ordered[k] = v
-  return joinFrontMatter(raw, applyPatch({}, ordered), text.trimEnd() + '\n')
+  return joinFrontMatter(raw, applyPatch({}, ordered), text.trimEnd() + '\n', tags ? { lists: { tags } } : {})
 }

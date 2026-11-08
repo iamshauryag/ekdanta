@@ -11,7 +11,7 @@
 
 ## Try it
 
-You need [Node.js](https://nodejs.org) 20 or later, and one way to reach a model: the [Claude Code](https://code.claude.com) CLI signed in, an `ANTHROPIC_API_KEY`, or [Ollama](https://ollama.com).
+You need [Node.js](https://nodejs.org) 20 or later (24 or later to import PDFs), and one way to reach a model: the [Claude Code](https://code.claude.com) CLI signed in, an `ANTHROPIC_API_KEY`, or [Ollama](https://ollama.com).
 
 ```sh
 git clone https://github.com/iamshauryag/ekdanta.git

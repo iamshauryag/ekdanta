@@ -112,7 +112,8 @@ test('detectType trusts the bytes over a wrong name', () => {
   assert.equal(imp.detectType('page', Buffer.from('<!DOCTYPE html><html>')), 'html')
   assert.equal(imp.detectType('notes.txt', Buffer.from('<html> is a tag')), 'text')
   assert.equal(imp.detectType('a.TSV', Buffer.from('a\tb')), 'csv')
-  assert.equal(imp.detectType('a.pdf', Buffer.from('%PDF-1.4')), 'other')
+  assert.equal(imp.detectType('a.pdf', Buffer.from('%PDF-1.4')), 'pdf')
+  assert.equal(imp.detectType('notes.md', Buffer.from('About %PDF-1.4 files')), 'markdown')
 })
 
 // ---- Sanitising HTML ------------------------------------------------------------------------
