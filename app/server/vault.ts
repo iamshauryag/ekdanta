@@ -1,6 +1,6 @@
 // Reading and writing the vault: a plain folder of Markdown files.
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { constants, existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { joinDoc, joinFrontMatter, patchContent, patchFrontMatter, splitFrontMatter, type MetaPatch } from '../src/lib/frontmatter.ts'
@@ -680,7 +680,9 @@ export async function placement(kinds: Kind[], rel: string, opts: PlaceOptions =
 
 // The moves a kind change made that may still be undone, by token. A move from or onto the path one
 // left behind, or the note going to the trash, forgets it: Undo must never act on another note.
+// Only the latest are kept: an Undo is offered for a few seconds, so an old token has no use.
 const placed = new Map<string, { path: string; prev: string; platform: string }>()
+const PLACED_MAX = 50
 const forgetPlaced = (...paths: string[]) => {
   const gone = new Set(paths.map((p) => p.normalize('NFC').toLowerCase()))
   for (const [token, m] of placed) if (gone.has(m.path.normalize('NFC').toLowerCase())) placed.delete(token)
@@ -697,8 +699,13 @@ export async function fileByKind(kinds: Kind[], rel: string, opts: PlaceOptions 
   if (to === null) return { path: rel, ...(stay ? { stay } : {}), ...(folder ? { folder } : {}) }
   const next = await relocate(rel, await freePath(to, path.posix.basename(rel, '.md')))
   if (opts.was === undefined) return { path: next }
-  const undo = createHash('sha256').update(`${next}\0${rel}\0${Date.now()}\0${Math.random()}`).digest('hex').slice(0, 24)
+  const undo = randomBytes(18).toString('base64url')
   placed.set(undo, { path: next, prev: rel, platform: opts.was })
+  // A Map keeps insertion order, so the first keys are the oldest.
+  for (const old of placed.keys()) {
+    if (placed.size <= PLACED_MAX) break
+    placed.delete(old)
+  }
   return { path: next, undo }
 }
 
@@ -706,7 +713,7 @@ export async function fileByKind(kinds: Kind[], rel: string, opts: PlaceOptions 
 export const placeDoc = async (kinds: Kind[], rel: string, opts: PlaceOptions = {}) => (await fileByKind(kinds, rel, opts)).path
 
 /** A vault path to a document: Markdown, inside the vault, and in no dot folder (.ekdanta, .git). Else a 400. */
-function docPath(rel: unknown): string {
+export function docPath(rel: unknown): string {
   if (typeof rel !== 'string' || !rel.endsWith('.md')) throw new HttpError(400, 'Not a document')
   const parts = rel.replace(/\\/g, '/').split('/')
   if (parts.some((part) => !part || part.startsWith('.'))) throw new HttpError(400, 'Not a document')
@@ -716,6 +723,13 @@ function docPath(rel: unknown): string {
     throw new HttpError(400, 'Not in the vault')
   }
   return rel
+}
+
+/** docPath, and the document is there (else a 404). */
+export async function existingDoc(rel: unknown): Promise<string> {
+  const p = docPath(rel)
+  if (!(await exists(resolveInVault(p)))) throw new HttpError(404, 'Not in the vault')
+  return p
 }
 
 /**
@@ -774,7 +788,9 @@ async function relocate(rel: string, next: string) {
 // A link target: anything but spaces and parentheses, with balanced (one-level) parentheses allowed, as in a_(1).png.
 const TARGET = String.raw`(?:[^\s()<>]|\([^\s()<>]*\))+`
 const INLINE = new RegExp(String.raw`(!?\[(?:[^\]\\]|\\.)*\]\()(<[^>\n]*>|${TARGET})((?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))`, 'g')
-const REF_DEF = new RegExp(String.raw`^( {0,3}\[(?:[^\]\\]|\\.)+\]:[ \t]*)(<[^>\n]*>|\S+)(.*)$`)
+// A reference definition, `[ref]: target`. A footnote, `[^1]: text`, is text: its links are read inline.
+const REF_DEF = new RegExp(String.raw`^( {0,3}\[(?!\^)(?:[^\]\\]|\\.)+\]:[ \t]*)(<[^>\n]*>|\S+)(.*)$`)
+const LIST_ITEM = /^\s{0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/
 const IMG_SRC = /(<img\b[^>]*?\ssrc\s*=\s*)(["'])([^"'\n]*)\2/gi
 
 /**
@@ -809,6 +825,7 @@ export function rebaseLinks(body: string, from: string, to: string, isFile: (vau
   let fence: string | null = null
   let prevBlank = true
   let inIndented = false
+  let inList = false
   return lines
     .map((line) => {
       const blank = !line.trim()
@@ -823,8 +840,13 @@ export function rebaseLinks(body: string, from: string, to: string, isFile: (vau
         fence = f[1]
         return line
       }
+      // A list runs from an item until an unindented line that isn't one; its indented lines (a second
+      // paragraph after a blank line, say) are the item's text, not code.
+      const indented = /^( {4}|\t)/.test(line)
+      if (LIST_ITEM.test(line)) inList = true
+      else if (!blank && !/^\s/.test(line)) inList = false
       // An indented code block starts after a blank line and runs while lines stay indented (or blank).
-      if (/^( {4}|\t)/.test(line) && (wasBlank || inIndented)) {
+      if (indented && !inList && (wasBlank || inIndented)) {
         inIndented = true
         return line
       }

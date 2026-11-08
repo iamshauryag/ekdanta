@@ -126,6 +126,37 @@ test('rebaseLinks changes only links to files that are there, in every way Markd
   assert.equal(vault.rebaseLinks('Para\n    ![a](a.png)\n', 'a', 'b', isFile), 'Para\n    ![a](../a/a.png)\n')
 })
 
+test('footnotes are text: their links are rebased, and their words never are', () => {
+  const isFile = (p: string) => ['a/pic.png', 'a/notes'].includes(p)
+  assert.equal(vault.rebaseLinks('[^1]: see [pic](pic.png)\n[^2]: notes on this\n', 'a', 'b', isFile), '[^1]: see [pic](../a/pic.png)\n[^2]: notes on this\n')
+})
+
+test('an indented paragraph in a list item is text, not code', () => {
+  const isFile = (p: string) => p === 'a/pic.png'
+  const body = '- An item\n\n    ![pic](pic.png)\n\nAfter the list\n\n    ![code](pic.png)\n'
+  assert.equal(vault.rebaseLinks(body, 'a', 'b', isFile), '- An item\n\n    ![pic](../a/pic.png)\n\nAfter the list\n\n    ![code](pic.png)\n')
+})
+
+test('only a document in the vault can be filed or put back', async () => {
+  for (const bad of ['.ekdanta/x.md', 'a/.git/x.md', 'notes/x.txt', '../out.md', 'a//b.md', 42])
+    await assert.rejects(vault.existingDoc(bad), (e: Error & { status?: number }) => e.status === 400, String(bad))
+  await assert.rejects(vault.existingDoc('drafts/nowhere.md'), (e: Error & { status?: number }) => e.status === 404)
+  await vault.writeDoc('drafts/here.md', doc('essay'))
+  assert.equal(await vault.existingDoc('drafts/here.md'), 'drafts/here.md')
+})
+
+test('undo tokens are random, and only the latest are kept', async () => {
+  const tokens: string[] = []
+  for (let i = 0; i < 52; i++) {
+    await vault.writeDoc(`many/n${i}.md`, doc('essay'))
+    tokens.push((await vault.fileByKind(kinds, `many/n${i}.md`, { was: 'note' })).undo!)
+  }
+  assert.equal(new Set(tokens).size, tokens.length)
+  assert.match(tokens[0], /^[A-Za-z0-9_-]{24}$/)
+  await assert.rejects(vault.unfileDoc(tokens[0]), (e: Error & { status?: number }) => e.status === 409, 'the oldest is dropped')
+  assert.equal(await vault.unfileDoc(tokens[51]), 'many/n51.md')
+})
+
 test('a kind whose folder is set apart leaves the note where it is, and says so', async () => {
   const hidden = [
     { id: 'tpl', name: 'Template', folder: 'templates', guidance: '', words: 100 },

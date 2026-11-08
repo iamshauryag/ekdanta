@@ -49,6 +49,7 @@ import {
   saveAsset,
   moveToFolder,
   nameDoc,
+  existingDoc,
   fileByKind,
   unfileDoc,
   renameDoc,
@@ -184,7 +185,8 @@ const routes: Record<string, Handler> = {
   // After a kind change: file the document in its kind's folder. `stay` says why it didn't move, when it
   // didn't; `undo` is a token for putting it back, given only when the app says the kind it had (`was`).
   'POST /api/place': async (req) => {
-    const { path, was } = await body<{ path: string; was?: string }>(req)
+    const { path: asked, was } = await body<{ path: string; was?: string }>(req)
+    const path = await existingDoc(asked)
     await keepBefore(path, 'before move')
     const { kinds, excludedFolders, brainFolder } = await loadSettings()
     const opts = { excluded: excludedFolders, brain: brainFolder, was: typeof was === 'string' ? was : undefined }
