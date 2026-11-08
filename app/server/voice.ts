@@ -2,9 +2,12 @@
 // built from their exemplars. One Markdown file per platform in .ekdanta/voice/.
 // The model proposes traits; code checks every quoted example against the source, and the
 // writer's own rules are never touched by a rebuild.
+//
+// Sources: every piece the writer starred, then a sample of their other pieces on that platform spread
+// across time and topics (sampleSources), up to MAX_SOURCES. Each is cut to an excerpt (its opening and
+// its close, where voice shows most) so the whole set fits SOURCE_CHARS; a long essay can't crowd out the rest.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { generate, parseJson, status } from './ai.ts'
 import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from './vault.ts'
 import { loadSettings } from './settings.ts'
 import { KIND_ID, kindName } from '../src/lib/kinds.ts'
@@ -12,9 +15,14 @@ import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 import { isBrainPath } from '../src/lib/brain.ts'
 
 const DIR = path.join(META_DIR, 'voice')
-/** Below this many exemplars, recent unstarred pieces top up the sources. */
-const ENOUGH = 3
-const SOURCE_CHARS = 14_000
+/** How many pieces a profile is built from: all starred ones, then a spread of the others up to this. */
+export const MAX_SOURCES = 12
+/** Characters of the writer's pieces the model reads to build a profile, in all. */
+export const SOURCE_CHARS = 40_000
+/** No excerpt is cut shorter than this, however many pieces there are. */
+const PIECE_MIN = 1_500
+/** Marks where an excerpt leaves text out. Quoted examples are checked against each side separately. */
+const GAP = '\n\n[…]\n\n'
 
 const RULES_HEADING = '## Your rules'
 const RULES_NOTE = '<!-- Yours: rebuilding the profile never changes this section. -->'
@@ -41,17 +49,86 @@ const file = (platform: string) => {
   return path.join(DIR, `${platform}.md`)
 }
 
+/** What a piece is about, roughly: its tags, its sub-folder and the longer words of its title. */
+function topics(f: FileEntry): string[] {
+  const sub = f.folder.split('/').slice(1).join('/')
+  const title = f.title
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w.length >= 5)
+  return [...f.tags.map((t) => '#' + t.toLowerCase()), ...(sub ? ['/' + sub.toLowerCase()] : []), ...title]
+}
+
 /**
- * Exemplars first; if there are too few, the most recent unstarred pieces fill in. A piece the writer
- * starred always counts, wherever it lives; templates, journals and excluded folders never fill in on their own.
- * Notes in the Brain hold other people's words, so they never count, starred or not.
+ * The pieces a profile is built from. Every piece the writer starred counts, wherever it lives (the ideas
+ * list never does: it is a list, not writing). The others, never from templates, journals or excluded
+ * folders, are sampled across time and topics: split into as many stretches of time as there are places
+ * left, and from each the piece whose topics are least covered so far, the newest on a tie. Deterministic,
+ * so the Voice page can tell whether a profile is up to date. Notes in the Brain hold other people's
+ * words, so they never count, starred or not.
  */
-function sourcesFor(files: FileEntry[], platform: string, excluded: string[], brain: string) {
-  const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled' && !isBrainPath(f.path, brain))
-  // The ideas list is a list, not a piece of writing: it never speaks for the writer's voice, starred or not.
-  const starred = mine.filter((f) => f.exemplar && !isSpecialFile(f.path))
-  const others = mine.filter((f) => !f.exemplar && !isSpecialPath(f.path, excluded)).sort((a, b) => b.mtime - a.mtime)
-  return [...starred, ...others.slice(0, Math.max(0, ENOUGH - starred.length))]
+export function sampleSources(files: FileEntry[], platform: string, excluded: string[], brain: string, max = MAX_SOURCES, exclude?: string): FileEntry[] {
+  const mine = files.filter((f) => platformOf(f) === platform && f.title !== 'Untitled' && !isBrainPath(f.path, brain) && f.path !== exclude)
+  const starred = mine.filter((f) => f.exemplar && !isSpecialFile(f.path)).sort((a, b) => b.mtime - a.mtime)
+  const others = mine.filter((f) => !f.exemplar && !isSpecialPath(f.path, excluded)).sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path))
+  const slots = Math.max(0, max - starred.length)
+  if (others.length <= slots) return [...starred, ...others]
+  const seen = new Map<string, number>()
+  for (const f of starred) for (const t of topics(f)) seen.set(t, (seen.get(t) ?? 0) + 1)
+  const picked: FileEntry[] = []
+  for (let i = 0; i < slots; i++) {
+    const bucket = others.slice(Math.floor((i * others.length) / slots), Math.floor(((i + 1) * others.length) / slots))
+    let best = bucket[0]
+    let bestScore = Infinity
+    for (const f of bucket) {
+      const keys = topics(f)
+      const score = keys.length ? keys.reduce((n, t) => n + (seen.get(t) ?? 0), 0) / keys.length : 0
+      if (score < bestScore) {
+        best = f
+        bestScore = score
+      }
+    }
+    picked.push(best)
+    for (const t of topics(best)) seen.set(t, (seen.get(t) ?? 0) + 1)
+  }
+  return [...starred, ...picked]
+}
+
+const sourcesFor = (files: FileEntry[], platform: string, excluded: string[], brain: string) => sampleSources(files, platform, excluded, brain)
+
+/** A cut never leaves half a character: a surrogate pair split at either end is dropped. */
+const whole = (s: string) => s.replace(/^[\uDC00-\uDFFF]/, '').replace(/[\uD800-\uDBFF]$/, '')
+
+/** A piece cut to at most `cap` characters: its opening and its close, at paragraph or sentence ends where it can. */
+export function excerpt(body: string, cap: number): string[] {
+  const text = body.trim()
+  if (text.length <= cap) return text ? [text] : []
+  const headCap = Math.floor(cap * 0.65)
+  let head = text.slice(0, headCap)
+  const cut = Math.max(head.lastIndexOf('\n\n'), head.search(/[.!?。！？][^.!?。！？]*$/))
+  if (cut > headCap * 0.5) head = head.slice(0, cut + 1)
+  let tail = text.slice(text.length - (cap - head.length))
+  const from = tail.indexOf('\n\n')
+  if (from >= 0 && from < tail.length * 0.5) tail = tail.slice(from)
+  return [whole(head).trim(), whole(tail).trim()].filter(Boolean)
+}
+
+/** Read the sources as excerpts, within a budget shared fairly between them. Starred pieces come first, so they are always in. */
+async function readSources(sources: FileEntry[], budget: number) {
+  const out: { path: string; title: string; exemplar: boolean; parts: string[] }[] = []
+  const cap = Math.max(PIECE_MIN, Math.floor(budget / Math.max(1, sources.length)))
+  let left = budget
+  for (const s of sources) {
+    if (left < 200) break
+    const body = await readDoc(s.path)
+      .then((raw) => splitFrontMatter(raw).body)
+      .catch(() => '')
+    const parts = excerpt(body, Math.min(cap, left))
+    if (!parts.length) continue
+    out.push({ path: s.path, title: s.title, exemplar: s.exemplar, parts })
+    left -= parts.reduce((n, p) => n + p.length, 0)
+  }
+  return out
 }
 
 export async function readProfile(platform: string): Promise<string | null> {
@@ -107,23 +184,16 @@ export async function buildProfile(platform: string): Promise<string> {
   const sources = sourcesFor(files, platform, excludedFolders, brainFolder)
   const name = kindName(kinds, platform)
   if (!sources.length) throw new Error(`No ${name} pieces to learn from yet`)
-  const texts: { path: string; text: string }[] = []
-  let budget = SOURCE_CHARS
-  for (const s of sources) {
-    const { body } = splitFrontMatter(await readDoc(s.path))
-    const text = body.trim().slice(0, Math.max(0, budget))
-    if (!text) continue
-    texts.push({ path: s.path, text })
-    budget -= text.length
-    if (budget <= 0) break
-  }
+  const texts = (await readSources(sources, SOURCE_CHARS)).map((t) => ({ path: t.path, parts: t.parts, text: t.parts.join(GAP) }))
 
+  // The model layer is loaded only to build: sampling and evidence (used by tests and drafts) don't need it.
+  const { generate, parseJson, status } = await import('./ai.ts')
   const { strong } = await status()
   if (!strong) throw new Error('No model available to read your writing')
   const existing = await readProfile(platform)
   const currentTraits = existing ? traitsOf(existing) : []
   const system = `You describe a writer's voice so that the writer can read it, agree or disagree, and edit it.
-From the pieces given, write 6 to 10 traits of how this writer writes ${name} pieces. Each trait is ONE plain sentence, specific and checkable: sentence length and rhythm, how pieces open and close, punctuation habits, diction and register, how they use examples, what they tend to avoid.
+From the pieces given (excerpts of up to ${sources.length}, from different times and topics; […] marks text left out), write 6 to 10 traits of how this writer writes ${name} pieces. Each trait is ONE plain sentence, specific and checkable: sentence length and rhythm, how pieces open and close, punctuation habits, diction and register, how they use examples, what they tend to avoid.
 For each trait, give one short example copied EXACTLY from the pieces (at most 14 words, no ellipses) and the file it came from.
 Describe; don't praise. Don't invent anything the pieces don't show.${
     currentTraits.length
@@ -139,9 +209,12 @@ Return JSON: {"traits": [{"trait": "...", "example": "...", "source": "path/to/f
 
   // An example only stays if it really is the writer's words, from the file it names.
   const norm = (s: string) => s.replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, ' ').trim()
+  // Each side of an excerpt is checked on its own, so a "quote" that runs across a cut never passes.
+  const quoted = (x: (typeof texts)[number], example: string) => x.parts.some((p) => norm(p).includes(example))
   const lines = traits.map((t) => {
-    const src = texts.find((x) => x.path === t.source) ?? texts.find((x) => t.example && norm(x.text).includes(norm(t.example)))
-    const ok = t.example && src && norm(src.text).includes(norm(t.example).replace(/^["']|["']$/g, ''))
+    const example = t.example ? norm(t.example).replace(/^["']|["']$/g, '') : ''
+    const src = texts.find((x) => x.path === t.source && example && quoted(x, example)) ?? texts.find((x) => example && quoted(x, example))
+    const ok = Boolean(example && src)
     const name = src ? path.posix.basename(src.path, '.md') : ''
     return `- ${t.trait.trim()}${ok ? `\n  > ${norm(t.example!).replace(/^["']|["']$/g, '')} — [[${name}]]` : ''}`
   })
@@ -189,4 +262,35 @@ export async function voiceForPrompt(platform?: string): Promise<string> {
     .filter((l) => /^\s*[-*] \S/.test(l))
     .map((l) => l.trim())
   return lines.length ? `\n\nThe writer's own description of their voice here (follow it):\n${lines.join('\n')}` : ''
+}
+
+/**
+ * Evidence of how the writer writes on a platform, for writing a whole draft (server/draft.ts): the profile
+ * whole (traits, the lines they were quoted from, the writer's rules), excerpts of a spread of their pieces
+ * there (starred first), and the texts of all their pieces there for measuring habits. `exclude` is the
+ * piece being drafted, which never counts as evidence of itself.
+ */
+export async function voiceEvidence(
+  platform: string,
+  opts: { exclude?: string; budget?: number; max?: number } = {},
+): Promise<{ profile: string | null; pieces: { path: string; title: string; exemplar: boolean; text: string }[]; all: string[]; count: number }> {
+  const id = platform.normalize('NFC').toLowerCase()
+  const files = await listFiles()
+  const { excludedFolders, brainFolder } = await loadSettings()
+  const sources = sampleSources(files, id, excludedFolders, brainFolder, opts.max ?? 8, opts.exclude)
+  const pieces = (await readSources(sources, opts.budget ?? 18_000)).map((p) => ({ path: p.path, title: p.title, exemplar: p.exemplar, text: p.parts.join(GAP) }))
+  // Habits are measured over more pieces than the model reads: up to 40 of the newest and the starred.
+  const forHabits = sampleSources(files, id, excludedFolders, brainFolder, 40, opts.exclude)
+  const all = (
+    await Promise.all(
+      forHabits.map((f) =>
+        readDoc(f.path).then(
+          (raw) => splitFrontMatter(raw).body.trim(),
+          () => '',
+        ),
+      ),
+    )
+  ).filter(Boolean)
+  const profile = KIND_ID.test(id) ? await readProfile(id) : null
+  return { profile: profile ? splitFrontMatter(profile).body.trim() : null, pieces, all, count: forHabits.length }
 }

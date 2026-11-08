@@ -68,9 +68,10 @@ export const ROWS: SettingRow[] = [
     tab: 'writing',
     id: 'ceiling',
     label: 'Help ceiling',
-    keywords: 'levels press twice limit',
-    hint: () => 'The highest help level that works with one press. Above it, press twice.',
-    render: ({ s, onChange }) => <Seg value={s.ceiling} options={[0, 1, 2, 3, 4, 5]} onPick={(ceiling) => onChange({ ceiling })} />,
+    keywords: 'levels press twice limit whole drafts ai writing ghostwrite',
+    hint: () =>
+      'The highest help level that works with one press. Above it, press twice. 6 turns on whole drafts: the assistant may write a whole piece in your voice when you ask, as a proposal you review.',
+    render: ({ s, onChange }) => <Seg value={s.ceiling} options={[0, 1, 2, 3, 4, 5, 6]} onPick={(ceiling) => onChange({ ceiling })} />,
   },
   {
     tab: 'writing',

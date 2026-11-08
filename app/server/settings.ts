@@ -170,7 +170,7 @@ export async function saveSettings(patch: Partial<Settings>): Promise<Settings> 
   for (const key of Object.keys(DEFAULTS) as (keyof Settings)[]) {
     if (key in patch && typeof patch[key] === typeof DEFAULTS[key]) (next as unknown as Record<string, unknown>)[key] = patch[key]
   }
-  next.ceiling = Math.max(0, Math.min(5, Math.round(next.ceiling)))
+  next.ceiling = Math.max(0, Math.min(6, Math.round(next.ceiling)))
   next.kinds = await settleFolders(cleanKinds(next.kinds) ?? prev.kinds)
   next.excludedFolders = cleanFolders(next.excludedFolders)
   next.profileName = typeof next.profileName === 'string' ? next.profileName.trim().slice(0, 120) : ''

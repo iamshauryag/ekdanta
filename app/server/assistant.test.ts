@@ -275,9 +275,11 @@ test('curly quotes, dashes and spacing the model changed still find the writer�
     text,
     { level: 5 },
   )
-  assert.equal(proposals.length, 2)
-  assert.equal(proposals[0].find, 'She said “ship it” — and we did.')
-  assert.equal(proposals[1].find, 'Then  we rested.')
+  // Each is cut down to what it changes, in the writer's own characters; the rest stays as written.
+  assert.equal(proposals[proposals.length - 1].find, 'rested')
+  assert.ok(proposals.every((p) => text.slice(p.start, p.end) === p.find))
+  const span = applyAll(text, proposals)!
+  assert.equal(text.slice(0, span.start) + span.result + text.slice(span.end), 'She said “ship it,” so we did.\nThen  we slept.')
 })
 
 test('a phrase that appears twice is only taken inside the selection; overlaps are dropped', () => {
@@ -292,8 +294,8 @@ test('a phrase that appears twice is only taken inside the selection; overlaps a
   assert.equal(inSel.proposals[0].start, sel[0])
   const overlap = checkProposals(
     [
-      { find: 'Teams forget that speed', replace: 'People forget that speed' },
-      { find: 'forget', replace: 'ignore' },
+      { find: 'Teams forget', replace: 'Teams ignore' },
+      { find: 'forget that', replace: 'skip that' },
     ],
     text,
     { level: 5 },
@@ -302,11 +304,12 @@ test('a phrase that appears twice is only taken inside the selection; overlaps a
   assert.equal(overlap.dropped[0].reason, 'overlaps another change')
 })
 
-test('most of the piece at once only when the writer asked for the whole piece', () => {
+test('a change across the whole piece is no longer refused at level 5', () => {
   const long = Array.from({ length: 12 }, (_, i) => `Sentence number ${i} says a little more here.`).join(' ')
   const all = [{ find: long, replace: 'A whole new piece.' }]
-  assert.equal(checkProposals(all, long, { level: 5 }).dropped[0].reason, 'the whole piece')
-  assert.equal(checkProposals(all, long, { level: 5, whole: true }).proposals.length, 1)
+  const r = checkProposals(all, long, { level: 5 })
+  assert.equal(r.dropped.length, 0)
+  assert.equal(applyAll(long, r.proposals)?.result, 'A whole new piece.')
   assert.ok(asksForWhole('Rewrite the whole post in a warmer tone'))
   assert.ok(asksForWhole('redo it from scratch'))
   assert.ok(!asksForWhole('Tighten the second paragraph'))
@@ -437,10 +440,17 @@ test('scripts written without spaces are counted by words, so the ceiling holds 
   const ja = '速度は習慣です。リスクではありません。毎日練習します。'
   assert.ok(!levelAllows(4, '速度は習慣です。', ja))
   assert.ok(levelAllows(3, '習慣', '癖'))
-  // The whole-piece guard counts them too.
+  // A rewrite of most of the piece is a passage: fine at 5, over the ceiling at 4.
   const piece = Array.from({ length: 12 }, () => '我们每天都在发布新的功能因为速度是一种习惯。').join('')
-  const all = checkProposals([{ find: piece.slice(0, piece.length - 3), replace: '全新的文章。' }], piece, { level: 5 })
-  assert.equal(all.dropped[0]?.reason, 'the whole piece')
+  const all = [{ find: piece.slice(0, piece.length - 3), replace: '全新的文章。' }]
+  assert.equal(checkProposals(all, piece, { level: 5 }).proposals.length, 1)
+  assert.equal(checkProposals(all, piece, { level: 4 }).dropped[0]?.reason, 'over the help ceiling')
+  // An emoji taken out of Chinese text is a change of one character, fine at level 3.
+  const zhEmoji = checkProposals([{ find: '今天我们发布🚀新产品。', replace: '今天我们发布新产品。' }], '今天我们发布🚀新产品。', { level: 3 })
+  assert.deepEqual(
+    zhEmoji.proposals.map((p) => p.find),
+    ['🚀'],
+  )
 })
 
 test('the level is checked on the text found, not on what the model quoted', () => {
@@ -452,26 +462,23 @@ test('the level is checked on the text found, not on what the model quoted', () 
   assert.equal(checkProposals([{ find: 'First line here.\nSecond line here.', replace: 'One line.' }], text, { level: 5 }).proposals.length, 1)
 })
 
-test('changes that together cover most of the piece are dropped unless asked; "everything" alone is not asking', () => {
+test('changes to every paragraph all come through; "everything" alone is not a whole-piece rewrite', () => {
   const paras = Array.from({ length: 3 }, (_, i) => `Paragraph ${i} has some words that say a fair amount about the subject at hand today, and then a few more words to give it real weight.`)
   const text = paras.join('\n\n')
   const r = checkProposals(
     paras.map((p) => ({ find: p, replace: p.replace('some', 'a few') })),
     text,
-    { level: 5 },
+    { level: 3 },
   )
-  assert.equal(r.proposals.length, 1)
+  // Each paragraph's change is cut to the word it changes, so it fits even level 3.
+  assert.equal(r.proposals.length, 3)
   assert.deepEqual(
-    r.dropped.map((d) => d.reason),
-    ['the whole piece', 'the whole piece'],
-  )
-  assert.equal(
-    checkProposals(
-      paras.map((p) => ({ find: p, replace: p.replace('some', 'a few') })),
-      text,
-      { level: 5, whole: true },
-    ).proposals.length,
-    3,
+    r.proposals.map((p) => [p.find, p.replace]),
+    [
+      ['some', 'a few'],
+      ['some', 'a few'],
+      ['some', 'a few'],
+    ],
   )
   assert.ok(!asksForWhole('Is everything clear?'))
   assert.ok(!asksForWhole('What do you think of the whole piece?'))
@@ -487,12 +494,12 @@ test('a proposal is only found again at the same spot', () => {
   // Now the phrase reads the same in two places with different surroundings: only the matching one counts.
   const two = 'Then we rest. Something else entirely here. ' + text
   const at = relocate(two, p)
-  assert.equal(at?.start, two.lastIndexOf('Then we rest.'))
+  assert.equal(at?.start, two.lastIndexOf('Then we rest.') + 'Then we '.length)
   // Two places that both match: can't be told apart, so it isn't shown.
   assert.equal(relocate('X ' + text + ' ' + text, p), null)
   // A phrase in the selection, not unique in the draft, is taken there.
   const inSel = checkProposals([{ find: 'We ship.', replace: 'We launch.' }], text, { level: 5, selection: [text.lastIndexOf('We ship.'), text.length] })
-  assert.equal(inSel.proposals[0].start, text.lastIndexOf('We ship.'))
+  assert.equal(inSel.proposals[0].start, text.lastIndexOf('We ship.') + 'We '.length)
 })
 
 test('the voice profile is fenced and defused like everything else', () => {
@@ -536,7 +543,7 @@ test('the chat file is capped, oldest turns first, and a stored chat is checked 
     ],
     notes: [{ doc: 1 }],
   })
-  assert.equal(t?.level, 5)
+  assert.equal(t?.level, 6)
   assert.deepEqual(t?.proposals, [{ id: 'p2', start: 0, end: 1, find: 'a', replace: 'b' }])
   assert.deepEqual(t?.notes, [])
 
@@ -592,9 +599,11 @@ test('a whole-piece ask that is limited or negated keeps the guard on', () => {
   assert.ok(asksForWhole('Please redo the entire post in a warmer tone'))
 })
 
-test('only the first 32 changes a model sends are looked at', () => {
-  const text = Array.from({ length: 50 }, (_, i) => `w${i}`).join(' ')
-  const flood = Array.from({ length: 50 }, (_, i) => ({ find: `w${i}`, replace: `v${i}` }))
+test('only the first 80 changes a model sends are looked at, and 40 are shown', () => {
+  const text = Array.from({ length: 100 }, (_, i) => `w${i}x`).join(' ')
+  const flood = Array.from({ length: 100 }, (_, i) => ({ find: `w${i}x`, replace: `v${i}x` }))
   const r = checkProposals(flood, text, { level: 3 })
-  assert.equal(r.proposals.length + r.dropped.length, 32)
+  assert.equal(r.proposals.length + r.dropped.length, 80)
+  assert.equal(r.proposals.length, 40)
+  assert.equal(r.dropped.filter((d) => d.reason === 'too many').length, 40)
 })

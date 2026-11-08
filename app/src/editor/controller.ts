@@ -52,7 +52,8 @@ import { sentenceCount } from '../lib/versions.ts'
 import { AFTER_STOP, splitAfter } from '../lib/split.ts'
 
 export interface HistoryItem {
-  level: Level
+  /** 6: a whole draft written by AI from the Assistant tab. */
+  level: Level | 6
   at: string
   from: number
   outcome: 'accepted' | 'rejected' | 'partly accepted' | 'dismissed' | 'resolved' | 'inserted' | 'shown' | 'empty' | 'error'
@@ -987,6 +988,7 @@ export class HelpController {
       bar: false,
       sideBySide: changedRatio(original, hunks) > 0.6,
       source: 'assistant',
+      ...(p.drafted ? { drafted: true } : {}),
     }
     if (p.accept) {
       this.commit(help, 'accepted')
@@ -1035,11 +1037,13 @@ export class HelpController {
     this.view.dispatch(tr)
     const outcome = accepted === 0 ? 'rejected' : accepted === total ? 'accepted' : 'partly accepted'
     this.record({
-      level: h.level,
+      level: h.drafted ? 6 : h.level,
       from: h.from,
       outcome,
       instruction: h.instruction || undefined,
-      detail: `${h.source === 'assistant' ? 'Assistant · ' : ''}${accepted} of ${total} change${total === 1 ? '' : 's'}`,
+      detail: h.drafted
+        ? `Assistant · whole draft written by AI · ${accepted} of ${total} change${total === 1 ? '' : 's'}`
+        : `${h.source === 'assistant' ? 'Assistant · ' : ''}${accepted} of ${total} change${total === 1 ? '' : 's'}`,
     })
     if (h.source === 'assistant') {
       const done = this.onProposal
