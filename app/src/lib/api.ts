@@ -27,8 +27,8 @@ export interface FileEntry {
   brief?: boolean
   /** The idea this piece was started from. */
   fromIdea?: string
-  /** The piece this post was broken down from, as a wiki link (front matter `from`). */
-  from?: string
+  /** The piece this post was broken down from, as a wiki link (front matter `derived-from`). */
+  derivedFrom?: string
   aliases?: string[]
 }
 
@@ -303,8 +303,8 @@ export const api = {
   snippet: (path: string) => fetch('/api/snippet?path=' + encodeURIComponent(path)).then(json<{ css: string; error?: string }>),
   files: () => fetch('/api/files').then(json<FileEntry[]>),
   breakdownOptions: (doc: string) => fetch('/api/breakdown/options?doc=' + encodeURIComponent(doc)).then(json<Options>),
-  breakdownPlan: (doc: string, targets: Target[]) => fetch('/api/breakdown/plan', send('POST', { doc, targets })).then(json<PlanReply>),
-  breakdownCreate: (doc: string, posts: PostRequest[]) => fetch('/api/breakdown/create', send('POST', { doc, posts })).then(json<CreateReply>),
+  breakdownPlan: (doc: string, targets: Target[], signal?: AbortSignal) => fetch('/api/breakdown/plan', { ...send('POST', { doc, targets }), signal }).then(json<PlanReply>),
+  breakdownCreate: (doc: string, posts: PostRequest[], signal?: AbortSignal) => fetch('/api/breakdown/create', { ...send('POST', { doc, posts }), signal }).then(json<CreateReply>),
   read: (path: string) =>
     fetch('/api/file?path=' + encodeURIComponent(path))
       .then(json<{ content: string }>)

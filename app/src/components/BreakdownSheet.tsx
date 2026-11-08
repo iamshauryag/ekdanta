@@ -30,7 +30,8 @@ const loadChoice = (): Record<string, number> => {
   } catch {
     /* only a convenience */
   }
-  return { linkedin: 1, 'x-post': 3 }
+  // One LinkedIn post to start with: a format that would add a new kind is never chosen for the writer.
+  return { linkedin: 1 }
 }
 const saveChoice = (c: Record<string, number>) => {
   try {
@@ -60,6 +61,17 @@ export function BreakdownSheet({ path, flush, onOpenDoc, onCreated, onClose }: P
   const [error, setError] = useState<string | null>(null)
   const [choice, setChoice] = useState<Record<string, number>>(loadChoice)
   const [busy, setBusy] = useState<string | null>(null)
+  // The request in flight, so Cancel (and Close, and Esc) can stop it: the server then stops asking the model and writes nothing.
+  const inflight = useRef<AbortController | null>(null)
+  const cancel = useCallback(() => {
+    inflight.current?.abort()
+    inflight.current = null
+    setBusy(null)
+  }, [])
+  const close = useCallback(() => {
+    inflight.current?.abort()
+    onClose()
+  }, [onClose])
   const [units, setUnits] = useState<Unit[] | null>(null)
   const [posts, setPosts] = useState<Draft[]>([])
   const [notes, setNotes] = useState<string[]>([])
@@ -82,10 +94,12 @@ export function BreakdownSheet({ path, flush, onOpenDoc, onCreated, onClose }: P
 
   useEffect(() => {
     sheet.current?.focus()
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && !busy && onClose()
+    // Esc stops what's running first, and closes the sheet when nothing is.
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && (inflight.current ? cancel() : close())
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, busy])
+  }, [close, cancel])
+  useEffect(() => () => inflight.current?.abort(), [])
 
   const formats = useMemo(() => new Map((options?.formats ?? []).map((f) => [f.id, f])), [options])
   const builtIn = options?.formats.filter((f) => !f.id.startsWith('kind:')) ?? []
@@ -104,37 +118,50 @@ export function BreakdownSheet({ path, flush, onOpenDoc, onCreated, onClose }: P
   const plan = async () => {
     setBusy(options?.allows.plan === 'model' ? 'Reading your piece and picking passages…' : 'Laying out your sections…')
     setError(null)
+    const ctl = new AbortController()
+    inflight.current = ctl
     try {
       await flush()
-      const r = await api.breakdownPlan(path, targets)
+      const r = await api.breakdownPlan(path, targets, ctl.signal)
+      if (ctl.signal.aborted) return
       if (r.kind === 'plan') {
         setUnits(r.units)
         setBy(r.by)
         setNotes(r.notes)
         setPosts(r.posts.map((p) => ({ ...p, useHook: false, adapt: false })))
         setActive(r.posts[0]?.id ?? null)
-      } else setError(r.message)
+      } else if (r.kind !== 'stopped') setError(r.message)
     } catch (e) {
-      setError((e as Error).message)
+      if (!ctl.signal.aborted) setError((e as Error).message)
     } finally {
-      setBusy(null)
+      if (inflight.current === ctl) {
+        inflight.current = null
+        setBusy(null)
+      }
     }
   }
 
   const create = async () => {
     setBusy(`Making ${posts.length === 1 ? 'the draft' : `${posts.length} drafts`}…`)
     setError(null)
+    const ctl = new AbortController()
+    inflight.current = ctl
     try {
       const r = await api.breakdownCreate(
         path,
         posts.map((p) => ({ format: p.format, angle: p.angle, hook: p.hook, useHook: p.useHook, adapt: p.adapt, passages: p.passages.map((q) => q.text) })),
+        ctl.signal,
       )
+      if (ctl.signal.aborted) return
       setDone(r)
       onCreated()
     } catch (e) {
-      setError((e as Error).message)
+      if (!ctl.signal.aborted) setError((e as Error).message)
     } finally {
-      setBusy(null)
+      if (inflight.current === ctl) {
+        inflight.current = null
+        setBusy(null)
+      }
     }
   }
 
@@ -158,14 +185,14 @@ export function BreakdownSheet({ path, flush, onOpenDoc, onCreated, onClose }: P
   const wide = !!units && !done
 
   return (
-    <div className="sheet-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+    <div className="sheet-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !busy && close()}>
       <div className={`sheet bd-sheet${wide ? ' is-wide' : ''}`} role="dialog" aria-label="Break it down" tabIndex={-1} ref={sheet}>
         <header className="sheet-head">
           <div className="bd-head">
             <h2>Break it down</h2>
             <span className="muted">{options?.title ?? ''}</span>
           </div>
-          <button className="icon-btn" aria-label="Close" title="Close (Esc)" onClick={onClose} disabled={!!busy}>
+          <button className="icon-btn" aria-label="Close" title="Close (Esc)" onClick={close}>
             ✕
           </button>
         </header>
@@ -209,7 +236,7 @@ export function BreakdownSheet({ path, flush, onOpenDoc, onCreated, onClose }: P
                   {busy ?? `Plan ${total === 1 ? 'the post' : `${total} posts`}`}
                 </button>
               )}
-              <button className="btn" onClick={onClose} disabled={!!busy}>
+              <button className="btn" onClick={busy ? cancel : close}>
                 {options.short || options.allows.plan === 'off' ? 'Close' : 'Cancel'}
               </button>
             </div>
@@ -270,8 +297,8 @@ export function BreakdownSheet({ path, flush, onOpenDoc, onCreated, onClose }: P
                   {error}
                 </span>
               )}
-              <button className="btn" disabled={!!busy} onClick={() => setUnits(null)}>
-                Back
+              <button className="btn" onClick={() => (busy ? cancel() : setUnits(null))}>
+                {busy ? 'Cancel' : 'Back'}
               </button>
               <button className="btn primary" disabled={!posts.length || !!busy} onClick={create}>
                 {busy ?? `Create ${posts.length === 1 ? 'the draft' : `${posts.length} drafts`}`}
@@ -387,7 +414,19 @@ function PostCard(p: {
           ✕
         </button>
       </div>
-      <input className="bd-angle" value={post.angle} placeholder="Angle: what this post is about (optional)" aria-label="Angle" onChange={(e) => p.onChange({ angle: e.target.value })} />
+      <input
+        className="bd-angle"
+        maxLength={200}
+        value={post.angle}
+        placeholder="Angle: what this post is about (optional)"
+        aria-label="Angle"
+        onChange={(e) => p.onChange({ angle: e.target.value })}
+      />
+      {info?.adds && (
+        <p className="muted bd-hint">
+          Adds the kind {info.kind}, filed in {info.folder}/
+        </p>
+      )}
       {post.passages.length ? (
         <ul className="bd-passages">
           {post.passages.map((q, i) => (
@@ -400,7 +439,7 @@ function PostCard(p: {
           ))}
         </ul>
       ) : (
-        <p className="muted bd-hint">No passages yet: select words in your piece and add them.</p>
+        <p className="muted bd-hint">No passages yet: select words in your piece and add them. A post with none isn't made.</p>
       )}
       {post.hook && p.allows.opening && (
         <label className="bd-check">
@@ -437,6 +476,7 @@ function AddPost({ formats, onAdd }: { formats: FormatInfo[]; onAdd: (format: st
       <button className="btn" onClick={() => onAdd(format)}>
         Add a post
       </button>
+      {formats.find((x) => x.id === format)?.adds && <small className="muted">adds the kind {formats.find((x) => x.id === format)!.kind}</small>}
     </div>
   )
 }

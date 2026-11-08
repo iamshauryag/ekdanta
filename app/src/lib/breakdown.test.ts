@@ -7,7 +7,12 @@ import {
   formatsFor,
   findFormat,
   kindFor,
-  ownShare,
+  ownWords,
+  adaptationProblems,
+  wordList,
+  withoutComments,
+  asMarkdown,
+  unescapeMarkdown,
   quotedBody,
   resolveWikiLink,
   sectionPlan,
@@ -21,6 +26,8 @@ import {
 } from './breakdown.ts'
 import { DEFAULT_KINDS } from './kinds.ts'
 import { xLength, linkedinLength } from './targets.ts'
+
+const PIECE_COMMENTS = `Before %%a private aside%% after.\n\n%%\nA whole private block\n%%\n\n%% part %%\n\nThe end. %%unclosed note to the end`
 
 const PIECE = `# The unfinished room
 
@@ -70,7 +77,7 @@ test('a short piece has nothing to break down; an empty one says so', () => {
 test('a passage is the paragraph’s own words, found with quotes and spacing folded; anything else is refused', () => {
   const units = unitsOf(`It's a "small" room.\n\nAnother   paragraph here.`)
   assert.deepEqual(findPassage(units, 'It’s a “small” room.'), { unit: 1, text: `It's a "small" room.` })
-  assert.deepEqual(findPassage(units, 'Another paragraph'), { unit: 2, text: 'Another paragraph' })
+  assert.deepEqual(findPassage(units, 'Another paragraph here.'), { unit: 2, text: 'Another paragraph here.' })
   assert.equal(findPassage(units, 'A sentence the model made up.'), null)
   assert.equal(findPassage(units, '  '), null)
 })
@@ -154,7 +161,7 @@ test('formats: the built-in ones file into the writer’s kinds, and the other k
       fs.find((f) => f.id === 'short-video')!,
       DEFAULT_KINDS,
     )?.id,
-    'youtube-script',
+    undefined,
   )
   assert.ok(fs.some((f) => f.id === 'kind:email'))
   assert.ok(!fs.some((f) => f.id === 'kind:essay' || f.id === 'kind:linkedin'))
@@ -169,7 +176,12 @@ test('a post links to its piece by name, by path when the name is shared, and st
   assert.equal(resolveWikiLink(paths, '[[essays/the-room#Heading]]'), 'essays/the-room.md')
   assert.equal(resolveWikiLink(paths, 'the-room'), null)
   // Moved to another folder: the name still finds it.
-  const files = [{ path: 'archive/the-room.md' }, { path: 'linkedin/a.md', from: '[[the-room]]' }, { path: 'x-posts/b.md', from: '[[the-room]]' }, { path: 'x-posts/c.md', from: '[[something-else]]' }]
+  const files = [
+    { path: 'archive/the-room.md' },
+    { path: 'linkedin/a.md', derivedFrom: '[[the-room]]' },
+    { path: 'x-posts/b.md', derivedFrom: '[[the-room]]' },
+    { path: 'x-posts/c.md', derivedFrom: '[[something-else]]' },
+  ]
   assert.deepEqual(
     derivedFrom(files, 'archive/the-room.md').map((f) => f.path),
     ['linkedin/a.md', 'x-posts/b.md'],
@@ -178,8 +190,90 @@ test('a post links to its piece by name, by path when the name is shared, and st
   assert.equal(resolveWikiLink(['essays/慢写.md'], '[[慢写]]'), 'essays/慢写.md')
 })
 
-test('an adaptation’s share of the writer’s own words', () => {
-  const passages = ['Slow writing gets you past the first idea, which is rarely yours.']
-  assert.ok(ownShare('Slow writing gets you past the first idea. The first idea is rarely yours.', passages) > 0.9)
-  assert.ok(ownShare('Unlock your productivity with these ten amazing growth hacks today.', passages) < 0.3)
+test('Obsidian comments are private: never planned from, inline, across lines or unclosed', () => {
+  const units = unitsOf(PIECE_COMMENTS)
+  assert.deepEqual(
+    units.map((u) => u.text),
+    ['Before after.', 'The end.'],
+  )
+  assert.equal(withoutComments('a %% b %% c'), 'a  c')
+  assert.ok(!units.some((u) => /private|part|unclosed/.test(u.text)))
+})
+
+test('a passage never starts or ends inside a word, and is a phrase at least', () => {
+  const units = unitsOf('Every category of writing has its own rhythm and its own reader.\n\nShort.')
+  assert.deepEqual(findPassage(units, 'ategory of writing has'), { unit: 1, text: 'category of writing has' })
+  assert.deepEqual(findPassage(units, 'writing has its own rhyt'), { unit: 1, text: 'writing has its own rhythm' })
+  assert.equal(findPassage(units, 'its own'), null)
+  // A one-word paragraph can still be taken whole.
+  assert.deepEqual(findPassage(units, 'Short.'), { unit: 2, text: 'Short.' })
+  // CJK snaps to words too.
+  const zh = unitsOf('我每天早上写作，因为安静的时候思路最清楚。')
+  const found = findPassage(zh, '天早上写作，因为安静')
+  assert.ok(found && found.text.startsWith('每天') && found.text.endsWith('安静'))
+})
+
+test('plain text stays plain in a draft: emphasis, brackets and HTML are escaped, inline code is kept', () => {
+  assert.equal(asMarkdown('a *literal* [x] <b> under_score'), 'a \\*literal\\* \\[x\\] \\<b\\> under\\_score')
+  assert.equal(asMarkdown('run `npm *test*` now'), 'run `npm *test*` now')
+  assert.equal(asMarkdown('1. not a list'), '1\\. not a list')
+  assert.equal(unescapeMarkdown(asMarkdown('a *b* [c] 1. d')), 'a *b* [c] 1. d')
+  const units = unitsOf('Use `git log` and *stars* often, every single day of the week.\n\nMore words here for the piece.')
+  assert.equal(units[0].text, 'Use `git log` and stars often, every single day of the week.')
+  const post = findFormat(DEFAULT_KINDS, 'linkedin')!
+  // Lengths count what the reader sees, not the escapes.
+  assert.equal(fit(post, asMarkdown('a *b*')).length, 5)
+})
+
+test('only kinds that can only mean the platform are matched: no YouTube script for a short, no "thread" for X', () => {
+  const kinds = [...DEFAULT_KINDS, { id: 'thread', name: 'Thread', folder: 'threads', guidance: '', words: 300 }, { id: 'shorts', name: 'Shorts', folder: 'shorts', guidance: '', words: 50 }]
+  const fs = formatsFor(kinds)
+  assert.equal(
+    kindFor(
+      fs.find((f) => f.id === 'short-video')!,
+      kinds,
+    ),
+    undefined,
+  )
+  assert.equal(
+    kindFor(
+      fs.find((f) => f.id === 'x-post')!,
+      kinds,
+    ),
+    undefined,
+  )
+  assert.ok(fs.some((f) => f.id === 'kind:thread') && fs.some((f) => f.id === 'kind:shorts') && fs.some((f) => f.id === 'kind:youtube-script'))
+})
+
+const PASSAGE = 'Speed gives you the first idea that arrives, and the first idea is rarely yours. It is the common one, worn smooth by everyone who reached for it before you.'
+
+test('an adaptation counts as the writer’s only in runs of their words, in their order', () => {
+  // Cut and joined: theirs.
+  assert.equal(adaptationProblems('Speed gives you the first idea that arrives. The first idea is rarely yours: it is the common one, worn smooth by everyone.', [PASSAGE], 'passages').length, 0)
+  // Their words scrambled into a new claim: not theirs, however many words match.
+  const scrambled = 'Everyone who reached for the common idea arrives first, and speed is rarely smooth: it gives you yours before it.'
+  assert.ok(ownWords(scrambled, [PASSAGE]).share < 0.4)
+  assert.ok(adaptationProblems(scrambled, [PASSAGE], 'passages').length)
+  // A pitch in front of the passage: too many of the model's words in a row.
+  const pitch = 'Buy my course at the link now because ' + PASSAGE
+  assert.ok(ownWords(pitch, [PASSAGE]).share > 0.75)
+  assert.match(adaptationProblems(pitch, [PASSAGE], 'passages').join(' '), /in a row of its own/)
+  // Repeating a line doesn't count twice.
+  const twice = ownWords('the first idea is rarely yours, the first idea is rarely yours', ['the first idea is rarely yours'])
+  assert.equal(twice.foreign, 6)
+  // Little words in the same order don't count as theirs.
+  assert.equal(ownWords('and the of', ['and the of something']).foreign, 3)
+})
+
+test('whole drafts may add an opening and a close, but the body stays the writer’s', () => {
+  const opened = 'Here is something I learned the slow way, over one long winter. ' + PASSAGE + ' So take your time.'
+  assert.match(adaptationProblems(opened, [PASSAGE], 'passages').join(' '), /in a row/)
+  assert.equal(adaptationProblems(opened, [PASSAGE], 'whole').length, 0)
+  const invented = 'Productivity is a myth sold by people who want your attention, and the best writers I know ignore every trend, hack and guru completely.'
+  assert.ok(adaptationProblems(invented, [PASSAGE], 'whole').length)
+})
+
+test('without a word segmenter, CJK counts character by character, so runs still mean something', () => {
+  assert.deepEqual(wordList('我写作 slowly', null), ['我', '写', '作', 'slowly'])
+  assert.ok(ownWords('安静的时候思路最清楚', ['因为安静的时候思路最清楚。']).share > 0.9)
 })

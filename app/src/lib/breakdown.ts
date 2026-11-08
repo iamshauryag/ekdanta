@@ -38,7 +38,8 @@ export interface Format {
   target?: string
 }
 
-const X_KINDS = ['x', 'x-post', 'tweet', 'tweets', 'twitter', 'x-thread', 'thread', 'threads']
+// Only ids that can only mean X: a writer's "thread" or "short" kind may be something else entirely.
+const X_KINDS = ['x', 'x-post', 'tweet', 'tweets', 'twitter', 'x-thread']
 
 export const FORMATS: Format[] = [
   {
@@ -61,7 +62,8 @@ export const FORMATS: Format[] = [
     measure: 'words',
     limit: SHORT_VIDEO_WORDS,
     hard: true,
-    kinds: ['short-video', 'short-video-script', 'shorts', 'short', 'reel', 'reels', 'tiktok', 'youtube-script'],
+    // A YouTube script is a long video (900 words): its habits and voice are not a one-minute short's.
+    kinds: ['short-video', 'short-video-script'],
     newKind: 'Short video script',
     target: `<=${SHORT_VIDEO_WORDS} words`,
   },
@@ -97,7 +99,9 @@ export function measure(f: Pick<Format, 'measure'>, text: string): number {
 export const unitName = (f: Pick<Format, 'measure'>) => (f.measure === 'words' ? 'words' : 'characters')
 
 /** How a draft sits against its format: its length (a thread: its longest part), its parts, and whether it's over. */
-export function fit(f: Format, body: string): { length: number; limit: number; parts: number; over: boolean } {
+export function fit(f: Format, markdown: string): { length: number; limit: number; parts: number; over: boolean } {
+  // Counted as the reader will see it: without the backslashes that keep plain text plain in Markdown.
+  const body = unescapeMarkdown(markdown)
   if (f.shape === 'thread') {
     const parts = threadParts(body)
     const length = Math.max(0, ...parts.map((p) => measure(f, p)))
@@ -126,9 +130,14 @@ function inline(t: Token | undefined): string {
   for (const c of t?.children ?? []) {
     switch (c.type) {
       case 'text':
-      case 'code_inline':
         out += c.content
         break
+      case 'code_inline': {
+        // Inline code stays code in a post's Markdown, with a fence longer than any backticks inside it.
+        const fence = '`'.repeat(Math.max(1, ...(c.content.match(/`+/g) ?? []).map((m) => m.length + 1)))
+        out += /^`|`$/.test(c.content) ? `${fence} ${c.content} ${fence}` : fence + c.content + fence
+        break
+      }
       case 'softbreak':
         out += ' '
         break
@@ -163,7 +172,7 @@ function inline(t: Token | undefined): string {
 
 /** The piece's paragraphs (list items and quotes included), in order, with the heading each is under. Front matter must be gone. */
 export function unitsOf(body: string): Unit[] {
-  const tokens = tokenizer().parse(body, {})
+  const tokens = tokenizer().parse(withoutComments(body), {})
   const out: Unit[] = []
   let heading = ''
   for (let i = 0; i < tokens.length; i++) {
@@ -185,6 +194,13 @@ export function unitsOf(body: string): Unit[] {
   }
   return out
 }
+
+/**
+ * The piece without its Obsidian comments (`%% … %%`, inline or across lines; an unclosed one runs to the
+ * end, as in Obsidian). They're private notes, hidden in reading view: never planned from, sent to a model
+ * or put in a post. A thread's `%% part %%` markers go with them.
+ */
+export const withoutComments = (body: string) => body.replace(/%%[\s\S]*?%%/g, '').replace(/%%[\s\S]*$/, '')
 
 /** Words in the piece, counted in every script (Chinese, Japanese, Thai included). */
 export const unitWords = (units: Unit[]) => units.reduce((n, u) => n + words(u.text), 0)
@@ -218,9 +234,38 @@ export function findPassage(units: Unit[], quote: string, hint?: number): Passag
   const order = hint ? [...units.filter((u) => u.id === hint), ...units.filter((u) => u.id !== hint)] : units
   for (const u of order) {
     const at = locateFind(u.text, q)
-    if (at) return { unit: u.id, text: u.text.slice(at.start, at.end).trim() }
+    if (!at) continue
+    // Never part of a word ("ategory"): the span grows to the words it touches.
+    const [start, end] = snapToWords(u.text, at.start, at.end)
+    const text = u.text.slice(start, end).trim()
+    // A passage is a phrase at least, unless it's the whole paragraph.
+    if (words(text) >= MIN_PASSAGE_WORDS || text === u.text.trim()) return { unit: u.id, text }
   }
   return null
+}
+
+/** Shorter passages are refused, unless they are a whole paragraph. */
+export const MIN_PASSAGE_WORDS = 3
+
+const segmenterFor = (granularity: 'word' | 'grapheme') => (typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity }) : null)
+const wordSeg = segmenterFor('word')
+const isWordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}\p{M}'’]/u.test(c)
+
+/** A span widened to the edges of the words at its ends (by the word segmenter where there is one, which knows CJK words). */
+export function snapToWords(text: string, start: number, end: number): [number, number] {
+  if (wordSeg) {
+    for (const seg of wordSeg.segment(text)) {
+      const a = seg.index
+      const b = a + seg.segment.length
+      if (!seg.isWordLike) continue
+      if (a < start && start < b) start = a
+      if (a < end && end < b) end = b
+    }
+    return [start, end]
+  }
+  while (start > 0 && isWordChar(text[start - 1]) && isWordChar(text[start])) start--
+  while (end < text.length && isWordChar(text[end - 1]) && isWordChar(text[end])) end++
+  return [start, end]
 }
 
 // ---- Sentences and threads --------------------------------------------------------------------
@@ -258,12 +303,25 @@ export const threadParts = (body: string) =>
     .map((p) => p.trim())
     .filter(Boolean)
 
-/** Plain text that stays plain in Markdown: a line that would start a heading, list or quote is escaped. */
+/**
+ * Plain text that stays plain in Markdown: emphasis marks, brackets, angle brackets and backslashes are
+ * escaped, and so is a line that would start a heading, list or quote. Inline code (in backticks) is kept as code.
+ */
 export const asMarkdown = (text: string) =>
   text
     .split('\n')
-    .map((l) => l.replace(/^(\s*)(#{1,6}\s|>|[-+*]\s|\d+[.)]\s)/, '$1\\$2'))
+    .map((l) =>
+      l
+        .split(/(`+[^`]*?`+)/)
+        .map((part, i) => (i % 2 ? part : part.replace(/[\\*_[\]<>~=]/g, '\\$&')))
+        .join('')
+        .replace(/^(\s*)(#{1,6}\s|[-+]\s)/, '$1\\$2')
+        .replace(/^(\s*\d+)([.)]\s)/, '$1\\$2'),
+    )
     .join('\n')
+
+/** The text a reader sees from what asMarkdown wrote: its backslash escapes undone. */
+export const unescapeMarkdown = (md: string) => md.replace(/\\([\\*_[\]<>~=#+\-.)>])/g, '$1')
 
 export const joinParts = (parts: string[]) => parts.map(asMarkdown).join(`\n\n${PART_MARKER}\n\n`)
 
@@ -358,24 +416,100 @@ export function sectionPlan(units: Unit[], targets: Target[], kinds: Kind[]): Pl
 }
 
 // ---- Adapted wording: how much of it is the writer's -------------------------------------------
+// An adaptation is checked in order, not as a bag of words: a word counts as the writer's only inside a run
+// of at least three words that the passages have in the same order, and each stretch of the passages can be
+// used once (repeating a line doesn't count twice). Runs made only of little words ("and the of") don't count.
 
-const wordSegmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'word' }) : null
-const wordList = (s: string) =>
-  wordSegmenter
-    ? Array.from(wordSegmenter.segment(s.toLowerCase()))
-        .filter((w) => w.isWordLike)
-        .map((w) => w.segment)
-    : s
-        .toLowerCase()
-        .split(/[^\p{L}\p{N}']+/u)
-        .filter(Boolean)
+const wordSegmenter = segmenterFor('word')
+/** Scripts written without spaces: without a word segmenter, each character stands for a word. */
+const NO_SPACES = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u
 
-/** The share of a text's words that appear in the writer's passages (0–1). An adaptation that keeps their words scores high. */
-export function ownShare(text: string, passages: string[]): number {
-  const mine = new Set(passages.flatMap(wordList))
-  const theirs = wordList(text)
-  if (!theirs.length) return 1
-  return theirs.filter((w) => mine.has(w)).length / theirs.length
+export function wordList(s: string, seg: Intl.Segmenter | null = wordSegmenter): string[] {
+  const t = s.toLowerCase().replace(/[’‘]/g, "'")
+  if (seg)
+    return Array.from(seg.segment(t))
+      .filter((w) => w.isWordLike)
+      .map((w) => w.segment)
+  return t
+    .split(/[^\p{L}\p{N}\p{M}']+/u)
+    .filter(Boolean)
+    .flatMap((w) => (NO_SPACES.test(w) ? Array.from(w) : [w]))
+}
+
+const LITTLE = new Set(
+  'a an the and or but nor so yet of to in on at by for from with as is are was were be been it its this that these those i you he she we they me my your our their not no do does did have has had will would can could just then than there here'.split(
+    ' ',
+  ),
+)
+
+/** A run of the writer's words this long, at least, counts as theirs. */
+export const RUN = 3
+
+export interface OwnWords {
+  /** The share of the text's words inside runs of the writer's own (0–1). */
+  share: number
+  /** Words that aren't: the model's. */
+  foreign: number
+  /** The longest stretch of the model's words in a row. */
+  longestForeign: number
+}
+
+export function ownWords(text: string, passages: string[]): OwnWords {
+  const out = wordList(text)
+  if (!out.length) return { share: 1, foreign: 0, longestForeign: 0 }
+  const src = passages.map((p) => wordList(p))
+  const used = src.map((p) => p.map(() => false))
+  const covered = out.map(() => false)
+  for (let i = 0; i < out.length;) {
+    let best = { len: 0, p: -1, j: -1 }
+    for (let p = 0; p < src.length; p++) {
+      for (let j = 0; j < src[p].length; j++) {
+        let len = 0
+        while (i + len < out.length && j + len < src[p].length && !used[p][j + len] && out[i + len] === src[p][j + len]) len++
+        if (len > best.len) best = { len, p, j }
+      }
+    }
+    const run = out.slice(i, i + best.len)
+    if (best.len >= RUN && !run.every((w) => LITTLE.has(w))) {
+      for (let k = 0; k < best.len; k++) {
+        covered[i + k] = true
+        used[best.p][best.j + k] = true
+      }
+      i += best.len
+    } else i++
+  }
+  let foreign = 0
+  let streak = 0
+  let longestForeign = 0
+  for (const c of covered) {
+    if (c) streak = 0
+    else {
+      foreign++
+      longestForeign = Math.max(longestForeign, ++streak)
+    }
+  }
+  return { share: (out.length - foreign) / out.length, foreign, longestForeign }
+}
+
+/** How much of an adaptation may be the model's, by how far the ceiling lets it go. */
+export function adaptationRules(scope: 'passages' | 'whole', passageWords: number) {
+  return scope === 'passages'
+    ? // Help level 5: the writer's sentences, cut and joined; only a few joining words of the model's own.
+      { minShare: 0.75, maxForeign: Math.max(8, Math.round(passageWords * 0.1)), maxForeignRun: 4, maxWords: Math.ceil(passageWords * 1.2) + 20 }
+    : // Whole drafts: an opening and a close of its own too, but the body still the writer's.
+      { minShare: 0.6, maxForeign: Math.max(24, Math.round(passageWords * 0.4)), maxForeignRun: 20, maxWords: Math.ceil(passageWords * 2) + 60 }
+}
+
+/** Why an adaptation isn't the writer's enough, or [] when it is. */
+export function adaptationProblems(text: string, passages: string[], scope: 'passages' | 'whole'): string[] {
+  const rules = adaptationRules(scope, words(passages.join(' ')))
+  const own = ownWords(text, passages)
+  const problems: string[] = []
+  if (words(text) > rules.maxWords) problems.push(`it was longer than the passages allow (${words(text)} words, at most ${rules.maxWords})`)
+  if (own.share < rules.minShare) problems.push(`too few of its words were the writer's, in their order (${Math.round(own.share * 100)}%)`)
+  if (own.foreign > rules.maxForeign) problems.push(`it added ${own.foreign} words of its own (at most ${rules.maxForeign})`)
+  if (own.longestForeign > rules.maxForeignRun) problems.push(`it wrote ${own.longestForeign} words in a row of its own (at most ${rules.maxForeignRun})`)
+  return problems
 }
 
 // ---- Links back to the piece -------------------------------------------------------------------
@@ -383,7 +517,7 @@ export function ownShare(text: string, passages: string[]): number {
 const baseName = (p: string) => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
 
 /**
- * How a new post names its piece in `from:`: `[[name]]` as Obsidian writes it, or `[[folder/name]]` when
+ * How a new post names its piece in `derived-from:`: `[[name]]` as Obsidian writes it, or `[[folder/name]]` when
  * another note has the same name. A wiki link finds its page by name, so a move keeps it working, and a
  * rename in Ekdanta or Obsidian rewrites it.
  */
@@ -393,7 +527,7 @@ export function wikiLinkTo(paths: string[], rel: string): string {
   return `[[${clash ? rel.replace(/\.md$/i, '') : name}]]`
 }
 
-/** The note a `from:` value links to, found as Obsidian finds it: by path when it has one, else by name (the shortest path wins). */
+/** The note a `derived-from:` value links to, found as Obsidian finds it: by path when it has one, else by name (the shortest path wins). */
 export function resolveWikiLink(paths: string[], value: string | undefined): string | null {
   const m = value?.trim().match(/^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]$/)
   if (!m) return null
@@ -404,10 +538,10 @@ export function resolveWikiLink(paths: string[], value: string | undefined): str
   return named[0] ?? null
 }
 
-/** The posts drawn from a piece: every note whose `from:` links to it. */
-export function derivedFrom<T extends { path: string; from?: string }>(files: T[], rel: string): T[] {
+/** The posts drawn from a piece: every note whose `derived-from:` links to it. */
+export function derivedFrom<T extends { path: string; derivedFrom?: string }>(files: T[], rel: string): T[] {
   const paths = files.map((f) => f.path)
-  return files.filter((f) => f.path !== rel && f.from && resolveWikiLink(paths, f.from) === rel)
+  return files.filter((f) => f.path !== rel && f.derivedFrom && resolveWikiLink(paths, f.derivedFrom) === rel)
 }
 
 /** What `wording:` in a new post's front matter says about who wrote it. */
@@ -457,6 +591,8 @@ export type PlanReply =
   | { kind: 'short'; message: string }
   | { kind: 'off'; message: string }
   | { kind: 'error'; message: string }
+  /** The writer cancelled; the page has stopped listening by then. */
+  | { kind: 'stopped' }
 
 export interface PostRequest {
   format: string

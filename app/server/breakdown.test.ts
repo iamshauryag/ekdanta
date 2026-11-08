@@ -9,7 +9,8 @@ import path from 'node:path'
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ekdanta-breakdown-'))
 process.env.EKDANTA_VAULT = root
 process.env.EKDANTA_DISABLE_CLAUDE_CLI = '1'
-const { allowance, breakdownOptions, planBreakdown, createPosts, checkPlan } = await import('./breakdown.ts')
+const { allowance, breakdownOptions, planBreakdown, createPosts, checkPlan, cleanAngle, Cancelled } = await import('./breakdown.ts')
+const settingsMod = await import('./settings.ts')
 const vault = await import('./vault.ts')
 const { splitFrontMatter } = await import('../src/lib/frontmatter.ts')
 const { derivedFrom, threadParts, unitsOf } = await import('../src/lib/breakdown.ts')
@@ -171,7 +172,8 @@ test('below 5, creating never asks the model, and the drafts hold only the write
   assert.equal(r.created[0].path, 'linkedin/why-slow-writing-matters-linkedin-post.md')
   // No opening at 3 (it's model wording), and the invented passage is gone.
   assert.equal(li.body.trim(), 'Then I spent a winter drafting one essay a week, and the weeks that produced the worst pages were always the ones I rushed.')
-  assert.equal(li.meta.from, '[[why-slow-writing-matters]]')
+  assert.equal(li.meta['derived-from'], '[[why-slow-writing-matters]]')
+  assert.equal(li.meta.from, undefined)
   assert.equal(li.meta.platform, 'linkedin')
   assert.equal(li.meta.status, 'draft')
   assert.equal(li.meta.angle, 'Lead with the winter')
@@ -251,12 +253,12 @@ test('the piece lists its posts, and they still find it after it is renamed or m
   let files = await vault.listFiles()
   const derived = derivedFrom(files, DOC)
   assert.ok(derived.length >= 5)
-  assert.ok(derived.every((f) => f.from === '[[why-slow-writing-matters]]'))
+  assert.ok(derived.every((f) => f.derivedFrom === '[[why-slow-writing-matters]]'))
   const renamed = await vault.renameDoc(DOC, 'Slow writing')
   assert.equal(renamed, 'essays/slow-writing.md')
   files = await vault.listFiles()
   assert.equal(derivedFrom(files, renamed).length, derived.length)
-  assert.ok(derivedFrom(files, renamed).every((f) => f.from === '[[slow-writing]]'))
+  assert.ok(derivedFrom(files, renamed).every((f) => f.derivedFrom === '[[slow-writing]]'))
   const moved = await vault.moveToFolder(DEFAULT_KINDS, renamed, 'archive')
   files = await vault.listFiles()
   assert.equal(derivedFrom(files, moved).length, derived.length)
@@ -275,4 +277,111 @@ test('an adaptation that changes nothing leaves the draft marked as the writer�
   const r = await createPosts({ doc: 'archive/slow-writing.md', posts: [{ format: 'x-post', adapt: true, passages }] }, { ceiling: 5, ask: echo.ask, ...quiet })
   assert.equal(r.created[0].wording, 'yours')
   assert.doesNotMatch(r.notes.join(' '), /couldn’t keep/)
+})
+
+const SRC = 'archive/slow-writing.md'
+const P2 = 'Speed gives you the first idea that arrives, and the first idea is rarely yours. It is the common one, worn smooth by everyone who reached for it before you.'
+const snapshot = async () => ({ files: (await vault.listFiles()).map((f) => f.path).sort(), kinds: (await settingsMod.loadSettings()).kinds.map((k) => k.id) })
+
+test('every post is checked before anything is written: an unknown format or no passages at all writes nothing', async () => {
+  const before = await snapshot()
+  await assert.rejects(
+    createPosts(
+      {
+        doc: SRC,
+        posts: [
+          { format: 'short-video', passages: [P2] },
+          { format: 'fax', passages: [P2] },
+        ],
+      },
+      { ceiling: 3, ask: never },
+    ),
+    /Unknown kind/,
+  )
+  await assert.rejects(
+    createPosts({ doc: SRC, posts: [{ format: 'short-video', hook: 'A line.', useHook: true, passages: ['Words that are nowhere in the piece.'] }] }, { ceiling: 4, ask: never }),
+    /None of these posts/,
+  )
+  assert.deepEqual(await snapshot(), before)
+})
+
+test('a post with no passage from the piece is skipped with a note, never made as an empty draft', async () => {
+  const r = await createPosts(
+    {
+      doc: SRC,
+      posts: [
+        { format: 'linkedin', passages: [P2] },
+        { format: 'linkedin', angle: 'Empty', passages: [] },
+      ],
+    },
+    { ceiling: 3, ask: never, ...quiet },
+  )
+  assert.equal(r.created.length, 1)
+  assert.match(r.notes.join(' '), /One post had no passage/)
+})
+
+test('a short video files as its own kind, never as a YouTube script', async () => {
+  const r = await createPosts({ doc: SRC, posts: [{ format: 'short-video', passages: [P2] }] }, { ceiling: 3, ask: never, ...quiet })
+  assert.deepEqual(r.addedKinds, ['Short video script'])
+  const kind = (await settingsMod.loadSettings()).kinds.find((k) => k.id === 'short-video-script')!
+  assert.equal(kind.words, 150)
+  assert.ok(r.created[0].path.startsWith(kind.folder + '/'))
+  assert.equal(splitFrontMatter(await vault.readDoc(r.created[0].path)).meta.target, '<=150 words')
+})
+
+test('Cancel stops the model calls and nothing is written', async () => {
+  const before = await snapshot()
+  const ctl = new AbortController()
+  let calls = 0
+  const ask = async () => {
+    calls++
+    ctl.abort()
+    return JSON.stringify({ text: P2 })
+  }
+  await assert.rejects(
+    createPosts({ doc: SRC, posts: Array.from({ length: 4 }, () => ({ format: 'linkedin', adapt: true, passages: [P2] })) }, { ceiling: 5, ask, signal: ctl.signal, ...quiet }),
+    (e) => e instanceof Cancelled,
+  )
+  assert.equal(calls, 1)
+  assert.deepEqual(await snapshot(), before)
+})
+
+test('help ceiling 6 (whole drafts): an opening and a close of its own are allowed, invented content is not', async () => {
+  const whole = fake({ text: 'Something I learned the slow way, one winter. ' + P2 + ' So take your time.' })
+  const r = await createPosts({ doc: SRC, posts: [{ format: 'linkedin', adapt: true, passages: [P2] }] }, { ceiling: 6, ask: whole.ask, ...quiet })
+  assert.equal(r.created[0].wording, 'adapted by the model from yours')
+  assert.match(whole.calls[0].system, /short opening and a short close/)
+  // The same at 5 is refused: too many words of its own in a row.
+  const at5 = await createPosts({ doc: SRC, posts: [{ format: 'linkedin', adapt: true, passages: [P2] }] }, { ceiling: 5, ask: whole.ask, ...quiet })
+  assert.equal(at5.created[0].wording, 'yours')
+  const invent = fake({ text: 'Productivity is a myth sold by gurus who want your attention, and the best writers ignore every trend and every hack. ' + P2 })
+  const r6 = await createPosts({ doc: SRC, posts: [{ format: 'linkedin', adapt: true, passages: [P2] }] }, { ceiling: 6, ask: invent.ask, ...quiet })
+  assert.equal(r6.created[0].wording, 'yours')
+})
+
+test('a long angle is cut short, not dropped', () => {
+  const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(' ')
+  const a = cleanAngle(long)
+  assert.ok(a.startsWith('word0 word1') && a.endsWith('…'))
+  assert.ok(a.split(' ').length <= 25)
+})
+
+test('Obsidian comments never reach the model, and a long piece says how much the model read', async () => {
+  const paras = Array.from(
+    { length: 300 },
+    (_, i) =>
+      `Paragraph ${i} %%secret note ${i}%% says one plain thing about the craft of writing slowly, at some length, so the piece is long. It says it twice, to be sure the piece runs past what the model reads.`,
+  )
+  await fs.writeFile(path.join(root, 'essays/long.md'), `---\ntitle: Long\n---\n\n${paras.join('\n\n')}\n`)
+  const m = fake(PLAN)
+  const r = await planBreakdown({ doc: 'essays/long.md', targets: TARGETS }, { ceiling: 3, ask: m.ask, ...quiet })
+  assert.doesNotMatch(m.calls[0].prompt, /secret/)
+  if (r.kind !== 'plan') return assert.fail(r.kind)
+  assert.match(r.notes.join(' '), /read only the first \d+ of its 300 paragraphs/)
+})
+
+test('a note with its own `from:` property (an email’s sender) is not a post drawn from anything', async () => {
+  await fs.writeFile(path.join(root, 'essays/letter.md'), '---\ntitle: Letter\nfrom: "[[slow-writing]]"\n---\n\nHi.\n')
+  const files = await vault.listFiles()
+  assert.ok(!derivedFrom(files, SRC).some((f) => f.path === 'essays/letter.md'))
 })

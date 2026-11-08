@@ -1,4 +1,4 @@
-// The Piece panel's part of Break it down: the posts drawn from this piece (notes whose `from:` links
+// The Piece panel's part of Break it down: the posts drawn from this piece (notes whose `derived-from:` links
 // to it), where this post came from when it's one of them, and the way in to break the piece down.
 import { useMemo } from 'react'
 import type { FileEntry } from '../lib/api.ts'
@@ -21,7 +21,7 @@ export function DerivedPosts({ path, files, ceiling, onOpenDoc, onBreakDown }: P
     const me = files.find((f) => f.path === path)
     const rel = resolveWikiLink(
       files.map((f) => f.path),
-      me?.from,
+      me?.derivedFrom,
     )
     return rel ? files.find((f) => f.path === rel) : undefined
   }, [files, path])

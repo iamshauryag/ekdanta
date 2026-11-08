@@ -14,7 +14,7 @@
 import type { IncomingMessage } from 'node:http'
 import path from 'node:path'
 import { HttpError, local } from './net.ts'
-import { readCapped } from './assistant.ts'
+import { readCapped, stopSignal } from './assistant.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { existingDoc, freePath, listFiles, readDoc, slugify, splitFrontMatter, writeDoc, type FileEntry } from './vault.ts'
 import { joinFrontMatter } from '../src/lib/frontmatter.ts'
@@ -32,7 +32,7 @@ import {
   joinParts,
   kindFor,
   measure,
-  ownShare,
+  adaptationProblems,
   quotedBody,
   sectionPlan,
   slotsFor,
@@ -95,15 +95,36 @@ export interface BreakdownDeps {
   /** No model answers. */
   noModel?: boolean
   voice?: (kind: string) => Promise<string>
+  /** The writer pressed Cancel (the request went away): no more model calls, and nothing is written. */
+  signal?: AbortSignal
+}
+
+/** The request was cancelled; the route answers it with nothing (the page has stopped listening). */
+export class Cancelled extends Error {}
+const checkStop = (deps: BreakdownDeps) => {
+  if (deps.signal?.aborted) throw new Cancelled('Cancelled')
 }
 
 async function model(deps: BreakdownDeps): Promise<((system: string, prompt: string) => Promise<string>) | null> {
   if (deps.noModel) return null
-  if (deps.ask) return deps.ask
+  if (deps.ask) {
+    const ask = deps.ask
+    return async (system, prompt) => {
+      checkStop(deps)
+      const out = await ask(system, prompt)
+      checkStop(deps)
+      return out
+    }
+  }
   const { generate, status } = await import('./ai.ts')
   const strong = (await status()).strong
   if (!strong) return null
-  return (system, prompt) => generate(strong, { system, prompt, json: true, temperature: 0.4, maxTokens: 4096 })
+  return async (system, prompt) => {
+    checkStop(deps)
+    const out = await generate(strong, { system, prompt, json: true, temperature: 0.4, maxTokens: 4096, signal: deps.signal })
+    checkStop(deps)
+    return out
+  }
 }
 
 async function voiceOf(deps: BreakdownDeps, kind: string): Promise<string> {
@@ -203,12 +224,17 @@ const PROMPT_CHARS = 40_000
 
 /** An angle as the plan keeps it: one line, a direction of at most 25 words. */
 export const cleanAngle = (s: unknown) => {
-  const t = String(s ?? '')
+  let t = String(s ?? '')
     .replace(/\s+/g, ' ')
     .replace(/^["“]|["”]$/g, '')
     .trim()
-  return words(t) <= ANGLE_WORDS ? t.slice(0, 200) : ''
+  // A longer one is cut short, never dropped: it may be the writer's own.
+  if (words(t) > ANGLE_WORDS) t = /\s/.test(t) ? t.split(' ').slice(0, ANGLE_WORDS).join(' ') + '…' : Array.from(t).slice(0, 60).join('') + '…'
+  return Array.from(t).slice(0, ANGLE_MAX).join('')
 }
+
+/** The longest angle, in characters (the plan's angle box takes no more). */
+export const ANGLE_MAX = 200
 
 /** An opening line as the plan keeps it: one sentence that fits the format (a thread: its first part). Else ''. */
 export function cleanOpening(s: unknown, f: Format): string {
@@ -271,15 +297,19 @@ For each post: "passages": the parts of the piece it draws on, each copied EXACT
 Each post must stand on its own and draw on different passages from the others where the piece allows. Choose passages that fit the platform's limit together. Use the writer's habits and voice notes below, not general advice about the platform. Answer in the language of the piece.
 Return JSON: {"posts": [{"target": 1, "angle": "...", ${a.opening ? '"opening": "...", ' : ''}"passages": [{"p": 3, "text": "..."}]}]}`
   let budget = PROMPT_CHARS
-  const numbered = piece.units
-    .map((u, i) => {
-      const head = u.heading && piece.units[i - 1]?.heading !== u.heading ? `## ${u.heading}\n` : ''
-      const line = `${head}[${u.id}] ${u.text}`
-      budget -= line.length
-      return budget >= 0 ? line : ''
-    })
-    .filter(Boolean)
-    .join('\n\n')
+  let read = 0
+  const lines: string[] = []
+  for (const [i, u] of piece.units.entries()) {
+    const head = u.heading && piece.units[i - 1]?.heading !== u.heading ? `## ${u.heading}\n` : ''
+    const line = `${head}[${u.id}] ${u.text}`
+    budget -= line.length + 2
+    if (budget < 0) break
+    lines.push(line)
+    read++
+  }
+  const numbered = lines.join('\n\n')
+  // A very long piece: the model reads its start, and the writer is told where it stopped (they can add passages from the rest).
+  if (read < piece.units.length) notes.push(`Your piece is long, so the model read only the first ${read} of its ${piece.units.length} paragraphs. You can add passages from the rest yourself.`)
   const wanted = targets.map((t, i) => `${i + 1}. ${t.count} × ${limitLine(findFormat(kinds, t.format)!, info.get(t.format)?.habit)}`).join('\n')
   const prompt = `Title: ${JSON.stringify(piece.title)}\n\nMake exactly these posts ("target" is the number on the left):\n${wanted}\n${voices.length ? `\n${voices.join('\n\n')}\n` : ''}\nThe piece, by paragraph:\n"""\n${numbered}\n"""`
 
@@ -287,6 +317,7 @@ Return JSON: {"posts": [{"target": 1, "angle": "...", ${a.opening ? '"opening": 
   try {
     raw = await ask(system, prompt)
   } catch (e) {
+    if (e instanceof Cancelled) throw e
     return { kind: 'error', message: `The model didn’t answer: ${(e as Error).message}` }
   }
   const posts = checkPlan(raw, piece.units, targets, kinds, a)
@@ -348,50 +379,60 @@ export async function createPosts(input: CreateRequest, deps: BreakdownDeps = {}
   const settings = await loadSettings()
   const a = allowance(deps.ceiling ?? settings.ceiling)
   if (a.plan === 'off') throw new HttpError(409, levelNote(a))
-  let kinds = settings.kinds
   const notes: string[] = []
-  const addedKinds: string[] = []
-  const created: Created[] = []
-  const paths = (await listFiles()).map((f) => f.path)
-  const from = wikiLinkTo(paths, piece.rel)
-  const counts = new Map<string, number>()
-  const totals = new Map<string, number>()
-  for (const p of input.posts) totals.set(String(p?.format), (totals.get(String(p?.format)) ?? 0) + 1)
-  let missing = 0
-  let notAdapted = 0
-  let strayed = 0
-  let ask: Awaited<ReturnType<typeof model>> | undefined
 
+  // 1. Check every post before anything is written: a known format, a kind it can file as, and at least one
+  //    of the writer's passages found in the piece as it is now. A post with none is skipped, never made empty.
+  const kindsNow = settings.kinds
+  const toAdd = new Map<string, Kind>()
+  let missing = 0
+  let empty = 0
+  const planned: { f: Format; kind: Kind; passages: string[]; angle: string; opening: string; adapt: boolean }[] = []
   for (const post of input.posts) {
-    const f = findFormat(kinds, String(post?.format ?? ''))
+    const f = findFormat(kindsNow, String(post?.format ?? ''))
     if (!f) throw new HttpError(400, 'Unknown kind of post')
-    // The kind it files as; one the writer doesn't have yet (an X post, say) is added, as they asked for one.
-    let kind = kindFor(f, kinds)
+    let kind = kindFor(f, kindsNow) ?? [...toAdd.values()].find((k) => f.kinds.includes(k.id))
     if (!kind) {
-      const made = newKind(f.newKind ?? f.label, kinds)
+      const made = newKind(f.newKind ?? f.label, [...kindsNow, ...toAdd.values()])
       if (!made) throw new HttpError(409, `Can't add the kind “${f.newKind ?? f.label}”`)
       // Its typical length, from the platform's limit (about six characters a word), not a generic 800 words.
       made.words = f.measure === 'words' ? f.limit : Math.max(20, Math.round(f.limit / 6))
-      kinds = (await saveSettings({ kinds: [...kinds, made] })).kinds
-      kind = kinds.find((k) => k.id === made.id) ?? made
-      addedKinds.push(kind.name)
+      toAdd.set(made.id, made)
+      kind = made
     }
-    // Only the writer's own words: each passage must be in the piece as it is now.
     const passages: string[] = []
     for (const q of Array.isArray(post.passages) ? post.passages.slice(0, 40) : []) {
       const found = typeof q === 'string' ? findPassage(piece.units, q.slice(0, 20_000)) : null
       if (found) passages.push(found.text)
       else missing++
     }
-    const angle = cleanAngle(post.angle)
-    const opening = a.opening && post.useHook ? cleanOpening(post.hook, f) : ''
-    let body = quotedBody(f, passages, opening)
-    let wording: string = opening ? WORDING.opening : WORDING.yours
-    if (post.adapt && passages.length) {
+    if (!passages.length) {
+      empty++
+      continue
+    }
+    planned.push({ f, kind, passages, angle: cleanAngle(post.angle), opening: a.opening && post.useHook ? cleanOpening(post.hook, f) : '', adapt: Boolean(post.adapt) })
+  }
+  if (!planned.length) throw new HttpError(400, 'None of these posts has a passage from the piece. Add one to each post first.')
+
+  // 2. The bodies, with any adaptations the ceiling allows. Model calls can be cancelled; nothing is written yet.
+  let notAdapted = 0
+  let strayed = 0
+  let ask: Awaited<ReturnType<typeof model>> | undefined
+  const bodies: { body: string; wording: string }[] = []
+  for (const p of planned) {
+    checkStop(deps)
+    let body = quotedBody(p.f, p.passages, p.opening)
+    let wording: string = p.opening ? WORDING.opening : WORDING.yours
+    if (p.adapt) {
       if (a.adapt === 'none') notAdapted++
       else {
         if (ask === undefined) ask = await model(deps)
-        const adapted = ask ? await adapt(ask, f, kind, passages, angle, opening, a.adapt, deps, piece.title).catch(() => null) : null
+        let adapted: string | null = null
+        try {
+          adapted = ask ? await adapt(ask, p.f, p.kind, p.passages, p.angle, p.opening, a.adapt, deps, piece.title) : null
+        } catch (e) {
+          if (e instanceof Cancelled) throw e
+        }
         // An adaptation that left the passages as they were is still the writer's own words, and says so.
         const same = (t: string) => t.replace(/\s+/g, ' ').trim()
         if (adapted && same(adapted) !== same(body)) {
@@ -400,28 +441,49 @@ export async function createPosts(input: CreateRequest, deps: BreakdownDeps = {}
         } else if (!adapted) strayed++
       }
     }
+    bodies.push({ body, wording })
+  }
+  checkStop(deps)
 
-    const n = (counts.get(f.id) ?? 0) + 1
-    counts.set(f.id, n)
-    const title = `${piece.title} · ${f.label}${(totals.get(f.id) ?? 1) > 1 ? ` ${n}` : ''}`
+  // 3. Add the kinds the posts need (settings read again just before, so a change made meanwhile is kept), then write.
+  const addedKinds: string[] = []
+  if (toAdd.size) {
+    const fresh = (await loadSettings()).kinds
+    const adding = [...toAdd.values()].filter((k) => !fresh.some((x) => x.id === k.id))
+    if (adding.length) await saveSettings({ kinds: [...fresh, ...adding] })
+    addedKinds.push(...adding.map((k) => k.name))
+  }
+  const paths = (await listFiles()).map((f) => f.path)
+  const link = wikiLinkTo(paths, piece.rel)
+  const counts = new Map<string, number>()
+  const totals = new Map<string, number>()
+  for (const p of planned) totals.set(p.f.id, (totals.get(p.f.id) ?? 0) + 1)
+  const created: Created[] = []
+  for (const [i, p] of planned.entries()) {
+    const { body, wording } = bodies[i]
+    const n = (counts.get(p.f.id) ?? 0) + 1
+    counts.set(p.f.id, n)
+    const title = `${piece.title} · ${p.f.label}${(totals.get(p.f.id) ?? 1) > 1 ? ` ${n}` : ''}`
     const meta: Record<string, string> = {
       title,
-      platform: kind.id,
+      platform: p.kind.id,
       status: 'draft',
       created: today(),
-      from,
-      ...(angle ? { angle } : {}),
-      ...(f.target ? { target: f.target } : {}),
+      // Namespaced: `from` is a property writers use for other things (an email's sender).
+      'derived-from': link,
+      ...(p.angle ? { angle: p.angle } : {}),
+      ...(p.f.target ? { target: p.f.target } : {}),
       wording,
     }
     // A name already taken in the kind's folder gets -2, -3…: nothing is ever written over.
-    const rel = await freePath(kind.folder, slugify(title))
-    await writeDoc(rel, joinFrontMatter('', meta, body ? body + '\n' : ''), { reason: 'breakdown' })
-    const fitNow = fit(f, body)
-    created.push({ path: rel, title, format: f.id, wording, length: fitNow.length, limit: fitNow.limit, unit: unitName(f), over: fitNow.over })
+    const rel = await freePath(p.kind.folder, slugify(title))
+    await writeDoc(rel, joinFrontMatter('', meta, body + '\n'), { reason: 'breakdown' })
+    const fitNow = fit(p.f, body)
+    created.push({ path: rel, title, format: p.f.id, wording, length: fitNow.length, limit: fitNow.limit, unit: unitName(p.f), over: fitNow.over })
   }
   if (addedKinds.length) notes.push(`Added the kind${addedKinds.length === 1 ? '' : 's'} ${addedKinds.map((k) => `“${k}”`).join(', ')}.`)
   if (missing) notes.push(`${missing} passage${missing === 1 ? ' isn’t' : 's aren’t'} in the piece any more, so ${missing === 1 ? 'it was' : 'they were'} left out.`)
+  if (empty) notes.push(`${empty === 1 ? 'One post had' : `${empty} posts had`} no passage from the piece, so ${empty === 1 ? 'it wasn’t' : 'they weren’t'} made.`)
   if (notAdapted) notes.push(`Adapting the wording needs help ceiling 5, so ${notAdapted === 1 ? 'that post starts' : 'those posts start'} as your own words.`)
   if (strayed)
     notes.push(
@@ -433,8 +495,10 @@ export async function createPosts(input: CreateRequest, deps: BreakdownDeps = {}
 }
 
 /**
- * The writer's passages shaped into one post by the model, or null when the result doesn't hold up:
- * over the platform's limit, longer than the passages allow, or not mostly their words. One retry.
+ * The writer's passages shaped into one post by the model, or null when the result doesn't hold up: over
+ * the platform's limit, longer than the passages allow, or not their words in their order (adaptationProblems).
+ * One retry. At help level 5 it cuts, reorders and joins their sentences; with whole drafts it may also write
+ * an opening and a close in their voice, while the body stays theirs.
  */
 async function adapt(
   ask: (system: string, prompt: string) => Promise<string>,
@@ -449,10 +513,6 @@ async function adapt(
 ): Promise<string | null> {
   const unit = unitName(f)
   const source = passages.join('\n\n')
-  const sourceWords = words(source)
-  // Level 5 adapts: about as long as the passages, mostly their words. Whole drafts may join and round them off.
-  const maxWords = scope === 'passages' ? Math.ceil(sourceWords * 1.2) + 20 : Math.ceil(sourceWords * 2) + 60
-  const minShare = scope === 'passages' ? 0.6 : 0.35
   const thread = f.shape === 'thread'
   const cap = thread ? `${f.parts} parts at most, each at most ${f.limit} ${unit}` : f.hard ? `at most ${f.limit.toLocaleString('en-US')} ${unit}` : `about ${f.limit} ${unit}`
   const voice = await voiceOf(deps, kind.id)
@@ -460,8 +520,8 @@ async function adapt(
 Shape the writer's passages (below) into one ${f.label}: ${cap}.
 ${
   scope === 'passages'
-    ? 'Keep their words wherever you can: cut, reorder and join them, and change only what the platform needs. Add no ideas, facts, examples or claims that are not in the passages, and no sentences of your own beyond a few joining words.'
-    : 'Keep their words wherever you can. You may add the few lines that join the passages into a finished post (an opening and a close), in their voice, but add no facts, examples or claims that are not in the passages.'
+    ? 'Keep their sentences: cut, reorder and join them, and change only what the platform needs. Add no ideas, facts, examples or claims that are not in the passages, and nothing of your own beyond a few joining words.'
+    : 'Keep their sentences for the body of the post. You may add a short opening and a short close of your own, in their voice, and the few words that join the passages, but add no facts, examples or claims that are not in the passages.'
 }
 Plain text, no hashtags or emoji unless the passages use them. Answer in the language of the passages.
 Return JSON: ${thread ? '{"parts": ["...", "..."]}' : '{"text": "..."}'}`
@@ -472,18 +532,18 @@ Return JSON: ${thread ? '{"parts": ["...", "..."]}' : '{"text": "..."}'}`
     try {
       const raw = await ask(system, prompt + extra)
       reply = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1))
-    } catch {
+    } catch (e) {
+      if (e instanceof Cancelled) throw e
       continue
     }
     const parts = thread ? (Array.isArray(reply.parts) ? reply.parts.map((p) => String(p).trim()).filter(Boolean) : []) : [String(reply.text ?? '').trim()].filter(Boolean)
     if (!parts.length) continue
     const all = parts.join('\n\n')
     const body = thread ? joinParts(parts) : asMarkdown(all)
-    const problems: string[] = []
     const fitNow = fit(f, body)
-    if (fitNow.over) problems.push(`it went past the limit (${fitNow.length} ${unit}${thread ? ` in its longest part, ${fitNow.parts} parts` : ''})`)
-    if (words(all) > maxWords) problems.push(`it was longer than the passages allow (${words(all)} words, at most ${maxWords})`)
-    if (ownShare(all.replace(opening, ''), passages) < minShare) problems.push('too few of the words were the writer’s')
+    // The opening the writer chose to keep is checked on its own (it was offered at level 4); the rest must be theirs.
+    const problems = adaptationProblems(opening ? all.replace(opening, '') : all, passages, scope)
+    if (fitNow.over) problems.unshift(`it went past the limit (${fitNow.length} ${unit}${thread ? ` in its longest part, ${fitNow.parts} parts` : ''})`)
     if (!problems.length) return body
     extra = `\n\nYour last answer was not usable: ${problems.join('; ')}. Try again, closer to the writer's words.`
   }
@@ -497,8 +557,27 @@ const today = () => {
 
 // ---- Routes -------------------------------------------------------------------------------------
 
+/** Run a request that stops when the writer cancels (the page drops the request, closing its socket). */
+async function stoppable<T>(req: IncomingMessage, run: (signal: AbortSignal) => Promise<T>): Promise<T | { kind: 'stopped' }> {
+  const stop = stopSignal(req)
+  try {
+    return await run(stop.signal)
+  } catch (e) {
+    if (e instanceof Cancelled) return { kind: 'stopped' }
+    throw e
+  } finally {
+    stop.dispose()
+  }
+}
+
 export const breakdownRoutes: Record<string, Handler> = {
   'GET /api/breakdown/options': local(async (_req: IncomingMessage, url: URL) => breakdownOptions(url.searchParams.get('doc'))),
-  'POST /api/breakdown/plan': local(async (req: IncomingMessage) => planBreakdown(await readCapped<PlanRequest>(req, 64 * 1024))),
-  'POST /api/breakdown/create': local(async (req: IncomingMessage) => createPosts(await readCapped<CreateRequest>(req, 1_000_000))),
+  'POST /api/breakdown/plan': local(async (req: IncomingMessage) => {
+    const body = await readCapped<PlanRequest>(req, 64 * 1024)
+    return stoppable(req, (signal) => planBreakdown(body, { signal }))
+  }),
+  'POST /api/breakdown/create': local(async (req: IncomingMessage) => {
+    const body = await readCapped<CreateRequest>(req, 1_000_000)
+    return stoppable(req, (signal) => createPosts(body, { signal }))
+  }),
 }
