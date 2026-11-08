@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, type IdeaRow } from '../lib/api.ts'
+import { api, type IdeaRow, type PartnerIdea } from '../lib/api.ts'
 import { binding, formatKey } from '../lib/keys.ts'
 import { kinds } from '../lib/kinds.ts'
+import { IdeaPartner } from './IdeaPartner.tsx'
 
 interface Props {
   /** Changes whenever an idea was captured elsewhere, so the list reads ideas.md again. */
   version: number
   onCapture: (text: string) => Promise<void>
   onStart: (text: string, kind: string) => Promise<void>
+  /** Start a post from an idea the partner proposed (it's kept on the way). */
+  onStartIdea: (idea: PartnerIdea, kind: string) => Promise<void>
   onOpenDoc: (path: string) => void
+  /** The help ceiling: the idea partner holds to it. */
+  ceiling: number
+  /** The writer's notes, for the partner's "Angles on a note". */
+  notes: { path: string; title: string }[]
 }
 
 /** Past this many characters an idea shows its start, with a way to read the rest. */
@@ -16,9 +23,11 @@ const LONG = 180
 
 /**
  * Every idea in ideas.md, newest first. A star marks the ones worth coming back to (kept by the app,
- * not in the file); "Start as…" begins a piece of a chosen kind with the idea at the top as a prompt.
+ * not in the file); "Start as…" begins a piece of a chosen kind from the idea, with a pinned brief and
+ * the notes it came from in its Thinking Space. Above the list, the idea partner brainstorms new ones
+ * from the writer's own material when they ask.
  */
-export function IdeasPage({ version, onCapture, onStart, onOpenDoc }: Props) {
+export function IdeasPage({ version, onCapture, onStart, onStartIdea, onOpenDoc, ceiling, notes }: Props) {
   const [data, setData] = useState<{ exists: boolean; ideas: IdeaRow[] } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [onlyStarred, setOnlyStarred] = useState(false)
@@ -109,6 +118,8 @@ export function IdeasPage({ version, onCapture, onStart, onOpenDoc }: Props) {
           </div>
         )}
       </div>
+      <IdeaPartner ceiling={ceiling} notes={notes} onOpenDoc={onOpenDoc} onStart={onStartIdea} onKept={load} />
+
       {error && (
         <p className="ideas-error" role="alert">
           {error}
@@ -135,9 +146,14 @@ function IdeaItem({ idea, onStar, onStart, onOpenDoc }: { idea: IdeaRow; onStar:
   const [menu, setMenu] = useState(false)
   const [busy, setBusy] = useState(false)
   const box = useRef<HTMLDivElement>(null)
-  const long = idea.text.length > LONG
+  // A partner idea shows its title and angle; any idea with [[links]] shows them as chips instead.
+  const text = idea.title ? idea.title : (idea.shown ?? idea.text)
+  const long = text.length > LONG
   // Cut at a word, not mid-word.
-  const short = long ? idea.text.slice(0, idea.text.lastIndexOf(' ', LONG) > LONG / 2 ? idea.text.lastIndexOf(' ', LONG) : LONG).trimEnd() + '…' : idea.text
+  const short = long ? text.slice(0, text.lastIndexOf(' ', LONG) > LONG / 2 ? text.lastIndexOf(' ', LONG) : LONG).trimEnd() + '…' : text
+  // The kinds it suits come first in Start as….
+  const suits = idea.platforms ?? []
+  const menuKinds = [...kinds()].sort((a, b) => (suits.includes(a.id) ? suits.indexOf(a.id) : 99) - (suits.includes(b.id) ? suits.indexOf(b.id) : 99))
 
   useEffect(() => {
     if (!menu) return
@@ -163,13 +179,29 @@ function IdeaItem({ idea, onStar, onStart, onOpenDoc }: { idea: IdeaRow; onStar:
         {idea.starred ? '★' : '☆'}
       </button>
       <div className="idea-body">
-        <span className="idea-text">{open || !long ? idea.text : short}</span>
+        <span className="idea-text">{open || !long ? text : short}</span>
         {long && (
           <button className="idea-more" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             {open ? 'Show less' : 'Show all'}
           </button>
         )}
         {idea.date && <span className="idea-date">{idea.date}</span>}
+        {idea.title && idea.angle && idea.angle !== idea.title && <span className="idea-angle">{idea.angle}</span>}
+        {idea.sources && idea.sources.length > 0 && (
+          <span className="idea-sources">
+            {idea.sources.map((s) =>
+              s.path ? (
+                <button key={s.name} className="ip-src" title={s.path} onClick={() => onOpenDoc(s.path!)}>
+                  {s.name.split('/').pop()}
+                </button>
+              ) : (
+                <span key={s.name} className="ip-src is-missing" title="This note is no longer in your vault">
+                  {s.name.split('/').pop()}
+                </span>
+              ),
+            )}
+          </span>
+        )}
       </div>
       <div className="idea-act" ref={box}>
         {idea.started ? (
@@ -199,8 +231,8 @@ function IdeaItem({ idea, onStar, onStart, onOpenDoc }: { idea: IdeaRow; onStar:
               e.stopPropagation()
             }}
           >
-            {kinds().map((k) => (
-              <button key={k.id} role="menuitem" onClick={() => start(k.id)}>
+            {menuKinds.map((k) => (
+              <button key={k.id} role="menuitem" className={suits.includes(k.id) ? 'is-suggested' : undefined} onClick={() => start(k.id)}>
                 {k.name}
               </button>
             ))}

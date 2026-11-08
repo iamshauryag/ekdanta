@@ -4,9 +4,10 @@
 // The model only links, groups and labels fragments. It never rewrites them.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { generate, parseJson, status } from './ai.ts'
-import { embedder } from './embed.ts'
-import { search } from './recall.ts'
+// The models and the Recall index are loaded only when a function needs them, so the canvas's own
+// storage (read, write, seed) can be used, and tested, without them.
+const ai = () => import('./ai.ts')
+const embedderNow = async () => (await import('./embed.ts')).embedder()
 import { adoptOldKey, readDoc, resolveInVault, splitFrontMatter, thinkingSideFile } from './vault.ts'
 
 export interface Fragment {
@@ -103,6 +104,7 @@ const listFor = (fragments: Fragment[]) => fragments.map((f) => `${f.id}: ${f.te
 export async function suggestLinks(fragments: Fragment[], skip: string[] = []) {
   const frags = usable(fragments)
   if (frags.length < 3) return []
+  const { generate, parseJson, status } = await ai()
   const { fast } = await status()
   if (!fast) return []
   const system = `A writer is brain-dumping fragments before drafting. Find the few clear relations between fragments.
@@ -126,6 +128,7 @@ Return JSON: {"links": [{"from": "id", "to": "id", "label": "same idea"}]}`
 export async function suggestClusters(fragments: Fragment[]) {
   const frags = usable(fragments)
   if (frags.length < 2) return []
+  const { generate, parseJson, status } = await ai()
   const { fast } = await status()
   if (!fast) throw new Error('No model available to group fragments')
   const system = `A writer is brain-dumping fragments before drafting. Group them into 2 to 5 themes.
@@ -154,7 +157,8 @@ Return JSON: {"clusters": [{"label": "...", "ids": ["id", "..."]}]}`
 export async function recallChips(doc: string, fragments: Fragment[], taken: string[] = []) {
   const out: Record<string, { doc: string; title: string; folder: string } | null> = {}
   const best = new Map<string, { id: string; score: number; hit: { doc: string; title: string; folder: string } }>()
-  const bar = embedder().strong + 0.04 // fragments are short, so they match loosely; ask for more
+  const { search } = await import('./recall.ts')
+  const bar = (await embedderNow()).strong + 0.04 // fragments are short, so they match loosely; ask for more
   for (const f of usable(fragments)) {
     out[f.id] = null
     const [hit] = await search(f.text, { exclude: doc, limit: 1, sources: false })
@@ -170,7 +174,7 @@ const vectors = new Map<string, number[]>()
 async function vecs(texts: string[]) {
   const missing = [...new Set(texts.filter((t) => !vectors.has(t)))]
   if (missing.length) {
-    const got = await embedder().embed(missing, 'document')
+    const got = await (await embedderNow()).embed(missing, 'document')
     missing.forEach((t, i) => vectors.set(t, got[i]))
     if (vectors.size > 4000) [...vectors.keys()].slice(0, 2000).forEach((k) => vectors.delete(k))
   }
@@ -195,7 +199,7 @@ export async function material(doc: string, fragments: Fragment[], paragraph: st
   const sentences = paras.flatMap((p) => p.split(/(?<=[.!?])\s+/)).filter((s) => s.length >= 12)
   const fv = await vecs(frags.map((f) => f.text.trim()))
   const pv = await vecs([...new Set([...paras, ...sentences])])
-  const COVERED = embedder().id.startsWith('builtin') ? 0.78 : 0.8
+  const COVERED = (await embedderNow()).id.startsWith('builtin') ? 0.78 : 0.8
   const covered = frags.filter((_, i) => pv.some((p) => dot(fv[i], p) >= COVERED)).map((f) => f.id)
   let nearest: string | null = null
   if (paragraph.trim().length >= 20) {

@@ -1,0 +1,168 @@
+/* The idea partner on the Ideas page, and the notes an idea came from. Cards reuse Sparks' (.sp-*). */
+.ip-closed {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 18px;
+  font-size: 13px;
+}
+.ip {
+  margin: 0 0 24px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--page);
+}
+.ip-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+.ip-close {
+  margin-left: auto;
+}
+.ip-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 8px;
+}
+.ip-chip {
+  padding: 3px 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+}
+.ip-chip:hover:not(:disabled),
+.ip-chip.is-on {
+  color: var(--ink);
+  background: var(--chrome-2);
+}
+.ip-chip.is-on {
+  border-color: var(--accent-line);
+}
+.ip-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.ip-input {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.ip-note {
+  flex: 1 1 100%;
+}
+.ip-turn {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.ip-you {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.ip-reply {
+  margin: 6px 0 0;
+  font: italic 15px/1.45 var(--serif);
+  color: var(--ink-2);
+}
+.ip-card {
+  margin-top: 12px;
+}
+.ip-hook {
+  margin: 6px 0 0;
+  font: italic 16px/1.45 var(--serif);
+  color: var(--ink-2);
+}
+.ip-label {
+  font: 500 10px var(--sans);
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.ip-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+.ip-kinds {
+  color: var(--accent);
+  margin-right: 4px;
+}
+.ip-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ip-src {
+  max-width: 220px;
+  padding: 1px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 6px;
+}
+.ip-src.is-idea {
+  color: var(--ink-2);
+  background: var(--chrome-2);
+}
+.ip-src.is-missing {
+  color: var(--ink-3);
+  background: none;
+  text-decoration: line-through;
+}
+button.ip-src:hover {
+  text-decoration: underline;
+}
+.ip-passages {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.ip-passages summary {
+  cursor: pointer;
+  color: var(--ink-3);
+}
+.ip-edit {
+  display: grid;
+  gap: 6px;
+}
+.ip-edit textarea {
+  resize: vertical;
+  font: 15px/1.45 var(--serif);
+}
+.ip-edit-act {
+  display: flex;
+  gap: 6px;
+}
+.ip-more {
+  margin-top: 12px;
+}
+.idea-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 3px;
+}
+.idea-angle {
+  display: block;
+  font-size: 14.5px;
+  color: var(--ink-2);
+}
+.idea-menu .is-suggested::after {
+  content: ' · suits it';
+  color: var(--ink-3);
+  font-size: 11px;
+}

@@ -18,7 +18,8 @@ import { runHelp, type HelpRequest } from './help.ts'
 import { doubledFolder } from '../src/lib/kinds.ts'
 import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
-import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
+import { captureIdea, dismissIdeaTitle, listIdeas, starIdea, startIdeaPiece } from './ideas.ts'
+import { keepPartnerIdea, runPartner } from './idea-partner.ts'
 import { runReader, type ReaderRequest } from './reader.ts'
 import { assistantRoutes } from './assistant.ts'
 import { HttpError, isLocalRequest, isSameOrigin, local, readJson, statusOf } from './net.ts'
@@ -404,9 +405,27 @@ const routes: Record<string, Handler> = {
     const { text, starred } = await body<{ text: string; starred: boolean }>(req)
     return starIdea(typeof text === 'string' ? text : '', !!starred)
   },
+  // Start a piece from an idea. With `idea` (one the partner just proposed) it is kept first, so the list shows it Started.
   'POST /api/ideas/start': async (req) => {
-    const { text, kind } = await body<{ text: string; kind: string }>(req)
-    return { path: await startIdea((await loadSettings()).kinds, typeof text === 'string' ? text : '', typeof kind === 'string' ? kind : '') }
+    const { text, kind, idea } = await body<{ text?: string; kind: string; idea?: unknown }>(req)
+    const { result, touched } = await collectTouched(async () => {
+      const line = idea ? (await keepPartnerIdea(idea)).text : typeof text === 'string' ? text : ''
+      return startIdeaPiece((await loadSettings()).kinds, line, typeof kind === 'string' ? kind : '')
+    })
+    refresh().catch(() => {})
+    return { ...result, touched }
+  },
+  // The idea partner: a batch of post ideas from the writer's own material, only when asked (see idea-partner.ts).
+  'POST /api/ideas/partner': async (req) => runPartner(await body(req)),
+  'POST /api/ideas/keep': async (req) => {
+    const idea = await body(req)
+    const { result, touched } = await collectTouched(() => keepPartnerIdea(idea))
+    return { ...result, touched }
+  },
+  'POST /api/ideas/discard': async (req) => {
+    const { title } = await body<{ title: string }>(req)
+    await dismissIdeaTitle(typeof title === 'string' ? title : '')
+    return { ok: true }
   },
   // The Brain: sources the writer read, heard or watched, and the highlights they kept.
   'GET /api/brain': async () => listSources(),
