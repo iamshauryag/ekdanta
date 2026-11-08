@@ -8,6 +8,9 @@ import type { VersionEntry, VersionRow } from './versions.ts'
 import type { Reader, ReaderQuestion } from './reader.ts'
 import type { SourceFields, SourceType } from './brain.ts'
 // Thin client for the local server in server/api.ts.
+/** Why a kind change left a document where it was (see server/vault.ts). */
+export type PlaceStay = 'special' | 'excluded' | 'brain' | 'unknown-kind' | 'target-special' | 'target-excluded' | 'target-brain'
+
 export interface FileEntry {
   path: string
   folder: string
@@ -306,10 +309,10 @@ export const api = {
   changes: (since?: number) => fetch('/api/changes' + (since === undefined ? '' : '?since=' + since)).then(json<Changes>),
   create: (folder: string, platform?: string) => fetch('/api/new', send('POST', { folder, platform })).then(json<{ path: string }>),
   name: (path: string, title: string) => fetch('/api/name', send('POST', { path, title })).then(json<Moved>),
-  /** File a document in its kind's folder; `stay` says why it didn't move. */
-  place: (path: string) => fetch('/api/place', send('POST', { path })).then(json<Moved & { stay?: 'special' | 'excluded' | 'brain' | 'unknown-kind' }>),
-  /** Undo a kind change that moved a document: the old kind back, and the document back at `prev`. */
-  unplace: (path: string, prev: string, platform: string) => fetch('/api/place/undo', send('POST', { path, prev, platform })).then(json<Moved>),
+  /** File a document in its kind's folder after a kind change from `was`; `stay` says why it didn't move, `undo` puts it back. */
+  place: (path: string, was?: string) => fetch('/api/place', send('POST', { path, was })).then(json<Moved & { stay?: PlaceStay; folder?: string; undo?: string }>),
+  /** Undo a kind change that moved a document, by the token the move gave. */
+  unplace: (token: string) => fetch('/api/place/undo', send('POST', { token })).then(json<Moved>),
   rename: (path: string, title: string) => fetch('/api/rename', send('POST', { path, title })).then(json<Moved>),
   move: (path: string, folder: string) => fetch('/api/move', send('POST', { path, folder })).then(json<Moved>),
   duplicate: (path: string) => fetch('/api/duplicate', send('POST', { path })).then(json<Moved>),

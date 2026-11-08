@@ -9,7 +9,7 @@ import { docOf, dueLabel, kindSwitchPatch, usesDocument } from './lib/docstyle.t
 import { countable, type Block } from './lib/targets.ts'
 import { Toolbar } from './components/Toolbar.tsx'
 import type { HistoryItem } from './editor/controller.ts'
-import { api, ApiError, type Changes, type FileEntry, type Settings as SettingsT, type Status, type Thinking, type Touched, type Trashed, type VoiceSummary } from './lib/api.ts'
+import { api, ApiError, type Changes, type FileEntry, type PlaceStay, type Settings as SettingsT, type Status, type Thinking, type Touched, type Trashed, type VoiceSummary } from './lib/api.ts'
 import { joinDoc, patchFrontMatter, splitFrontMatter, type FrontMatter, type MetaPatch } from './lib/frontmatter.ts'
 import { docTags, editTags, metaTags, vaultTagCounts } from './lib/tags.ts'
 import { Properties } from './components/Properties.tsx'
@@ -1046,25 +1046,28 @@ export function App() {
     syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta, lists: d.lists } : l))
     saver.edited()
+    // A brand-new, empty draft is only being given its kind: its move needs no news.
+    const quiet = fresh === d.path && !d.body.trim()
     await op(async () => {
       if (docRef.current !== d) return
       const prev = d.path
-      const { path: next, touched, stay } = await api.place(prev)
+      const { path: next, touched, stay, folder, undo } = await api.place(prev, was)
       follow(next)
       await absorb(touched)
       refreshFiles()
       refreshVoices()
+      if (quiet) return
       const name = pieceName(kinds(), platform, 1)
       const where = prev.includes('/') ? prev.slice(0, prev.lastIndexOf('/')) + '/' : 'the top of the vault'
-      if (next !== prev) notify(`Moved to ${next.slice(0, next.lastIndexOf('/'))}/`, () => void unplace(next, prev, was))
-      else if (stay && stay !== 'unknown-kind') notify(`Now ${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name}. It stays in ${STAY_LABELS[stay](where)}.`)
+      if (next !== prev) notify(`Moved to ${next.slice(0, next.lastIndexOf('/'))}/`, undo ? () => void unplace(next, undo) : undefined)
+      else if (stay && stay !== 'unknown-kind') notify(`Now ${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name}. It stays in ${STAY_LABELS[stay](where, `${folder ?? ''}/`)}.`)
     }).catch(failed('move it to its folder'))
   }
 
   /** Undo a kind change: the document goes back where it was, as the kind it was. */
-  const unplace = (rel: string, prev: string, platform: string) =>
+  const unplace = (rel: string, token: string) =>
     op(async () => {
-      const { path: back, touched } = await api.unplace(rel, prev, platform)
+      const { path: back, touched } = await api.unplace(token)
       if (docRef.current?.path === rel) follow(back)
       await absorb(touched)
       await refreshFiles()
@@ -2412,11 +2415,14 @@ export function App() {
 
 const platformLabel = (p: string) => kindName(kinds(), p)
 
-/** Why a piece didn't move to its new kind's folder, after "It stays in". */
-const STAY_LABELS: Record<'special' | 'excluded' | 'brain', (where: string) => string> = {
+/** Why a piece didn't move to its new kind's folder, after "It stays in": where it is, and the kind's folder. */
+const STAY_LABELS: Record<Exclude<PlaceStay, 'unknown-kind'>, (where: string, folder: string) => string> = {
   special: (where) => `${where}, which keeps its notes whatever their kind`,
   excluded: (where) => `${where}, a folder you've excluded`,
   brain: () => 'the Brain',
+  'target-special': (where, folder) => `${where}: its kind's folder, ${folder}, is one Ekdanta keeps apart`,
+  'target-excluded': (where, folder) => `${where}: its kind's folder, ${folder}, is excluded`,
+  'target-brain': (where, folder) => `${where}: its kind's folder, ${folder}, is the Brain's`,
 }
 
 const SAVE_LABEL: Record<SaveState, string> = { saved: 'Saved', saving: 'Saving…', unsaved: 'Edited', failed: 'Not saved', conflict: 'Not saved', gone: 'Not saved' }

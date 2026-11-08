@@ -181,21 +181,21 @@ const routes: Record<string, Handler> = {
     if (next !== path) refresh().catch(() => {})
     return { path: next, touched }
   },
-  // After a kind change: file the document in its kind's folder. `stay` says why it didn't move, when it didn't.
+  // After a kind change: file the document in its kind's folder. `stay` says why it didn't move, when it
+  // didn't; `undo` is a token for putting it back, given only when the app says the kind it had (`was`).
   'POST /api/place': async (req) => {
-    const { path } = await body<{ path: string }>(req)
+    const { path, was } = await body<{ path: string; was?: string }>(req)
     await keepBefore(path, 'before move')
     const { kinds, excludedFolders, brainFolder } = await loadSettings()
-    const { result, touched } = await collectTouched(() => fileByKind(kinds, path, { excluded: excludedFolders, brain: brainFolder }))
+    const opts = { excluded: excludedFolders, brain: brainFolder, was: typeof was === 'string' ? was : undefined }
+    const { result, touched } = await collectTouched(() => fileByKind(kinds, path, opts))
     if (result.path !== path) refresh().catch(() => {})
     return { ...result, touched }
   },
-  // Undo of the above: the old kind back, and the document back where it was.
+  // Undo of the above, by its token: the old kind back, and the document back where it was.
   'POST /api/place/undo': async (req) => {
-    const { path, prev, platform } = await body<{ path: string; prev: string; platform?: string }>(req)
-    if (typeof prev !== 'string' || (platform !== undefined && typeof platform !== 'string')) throw new HttpError(400, 'Nothing to put back')
-    await keepBefore(path, 'before move')
-    const { result: next, touched } = await collectTouched(() => unfileDoc(path, prev, platform))
+    const { token } = await body<{ token: string }>(req)
+    const { result: next, touched } = await collectTouched(() => unfileDoc(token))
     refresh().catch(() => {})
     return { path: next, touched }
   },

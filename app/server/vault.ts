@@ -1,7 +1,7 @@
 // Reading and writing the vault: a plain folder of Markdown files.
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
-import { constants, promises as fs } from 'node:fs'
+import { constants, existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { joinDoc, joinFrontMatter, patchContent, patchFrontMatter, splitFrontMatter, type MetaPatch } from '../src/lib/frontmatter.ts'
 import { docTags, metaTags } from '../src/lib/tags.ts'
@@ -608,6 +608,7 @@ export async function nameDoc(rel: string, title: string) {
 
 /** Rename a document. Its sidecars (history, Thinking Space, Ekdanta's notes on it) move too, if there are any yet. */
 async function moveDoc(rel: string, next: string) {
+  forgetPlaced(rel, next)
   await adoptOldKey(rel) // so what's still under the old key moves too
   await fs.mkdir(path.dirname(resolveInVault(next)), { recursive: true })
   await fs.rename(resolveInVault(rel), resolveInVault(next))
@@ -631,8 +632,12 @@ const exists = (abs: string) =>
     () => false,
   )
 
-/** Why a document stays where it is when its kind changes. */
-export type Stay = 'special' | 'excluded' | 'brain' | 'unknown-kind'
+/**
+ * Why a document stays where it is when its kind changes: where it is keeps its notes (a special
+ * folder, an excluded one, the Brain), its kind is one the list doesn't have, or the kind's folder
+ * is one of those set-apart folders itself, so filing the note there would take it out of view.
+ */
+export type Stay = 'special' | 'excluded' | 'brain' | 'unknown-kind' | 'target-special' | 'target-excluded' | 'target-brain'
 
 export interface PlaceOptions {
   /** The writer's excluded folders (settings). */
@@ -641,56 +646,100 @@ export interface PlaceOptions {
   brain?: string
 }
 
+/** Which set-apart folder a path is in, if any: the Brain first, since its default folder is a special one too. */
+function apart(rel: string, opts: PlaceOptions): 'special' | 'excluded' | 'brain' | null {
+  if (opts.brain && isBrainPath(rel, opts.brain)) return 'brain'
+  if (isSpecialPath(rel)) return 'special'
+  if (isSpecialPath(rel, opts.excluded)) return 'excluded'
+  return null
+}
+
 /**
  * Where a document's kind files it: the folder it moves to, or null when it's already in that
  * kind's folder (at any depth: essays/2024/ is still the essays folder) or stays put for a reason.
  * A kind's folder is the one already in the vault that holds it, in whatever case it was written,
  * or else the kind's own. Special folders and files, the writer's excluded folders and the Brain
- * keep their notes whatever kind they name: they hold material, or what the writer set aside.
+ * keep their notes whatever kind they name, and are never filed into either: they hold material,
+ * or what the writer set aside, and the app leaves them out of view. `folder` names the kind's
+ * folder when that's why it stayed.
  */
-export async function placement(kinds: Kind[], rel: string, opts: PlaceOptions = {}): Promise<{ to: string | null; stay?: Stay }> {
-  if (isSpecialPath(rel)) return { to: null, stay: 'special' }
-  if (opts.brain && isBrainPath(rel, opts.brain)) return { to: null, stay: 'brain' }
-  if (isSpecialPath(rel, opts.excluded)) return { to: null, stay: 'excluded' }
+export async function placement(kinds: Kind[], rel: string, opts: PlaceOptions = {}): Promise<{ to: string | null; stay?: Stay; folder?: string }> {
+  const here = apart(rel, opts)
+  if (here) return { to: null, stay: here }
   const kind = findKind(kinds, splitFrontMatter(await readDoc(rel)).meta.platform ?? '')
   if (!kind) return { to: null, stay: 'unknown-kind' }
   const holds = (f: string) => kindOfFolder(kinds, f)?.id
   const top = rel.includes('/') ? rel.split('/')[0] : ''
   if (top && holds(top) === kind.id) return { to: null }
   const dirs = (await fs.readdir(VAULT, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name)
-  return { to: dirs.find((d) => holds(d) === kind.id) ?? kind.folder }
+  const to = dirs.find((d) => holds(d) === kind.id) ?? kind.folder
+  const there = apart(`${to}/x.md`, opts)
+  if (there) return { to: null, stay: `target-${there}`, folder: to }
+  return { to }
+}
+
+// The moves a kind change made that may still be undone, by token. A move from or onto the path one
+// left behind, or the note going to the trash, forgets it: Undo must never act on another note.
+const placed = new Map<string, { path: string; prev: string; platform: string }>()
+const forgetPlaced = (...paths: string[]) => {
+  const gone = new Set(paths.map((p) => p.normalize('NFC').toLowerCase()))
+  for (const [token, m] of placed) if (gone.has(m.path.normalize('NFC').toLowerCase())) placed.delete(token)
 }
 
 /**
  * After a kind change, file the document in that kind's folder. It moves from anywhere else,
  * a folder of the writer's own included, through relocate, so everything that belongs to it
- * follows. A name already taken there gets -2. Returns its path, and why it stayed, if it did.
+ * follows. A name already taken there gets -2. Returns its path, why it stayed if it did, and
+ * when it moved, a token that undoes the move (`was` is the kind it had before the change).
  */
-export async function fileByKind(kinds: Kind[], rel: string, opts: PlaceOptions = {}): Promise<{ path: string; stay?: Stay }> {
-  const { to, stay } = await placement(kinds, rel, opts)
-  if (to === null) return stay ? { path: rel, stay } : { path: rel }
-  return { path: await relocate(rel, await freePath(to, path.posix.basename(rel, '.md'))) }
+export async function fileByKind(kinds: Kind[], rel: string, opts: PlaceOptions & { was?: string } = {}): Promise<{ path: string; stay?: Stay; folder?: string; undo?: string }> {
+  const { to, stay, folder } = await placement(kinds, rel, opts)
+  if (to === null) return { path: rel, ...(stay ? { stay } : {}), ...(folder ? { folder } : {}) }
+  const next = await relocate(rel, await freePath(to, path.posix.basename(rel, '.md')))
+  if (opts.was === undefined) return { path: next }
+  const undo = createHash('sha256').update(`${next}\0${rel}\0${Date.now()}\0${Math.random()}`).digest('hex').slice(0, 24)
+  placed.set(undo, { path: next, prev: rel, platform: opts.was })
+  return { path: next, undo }
 }
 
 /** fileByKind, for callers that only want the path. */
 export const placeDoc = async (kinds: Kind[], rel: string, opts: PlaceOptions = {}) => (await fileByKind(kinds, rel, opts)).path
 
-/**
- * Undo a kind change that moved a document: its kind goes back to `platform` and the document to
- * `prev` (or prev-2 if something has taken that name since). Either half is skipped when there's
- * nothing to put back.
- */
-export async function unfileDoc(rel: string, prev: string, platform?: string) {
-  if (platform !== undefined) {
-    const fm = splitFrontMatter(await readDoc(rel))
-    if ((fm.meta.platform ?? '') !== platform) {
-      await editableFrontMatter(rel, 'change the kind of')
-      await patchDoc(rel, { platform: platform || null }, 'move')
-    }
+/** A vault path to a document: Markdown, inside the vault, and in no dot folder (.ekdanta, .git). Else a 400. */
+function docPath(rel: unknown): string {
+  if (typeof rel !== 'string' || !rel.endsWith('.md')) throw new HttpError(400, 'Not a document')
+  const parts = rel.replace(/\\/g, '/').split('/')
+  if (parts.some((part) => !part || part.startsWith('.'))) throw new HttpError(400, 'Not a document')
+  try {
+    resolveInVault(rel)
+  } catch {
+    throw new HttpError(400, 'Not in the vault')
   }
+  return rel
+}
+
+/**
+ * Undo a kind change that moved a document, by the token the move gave: its kind goes back and the
+ * document goes back where it was (prev-2 if something has taken that name since). A token that's
+ * unknown, used, or forgotten because the note has moved or gone since is refused (409).
+ */
+export async function unfileDoc(token: string) {
+  const m = typeof token === 'string' ? placed.get(token) : undefined
+  if (!m) throw new HttpError(409, 'It has moved or changed since, so it can’t be put back from here.')
+  const rel = docPath(m.path)
+  const prev = docPath(m.prev)
+  if (isSpecialPath(prev)) throw new HttpError(400, 'Not a place to put a document back')
+  if (!(await exists(resolveInVault(rel)))) {
+    placed.delete(token)
+    throw new HttpError(404, 'Not in the vault')
+  }
+  const fm = splitFrontMatter(await readDoc(rel))
+  if ((fm.meta.platform ?? '') !== m.platform) {
+    await editableFrontMatter(rel, 'change the kind of')
+    await patchDoc(rel, { platform: m.platform || null }, 'move')
+  }
+  placed.delete(token)
   if (prev === rel) return rel
-  resolveInVault(prev)
-  if (!prev.endsWith('.md')) throw new HttpError(400, 'Not a document')
   return relocate(rel, await freePath(folderOf(prev), path.posix.basename(prev, '.md')))
 }
 
@@ -707,7 +756,13 @@ async function relocate(rel: string, next: string) {
   if (from !== to) {
     const text = await readDoc(moved)
     const fm = splitFrontMatter(text)
-    const body = rebaseLinks(fm.body, from, to)
+    const body = rebaseLinks(fm.body, from, to, (p) => {
+      try {
+        return existsSync(resolveInVault(p))
+      } catch {
+        return false
+      }
+    })
     if (body !== fm.body) await writeDoc(moved, joinDoc({ ...fm, body }), { reason: 'move' })
   }
   const oldName = path.posix.basename(rel, '.md')
@@ -716,30 +771,49 @@ async function relocate(rel: string, next: string) {
   return moved
 }
 
+// A link target: anything but spaces and parentheses, with balanced (one-level) parentheses allowed, as in a_(1).png.
+const TARGET = String.raw`(?:[^\s()<>]|\([^\s()<>]*\))+`
+const INLINE = new RegExp(String.raw`(!?\[(?:[^\]\\]|\\.)*\]\()(<[^>\n]*>|${TARGET})((?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?\s*\))`, 'g')
+const REF_DEF = new RegExp(String.raw`^( {0,3}\[(?:[^\]\\]|\\.)+\]:[ \t]*)(<[^>\n]*>|\S+)(.*)$`)
+const IMG_SRC = /(<img\b[^>]*?\ssrc\s*=\s*)(["'])([^"'\n]*)\2/gi
+
 /**
- * Relative Markdown links and pictures in a body, rewritten for a document that moved from folder
- * `from` to folder `to`, so `../attachments/a.png` still finds its picture. Links to the web, to
- * anchors on the page, vault-absolute ones and anything in code are left alone; so are [[links]],
- * which find their page by name.
+ * Relative links and pictures in a body, rewritten for a document that moved from folder `from` to
+ * folder `to`, so `../attachments/a.png` still finds its picture. Inline links and pictures,
+ * reference definitions (`[a]: pic.png`) and `<img src>` are read. Only a target that names a file
+ * in the vault from the old folder (`isFile`, given a vault path) changes, so a bare domain such as
+ * www.example.com, an anchor or a link that was already broken is left as written. Code (fenced or
+ * indented) is never touched, and [[links]] find their page by name, so they're left alone too.
  */
-export function rebaseLinks(body: string, from: string, to: string): string {
+export function rebaseLinks(body: string, from: string, to: string, isFile: (vaultPath: string) => boolean): string {
   if (from === to) return body
   const fix = (target: string) => {
     if (!target || /^([a-z][a-z0-9+.-]*:|#|\/)/i.test(target)) return target
-    const hash = target.search(/[?#]/)
-    const file = hash < 0 ? target : target.slice(0, hash)
-    const rest = hash < 0 ? '' : target.slice(hash)
+    const cut = target.search(/[?#]/)
+    const file = cut < 0 ? target : target.slice(0, cut)
+    const rest = cut < 0 ? '' : target.slice(cut)
     if (!file) return target
     const abs = path.posix.normalize(path.posix.join(from || '.', file))
-    // A link that already pointed outside the vault isn't Ekdanta's to repair.
-    if (abs.startsWith('../')) return target
+    if (abs.startsWith('../') || abs === '..') return target
+    let plain = abs
+    try {
+      plain = decodeURIComponent(abs)
+    } catch {
+      /* a stray % reads as itself */
+    }
+    if (!isFile(plain) && !(plain !== abs && isFile(abs))) return target
     return path.posix.relative(to || '.', abs) + rest
   }
-  const link = /(!?\[(?:[^\]\\]|\\.)*\]\()(<[^>\n]*>|[^\s()]+)((?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\))/g
+  const angled = (target: string) => (target.startsWith('<') ? `<${fix(target.slice(1, -1))}>` : fix(target))
+  const lines = body.split('\n')
   let fence: string | null = null
-  return body
-    .split('\n')
+  let prevBlank = true
+  let inIndented = false
+  return lines
     .map((line) => {
+      const blank = !line.trim()
+      const wasBlank = prevBlank
+      prevBlank = blank
       const f = line.match(/^\s{0,3}(`{3,}|~{3,})/)
       if (fence) {
         if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null
@@ -749,18 +823,23 @@ export function rebaseLinks(body: string, from: string, to: string): string {
         fence = f[1]
         return line
       }
-      // Inline code is cut out, rebased around, and put back as it was.
+      // An indented code block starts after a blank line and runs while lines stay indented (or blank).
+      if (/^( {4}|\t)/.test(line) && (wasBlank || inIndented)) {
+        inIndented = true
+        return line
+      }
+      if (!blank) inIndented = false
+      const def = line.match(REF_DEF)
+      if (def) return def[1] + angled(def[2]) + def[3]
+      // Inline code is left as it is; links are rebased around it.
       return line
         .split(/(`+[^`]*`+)/)
         .map((part) =>
           part.startsWith('`')
             ? part
-            : part.replace(link, (_m, open: string, target: string, close: string) => {
-                const angled = target.startsWith('<')
-                const inner = angled ? target.slice(1, -1) : target
-                const out = fix(inner)
-                return open + (angled ? `<${out}>` : out) + close
-              }),
+            : part
+                .replace(INLINE, (_m, open: string, target: string, close: string) => open + angled(target) + close)
+                .replace(IMG_SRC, (_m, open: string, q: string, src: string) => `${open}${q}${fix(src)}${q}`),
         )
         .join('')
     })
@@ -940,6 +1019,7 @@ export interface Trashed {
 }
 
 export async function trashDoc(rel: string): Promise<Trashed> {
+  forgetPlaced(rel)
   await adoptOldKey(rel)
   const { meta, body } = splitFrontMatter(await readDoc(rel))
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
@@ -1031,6 +1111,7 @@ export async function discardIfEmpty(rel: string) {
  * them. Only for documents with nothing of the writer's in them (an empty draft, an untouched import).
  */
 export async function deleteDoc(rel: string) {
+  forgetPlaced(rel)
   await adoptOldKey(rel)
   await fs.unlink(resolveInVault(rel))
   cache.invalidate(rel)

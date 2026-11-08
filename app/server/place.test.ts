@@ -89,24 +89,92 @@ test('a move that had to rename a page leaves links by name to the page that kep
   assert.equal(await read('drafts/intro-refs.md'), '[[intro]] and [[scripts/intro-2]]\n')
 })
 
-test('rebaseLinks leaves fenced code and links outside the vault alone', () => {
-  const body = '```\n![x](a.png)\n```\n![y](a.png) [z](../../outside.md) ![s](<my pic.png>)\n'
-  assert.equal(vault.rebaseLinks(body, 'a', 'b/c'), '```\n![x](a.png)\n```\n![y](../../a/a.png) [z](../../outside.md) ![s](<../../a/my pic.png>)\n')
-  assert.equal(vault.rebaseLinks(body, 'a', 'a'), body)
+test('rebaseLinks changes only links to files that are there, in every way Markdown writes them', () => {
+  const files = new Set(['a/a.png', 'a/a_(1).png', 'a/my pic.png', 'a/ref.png', 'a/img.png', 'a/doc.md'])
+  const isFile = (p: string) => files.has(p)
+  const body = [
+    '```',
+    '![x](a.png)',
+    '```',
+    '![y](a.png) [z](../../outside.md) ![s](<my pic.png>) ![e](my%20pic.png)',
+    '[w](www.example.com) [gone](missing.png) [d](doc.md#part "Title") [p](a_(1).png)',
+    '',
+    '    ![indented code](a.png)',
+    '',
+    '[ref]: ref.png "A title"',
+    '<img src="img.png" alt="i"> <img alt=\'x\' src=\'a.png\'>',
+    'Text `![inline](a.png)` after',
+  ].join('\n')
+  assert.equal(
+    vault.rebaseLinks(body, 'a', 'b/c', isFile),
+    [
+      '```',
+      '![x](a.png)',
+      '```',
+      '![y](../../a/a.png) [z](../../outside.md) ![s](<../../a/my pic.png>) ![e](../../a/my%20pic.png)',
+      '[w](www.example.com) [gone](missing.png) [d](../../a/doc.md#part "Title") [p](../../a/a_(1).png)',
+      '',
+      '    ![indented code](a.png)',
+      '',
+      '[ref]: ../../a/ref.png "A title"',
+      '<img src="../../a/img.png" alt="i"> <img alt=\'x\' src=\'../../a/a.png\'>',
+      'Text `![inline](a.png)` after',
+    ].join('\n'),
+  )
+  assert.equal(vault.rebaseLinks(body, 'a', 'a', isFile), body)
+  // An indented line that continues a paragraph is text, not code.
+  assert.equal(vault.rebaseLinks('Para\n    ![a](a.png)\n', 'a', 'b', isFile), 'Para\n    ![a](../a/a.png)\n')
 })
 
-test('undo puts the kind and the place back', async () => {
+test('a kind whose folder is set apart leaves the note where it is, and says so', async () => {
+  const hidden = [
+    { id: 'tpl', name: 'Template', folder: 'templates', guidance: '', words: 100 },
+    { id: 'old', name: 'Old', folder: 'archive', guidance: '', words: 100 },
+    { id: 'src', name: 'Source', folder: 'library', guidance: '', words: 100 },
+  ]
+  await vault.writeDoc('drafts/apart.md', doc('tpl'))
+  assert.deepEqual(await vault.fileByKind(hidden, 'drafts/apart.md'), { path: 'drafts/apart.md', stay: 'target-special', folder: 'templates' })
+  await vault.writeDoc('drafts/apart.md', doc('old'))
+  assert.deepEqual(await vault.fileByKind(hidden, 'drafts/apart.md', { excluded: ['archive'] }), { path: 'drafts/apart.md', stay: 'target-excluded', folder: 'archive' })
+  await vault.writeDoc('drafts/apart.md', doc('src'))
+  assert.deepEqual(await vault.fileByKind(hidden, 'drafts/apart.md', { brain: 'library' }), { path: 'drafts/apart.md', stay: 'target-brain', folder: 'library' })
+})
+
+test('undo puts the kind and the place back, by the token the move gave', async () => {
   await vault.writeDoc('ideas-folder/piece.md', doc('essay'))
-  const moved = await vault.placeDoc(kinds, 'ideas-folder/piece.md')
-  assert.equal(moved, 'essays/piece.md')
-  assert.equal(await vault.unfileDoc(moved, 'ideas-folder/piece.md', 'note'), 'ideas-folder/piece.md')
-  assert.match(await read('ideas-folder/piece.md'), /platform: note/)
+  const placed = await vault.fileByKind(kinds, 'ideas-folder/piece.md', { was: 'note' })
+  assert.equal(placed.path, 'essays/piece.md')
+  assert.ok(placed.undo)
+  await vault.writeDoc('essays/piece.md', doc('essay', 'Edited after the move\n')) // edits don't stop an undo
+  assert.equal(await vault.unfileDoc(placed.undo!), 'ideas-folder/piece.md')
+  assert.match(await read('ideas-folder/piece.md'), /platform: note[\s\S]*Edited after the move/)
+  await assert.rejects(vault.unfileDoc(placed.undo!), (e: Error & { status?: number }) => e.status === 409, 'a token is used once')
   // A kind that wasn't set before is taken away again.
   await vault.writeDoc('ideas-folder/bare.md', '---\ntitle: Bare\nplatform: essay\n---\n\nText\n')
-  const next = await vault.placeDoc(kinds, 'ideas-folder/bare.md')
-  assert.equal(await vault.unfileDoc(next, 'ideas-folder/bare.md', ''), 'ideas-folder/bare.md')
+  const bare = await vault.fileByKind(kinds, 'ideas-folder/bare.md', { was: '' })
+  assert.equal(await vault.unfileDoc(bare.undo!), 'ideas-folder/bare.md')
   assert.doesNotMatch(await read('ideas-folder/bare.md'), /platform/)
-  await assert.rejects(vault.unfileDoc('ideas-folder/bare.md', '../out.md'), /outside/)
+  await assert.rejects(vault.unfileDoc('made-up'), (e: Error & { status?: number }) => e.status === 409)
+})
+
+test('a stale undo never acts on another note', async () => {
+  // The note was renamed after the move, and a new note now has its old path.
+  await vault.writeDoc('ideas-folder/stale.md', doc('essay', 'Original\n'))
+  const a = await vault.fileByKind(kinds, 'ideas-folder/stale.md', { was: 'note' })
+  await vault.renameDoc(a.path, 'Renamed')
+  await vault.writeDoc(a.path, doc('essay', 'Someone else\n'))
+  await assert.rejects(vault.unfileDoc(a.undo!), (e: Error & { status?: number }) => e.status === 409)
+  assert.match(await read(a.path), /Someone else/)
+  // The note went to the trash.
+  await vault.writeDoc('ideas-folder/binned.md', doc('essay'))
+  const b = await vault.fileByKind(kinds, 'ideas-folder/binned.md', { was: 'note' })
+  await vault.trashDoc(b.path)
+  await assert.rejects(vault.unfileDoc(b.undo!), (e: Error & { status?: number }) => e.status === 409)
+  // Gone from disk outside Ekdanta.
+  await vault.writeDoc('ideas-folder/vanished.md', doc('essay'))
+  const c = await vault.fileByKind(kinds, 'ideas-folder/vanished.md', { was: 'note' })
+  await fs.rm(path.join(root, c.path))
+  await assert.rejects(vault.unfileDoc(c.undo!), (e: Error & { status?: number }) => e.status === 404)
 })
 
 test('Move to… keeps pictures working too', async () => {
@@ -131,4 +199,32 @@ test('tags are added and taken away on disk, keeping the rest of the front matte
   await fs.writeFile(path.join(root, 'drafts/odd-fm.md'), odd)
   await assert.rejects(editDocTags('drafts/odd-fm.md', ['x'], []), /Can't tag/)
   assert.equal(await read('drafts/odd-fm.md'), odd)
+  await assert.rejects(editDocTags('drafts/never.md', ['x'], []), (e: Error & { status?: number }) => e.status === 404)
+})
+
+test('a tag edit never writes over a change made on disk after it was read', async () => {
+  const rel = 'drafts/raced.md'
+  await vault.writeDoc(rel, '---\ntitle: Raced\ntags: [a]\n---\n\nOld body\n')
+  let edits = 0
+  // Reads the file, then someone else changes it (as Obsidian might) before the tag is written.
+  const racing = async (r: string) => {
+    const seen = await vault.readWithMtime(r)
+    if (edits++ === 0) {
+      await fs.writeFile(path.join(root, r), '---\ntitle: Raced\ntags: [a]\n---\n\nNew body from elsewhere\n')
+      await fs.utimes(path.join(root, r), new Date(), new Date(Date.now() + 5000))
+    }
+    return seen
+  }
+  assert.deepEqual(await editDocTags(rel, ['b'], [], racing), ['a', 'b'])
+  assert.equal(await read(rel), '---\ntitle: Raced\ntags: [a, b]\n---\n\nNew body from elsewhere\n')
+  // A file that changes every time is left alone, with a 409.
+  let n = 0
+  const always = async (r: string) => {
+    const seen = await vault.readWithMtime(r)
+    await fs.writeFile(path.join(root, r), `---\ntitle: Raced\n---\n\nChange ${n}\n`)
+    await fs.utimes(path.join(root, r), new Date(), new Date(Date.now() + 10000 * ++n))
+    return seen
+  }
+  await assert.rejects(editDocTags(rel, ['c'], [], always), (e: Error & { status?: number }) => e.status === 409)
+  assert.doesNotMatch(await read(rel), /- c|, c/)
 })
