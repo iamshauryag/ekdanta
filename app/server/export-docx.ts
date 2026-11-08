@@ -1,8 +1,6 @@
 // The built-in Word engine, for when pandoc isn't installed: walks the prepared Markdown's tokens and
 // builds the .docx with the `docx` package. It covers what the editor can make: headings, paragraphs,
 // bold, italic, underline, strike, highlight, code, links, lists and to-dos, quotes, tables, images.
-import { promises as fs } from 'node:fs'
-import path from 'node:path'
 import {
   AlignmentType,
   BorderStyle,
@@ -60,19 +58,28 @@ export function imageSize(data: Buffer): { type: 'png' | 'jpg' | 'gif'; width: n
   return null
 }
 
-/** Build a .docx from a prepared document. Images are read from the absolute paths prepare() gave them. */
+/** The bytes in a data: URI, or null if it isn't one. */
+export function fromDataUri(src: string): Buffer | null {
+  const m = /^data:[^,]*?(;base64)?,(.*)$/is.exec(src)
+  if (!m) return null
+  try {
+    return m[1] ? Buffer.from(decodeURIComponent(m[2]), 'base64') : Buffer.from(decodeURIComponent(m[2]))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Build a .docx from a prepared document. Images are embedded only from the data: URIs export made
+ * from files in the vault (or the writer wrote): this engine never reads a file or fetches a URL.
+ */
 export async function builtinDocx(p: Prepared): Promise<{ data: Buffer; warnings: string[] }> {
-  const tokens = tokenizer().parse(p.body, {})
+  const md = tokenizer()
+  // Every data: image is an image here (markdown-it alone takes only PNG, JPEG, GIF and WebP), so an
+  // SVG is reported as a format Word doesn't take rather than left in the text as its data.
+  md.validateLink = () => true
+  const tokens = md.parse(p.body, {})
   const warnings = new Set<string>()
-  // Read every image up front, so the walk below can stay synchronous.
-  const images = new Map<string, Buffer | null>()
-  for (const t of tokens)
-    for (const c of t.children ?? [])
-      if (c.type === 'image') {
-        const src = c.attrGet('src') ?? ''
-        // markdown-it percent-encodes a destination; the file name is the decoded one.
-        if (!images.has(src)) images.set(src, path.isAbsolute(decoded(src)) ? await fs.readFile(decoded(src)).catch(() => null) : null)
-      }
   let lists = 0 // each numbered list restarts at its own number
 
   const runs = (t: Token | undefined): ParagraphChild[] => {
@@ -138,10 +145,11 @@ export async function builtinDocx(p: Prepared): Promise<{ data: Buffer; warnings
           break
         case 'image': {
           const src = c.attrGet('src') ?? ''
-          const data = images.get(src)
+          const data = fromDataUri(src)
           const size = data ? imageSize(data) : null
           if (!data || !size) {
-            const name = decoded(src).split(/[\\/]/).pop()
+            // An embedded image is named by its type, not by its data.
+            const name = /^data:/i.test(src) ? /^data:([^;,]*)/i.exec(src)?.[1] || 'embedded image' : decoded(src).split(/[\\/]/).pop()
             warnings.add(data ? `Image not in a format Word takes (PNG, JPEG, GIF): ${name}` : /^https?:/i.test(src) ? `Image on the web not embedded: ${src}` : `Image missing: ${name}`)
             const alt = c.children?.map((x) => x.content).join('') ?? ''
             if (alt) push(text(`[${alt}]`))

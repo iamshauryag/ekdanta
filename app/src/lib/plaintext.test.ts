@@ -55,6 +55,38 @@ test('images resolve through the callback; missing ones are listed and dropped',
   assert.equal(spaced.body, '![x](</my vault/a.png>)\n')
 })
 
+test('every way of writing an image goes through the callback', () => {
+  const seen: string[] = []
+  const p = prepare(
+    [
+      '![dq](a.png "double")',
+      "![sq](b.png 'single')",
+      '![pt](c.png (paren))',
+      '![parens](d(1).png)',
+      '![angle](<e f.png> "t")',
+      '![full][r1] ![collapsed][] ![shortcut]',
+      '![code `]` in alt](g.png)',
+      '[![nested ![inner](h.png)](i.png)](https://example.com)',
+      '`![in code](no.png)` and \\![escaped](no.png)',
+      '',
+      '[r1]: /outside/full.png',
+      '[collapsed]: <coll ected.png> "ref title"',
+      '[shortcut]: https://example.com/s.png',
+    ].join('\n'),
+    { page, image: (src) => (seen.push(src), { src: `ok/${seen.length}.png` }) },
+  )
+  assert.deepEqual(seen, ['a.png', 'b.png', 'c.png', 'd(1).png', 'e f.png', '/outside/full.png', 'coll%20ected.png', 'https://example.com/s.png', 'g.png', 'i.png', 'h.png'])
+  // Each is written back inline with what the callback gave, its title kept and quoted.
+  assert.match(p.body, /^!\[dq\]\(ok\/1\.png "double"\)\n!\[sq\]\(ok\/2\.png "single"\)\n!\[pt\]\(ok\/3\.png "paren"\)\n!\[parens\]\(ok\/4\.png\)\n/)
+  assert.match(p.body, /!\[full\]\(ok\/6\.png\) !\[collapsed\]\(ok\/7\.png "ref title"\) !\[shortcut\]\(ok\/8\.png\)/)
+  assert.match(p.body, /\[!\[nested !\[inner\]\(ok\/11\.png\)\]\(ok\/10\.png\)\]\(https:\/\/example\.com\)/)
+  // A refused image is gone, whatever its form; one in code or escaped is not an image.
+  const refused = prepare("![x][r] ![y](<z (1).png> 't')\n\n[r]: /outside/secret.png\n", { page, image: (src) => ({ warning: `Image missing: ${src}` }) })
+  assert.doesNotMatch(refused.body, /!\[/)
+  assert.deepEqual(refused.warnings, ['Image missing: /outside/secret.png', 'Image missing: z (1).png'])
+  assert.match(p.body, /`!\[in code\]\(no\.png\)` and \\!\[escaped\]\(no\.png\)/)
+})
+
 test('footnotes and citations are counted; only engines without them warn', () => {
   const p = prepare('A claim.[^1] Another [@smith2020, p. 4].\n\n[^1]: The note.\n', { page })
   assert.deepEqual(p.counts, { footnotes: 1, citations: 1 })

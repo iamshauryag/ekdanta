@@ -52,7 +52,6 @@ function outsideCode(line: string, fn: (text: string) => string) {
 }
 
 const WIKI = /(!?)\[\[([^\]\n[]+)\]\]/g
-const IMAGE = /!\[((?:\\.|[^\]\\])*)\]\(\s*(<[^>\n]*>|[^\s)]+)(\s+"[^"]*")?\s*\)/g
 const TAG = /<!--[\s\S]*?-->|<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?\/?>/g
 
 /** Prepare a document's Markdown for export. `content` is the whole file, front matter and all. */
@@ -66,7 +65,9 @@ export function prepare(content: string, opts: PrepareOptions): Prepared {
   const html = new Set<number>()
   let htmlBlocks = 0
   let htmlTags = 0
-  for (const t of tokenizer().parse(body, {})) {
+  // The link reference definitions, for images written as ![alt][ref].
+  const env: { references?: References } = {}
+  for (const t of tokenizer().parse(body, env)) {
     if (!t.map) continue
     const [from, to] = t.map
     if (t.type === 'fence' || t.type === 'code_block') for (let i = from; i < to; i++) code.add(i)
@@ -92,13 +93,13 @@ export function prepare(content: string, opts: PrepareOptions): Prepared {
   }
 
   const missing = new Set<string>()
-  const image = (alt: string, src: string, title = '') => {
-    const raw = src.replace(/^<|>$/g, '')
-    const r = opts.image ? opts.image(raw) : { src: raw }
+  const image = (alt: string, src: string, title = ''): string => {
+    const r = opts.image ? opts.image(src) : { src }
     if (r.warning) missing.add(r.warning)
     if (!r.src) return ''
-    const out = /[\s()]/.test(r.src) ? `<${r.src}>` : r.src
-    return `![${alt}](${out}${title})`
+    const out = /[\s()<>\\]/.test(r.src) ? `<${r.src.replace(/[<>\\]/g, '\\$&')}>` : r.src
+    // An image in the alt text is an image too.
+    return `![${images(alt, env.references, image)}](${out}${title ? ` "${title.replace(/["\\]/g, '\\$&')}"` : ''})`
   }
   const wiki = (_m: string, bang: string, inner: string) => {
     const [target, label] = inner.split('|')
@@ -131,24 +132,26 @@ export function prepare(content: string, opts: PrepareOptions): Prepared {
     if (blockOf[i] !== -1) while (end < lines.length && blockOf[end] === blockOf[i]) end++
     const chunk = lines.slice(i, end).join('\n')
     i = end - 1
+    // Links and images are set aside while raw HTML is looked for, so `<a path.png>` isn't taken for a tag.
+    // Images go first, over the whole block: a code span can sit in an image's alt text.
+    const kept: string[] = []
+    const keep = (s: string) => `\u0001${kept.push(s) - 1}\u0001`
     out.push(
-      outsideCode(chunk, (text) => {
-        footnotes += (text.match(/\[\^[^\]\s]+\](?!:)/g) ?? []).length
-        citations += (text.match(/\[[^\]]*-?@[\w:.#$%&+?<>~/-]+[^\]]*\]/g) ?? []).length
-        // Links and images are set aside while raw HTML is looked for, so `<a path.png>` isn't taken for a tag.
-        const kept: string[] = []
-        const keep = (s: string) => `\u0001${kept.push(s) - 1}\u0001`
-        return text
-          .replace(IMAGE, (_m, alt: string, src: string, title?: string) => keep(image(alt, src, title ?? '')))
-          .replace(WIKI, (...m: string[]) => keep(wiki(m[0], m[1], m[2])))
-          .replace(TAG, (tag) => {
-            if (/^<\/?u>$/i.test(tag)) return tag
-            if (tag.startsWith('<!--')) return ''
-            htmlTags++
-            return tag.replace(/</g, '\\<')
-          })
-          .replace(/\u0001(\d+)\u0001/g, (_m, k: string) => kept[Number(k)])
-      }),
+      outsideCode(
+        images(chunk, env.references, (alt, src, title) => keep(image(alt, src, title))),
+        (text) => {
+          footnotes += (text.match(/\[\^[^\]\s]+\](?!:)/g) ?? []).length
+          citations += (text.match(/\[[^\]]*-?@[\w:.#$%&+?<>~/-]+[^\]]*\]/g) ?? []).length
+          return text
+            .replace(WIKI, (...m: string[]) => keep(wiki(m[0], m[1], m[2])))
+            .replace(TAG, (tag) => {
+              if (/^<\/?u>$/i.test(tag)) return tag
+              if (tag.startsWith('<!--')) return ''
+              htmlTags++
+              return tag.replace(/</g, '\\<')
+            })
+        },
+      ).replace(/\u0001(\d+)\u0001/g, (_m, k: string) => kept[Number(k)]),
     )
   }
   if (htmlBlocks) warnings.push(`${plural(htmlBlocks, 'HTML block')} exported as text`)
@@ -167,6 +170,120 @@ export function prepare(content: string, opts: PrepareOptions): Prepared {
     warnings,
     counts: { footnotes, citations },
   }
+}
+
+type References = Record<string, { href: string; title: string }>
+const {
+  helpers,
+  utils: { normalizeReference },
+} = new MarkdownIt()
+
+/**
+ * Every image in `text`, found as markdown-it finds them: inline or by reference (`![a][ref]`,
+ * `![a][]`, `![a]`), with a title in "quotes", 'quotes' or (parentheses), and a destination that may
+ * be in <angle brackets> or hold balanced parentheses. Each is replaced by what `fn` makes of its alt
+ * (as written), destination and title (both unescaped). Code spans and escaped characters are passed
+ * over. Nothing an engine would read as an image can get past this to the engine unchecked.
+ */
+function images(text: string, refs: References | undefined, fn: (alt: string, src: string, title: string) => string): string {
+  let out = ''
+  let i = 0
+  while (i < text.length) {
+    const c = text[i]
+    if (c === '\\') {
+      out += text.slice(i, i + 2)
+      i += 2
+    } else if (c === '`') {
+      const end = codeSpanEnd(text, i)
+      out += text.slice(i, end)
+      i = end
+    } else if (c === '!' && text[i + 1] === '[') {
+      const img = imageAt(text, i, refs)
+      if (img) {
+        out += fn(img.alt, img.src, img.title)
+        i = img.end
+      } else {
+        out += '!['
+        i += 2
+      }
+    } else {
+      out += c
+      i++
+    }
+  }
+  return out
+}
+
+/** The end of the code span or backtick run at `i`; a run with no closing run is plain backticks. */
+function codeSpanEnd(text: string, i: number) {
+  const runEnd = (from: number) => {
+    let n = from
+    while (text[n] === '`') n++
+    return n
+  }
+  const open = runEnd(i)
+  for (let j = text.indexOf('`', open); j >= 0;) {
+    const end = runEnd(j)
+    if (end - j === open - i) return end
+    j = text.indexOf('`', end)
+  }
+  return open
+}
+
+/** Where the link label opened just before `from` closes (the index of its `]`), or -1. */
+function labelEnd(text: string, from: number) {
+  let level = 1
+  for (let i = from; i < text.length;) {
+    const c = text[i]
+    if (c === '\\') i += 2
+    else if (c === '`') i = codeSpanEnd(text, i)
+    else {
+      if (c === '[') level++
+      else if (c === ']' && --level === 0) return i
+      i++
+    }
+  }
+  return -1
+}
+
+/** The image that starts with the `![` at `i`, as markdown-it's image rule reads it, or null if it isn't one. */
+function imageAt(text: string, i: number, refs: References | undefined): { alt: string; src: string; title: string; end: number } | null {
+  const close = labelEnd(text, i + 2)
+  if (close < 0) return null
+  const alt = text.slice(i + 2, close)
+  const ws = (p: number) => {
+    while (p < text.length && /[ \t\n]/.test(text[p])) p++
+    return p
+  }
+  let pos = close + 1
+  if (text[pos] === '(') {
+    pos = ws(pos + 1)
+    let src = ''
+    const dest = helpers.parseLinkDestination(text, pos, text.length)
+    if (dest.ok) {
+      src = dest.str
+      pos = dest.pos
+    }
+    const before = pos
+    pos = ws(pos)
+    let title = ''
+    const t = helpers.parseLinkTitle(text, pos, text.length)
+    if (pos > before && t.ok) {
+      title = t.str
+      pos = ws(t.pos)
+    }
+    return text[pos] === ')' ? { alt, src, title, end: pos + 1 } : null
+  }
+  let label = ''
+  if (text[pos] === '[') {
+    const end = labelEnd(text, pos + 1)
+    if (end >= 0) {
+      label = text.slice(pos + 1, end)
+      pos = end + 1
+    }
+  }
+  const ref = refs?.[normalizeReference(label || alt)]
+  return ref ? { alt, src: ref.href, title: ref.title, end: pos } : null
 }
 
 /**

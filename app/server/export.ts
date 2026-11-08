@@ -1,14 +1,16 @@
 // Export: a document as a .docx, a standalone HTML page or clean Markdown, downloaded or saved to
 // exports/ in the vault. The source file is only ever read. Word files come from pandoc when it's
 // installed (it runs on this machine, so the route is local-only) and from the built-in engine
-// otherwise. Copying as text and printing to PDF happen in the app, from the same prepare().
+// otherwise. Images reach either engine only as data: URIs made here from files in the vault, and
+// pandoc runs sandboxed, so neither reads a file or fetches anything a note points it at. Copying as
+// text and printing to PDF happen in the app, from the same prepare().
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { docTitle, exportName, htmlDocument, prepare, syntaxWarnings, toMarkdown, type Prepared } from '../src/lib/plaintext.ts'
 import { builtinDocx } from './export-docx.ts'
 import { HttpError, runTool, which } from './net.ts'
-import { atomicWrite, listFiles, readDoc, resolveInVault } from './vault.ts'
+import { atomicWrite, listFiles, readDoc, resolveInVault, VAULT } from './vault.ts'
 
 export type FileFormat = 'docx' | 'html' | 'md'
 export interface ExportRequest {
@@ -37,7 +39,17 @@ const IMAGE_TYPES: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg
 
 let found: { at: number; info: Promise<{ path: string; version: string } | null> } | null = null
 
-/** Pandoc, if it's installed (looked for again after a minute, so installing it needs no restart). EKDANTA_NO_PANDOC=1 hides it. */
+/** Pandoc 2.15 or later is the first that can run with --sandbox: no reading files or fetching URLs a document names. */
+export const canSandbox = (version: string) => {
+  const [major = 0, minor = 0] = version.split('.').map(Number)
+  return major > 2 || (major === 2 && minor >= 15)
+}
+
+/**
+ * Pandoc, if it's installed and can be sandboxed (looked for again after a minute, so installing it
+ * needs no restart). An older one is left alone and the built-in engine makes Word files instead.
+ * EKDANTA_NO_PANDOC=1 hides it.
+ */
 export function pandoc(): Promise<{ path: string; version: string } | null> {
   if (process.env.EKDANTA_NO_PANDOC === '1') return Promise.resolve(null)
   if (!found || Date.now() - found.at > 60_000) {
@@ -46,7 +58,8 @@ export function pandoc(): Promise<{ path: string; version: string } | null> {
       if (!bin) return null
       try {
         const { stdout } = await runTool(bin, ['--version'], { timeoutMs: 10_000 })
-        return { path: bin, version: stdout.match(/pandoc\S*\s+([\d.]+)/)?.[1] ?? '' }
+        const version = stdout.match(/pandoc\S*\s+([\d.]+)/)?.[1] ?? ''
+        return canSandbox(version) ? { path: bin, version } : null
       } catch {
         return null
       }
@@ -106,7 +119,8 @@ async function pandocDocx(bin: string, p: Prepared): Promise<Buffer> {
     await fs.writeFile(input, forPandoc(p.body))
     await fs.writeFile(filter, UNDERLINE_FILTER)
     const meta = (['title', 'author', 'date'] as const).flatMap((k) => (p[k] ? ['-M', `${k}=${p[k]}`] : []))
-    await runTool(bin, ['-f', PANDOC_FROM, '-t', 'docx', '--lua-filter', filter, ...meta, '-o', output, input], { timeoutMs: 60_000, cwd: dir })
+    // --sandbox: the only files pandoc reads are the ones named here; images come as data: URIs.
+    await runTool(bin, ['--sandbox', '-f', PANDOC_FROM, '-t', 'docx', '--lua-filter', filter, ...meta, '-o', output, input], { timeoutMs: 60_000, cwd: dir })
     return await fs.readFile(output)
   } finally {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
@@ -140,6 +154,9 @@ export async function exportDoc(req: ExportRequest): Promise<ExportResult> {
   const lower = new Map([...byName].map(([k, v]) => [k.toLowerCase(), v]))
   const page = (target: string) => byName.get(target) ?? lower.get(target.toLowerCase()) ?? null
 
+  // Every image in the document comes through here (prepare() finds them all, however written). A
+  // file is used only if it is in the vault, symlinks followed; anything else is left out with a warning.
+  const vaultReal = await fs.realpath(VAULT)
   const image = async (src: string): Promise<{ src?: string; warning?: string }> => {
     if (/^data:/i.test(src)) return { src }
     if (/^https?:/i.test(src)) {
@@ -150,14 +167,15 @@ export async function exportDoc(req: ExportRequest): Promise<ExportResult> {
     let file: string
     let inVault: string
     try {
+      if (!src) throw new Error('No image')
       inVault = path.posix.normalize(path.posix.join(docDir, decodeURI(src).replace(/^\/+/, '')))
-      file = resolveInVault(inVault)
-      await fs.access(file)
+      file = await fs.realpath(resolveInVault(inVault))
+      if (!file.startsWith(vaultReal + path.sep) || !(await fs.stat(file)).isFile()) throw new Error('Not in the vault')
     } catch {
       return { warning: `Image missing: ${src}` }
     }
-    if (format === 'docx') return { src: file }
     if (format === 'md') return { src: encodeURI(rel(destDir, inVault)) }
+    // HTML carries its images inside; so does a Word file, and the engines read nothing themselves.
     const type = IMAGE_TYPES[file.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? '']
     if (!type) return { warning: `Not an image: ${src}` }
     return { src: `data:${type};base64,${(await fs.readFile(file)).toString('base64')}` }
