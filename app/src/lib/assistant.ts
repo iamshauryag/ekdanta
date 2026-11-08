@@ -140,7 +140,7 @@ export function asksForDraft(message: string, opts: { pageEmpty?: boolean } = {}
   if (/\b(don['’]?t|do not|never|not)\b/i.test(m)) return false
   const nouns = '(post|piece|draft|essay|article|newsletter|script|email|thread|story|blog(?:\\s+post)?|thing|version|tweet)'
   const end = String.raw`(?=\s*$|\s*[.!?,;:]|\s+(?:for\s+me|about|on|around|from\s+(?:my|these|the)\s+notes|in\s+my\s+(?:own\s+)?voice|based\s+on|using\s+my|of\s+(?:this|it|the\s+piece|my\s+notes))\b)`
-  const strict = new RegExp(String.raw`\b(?:write|draft|ghostwrite)\s+(?:me\s+)?(?:the|a|an|this|my|it\s+as\s+an?)\s+(?:whole\s+|full\s+|first\s+|complete\s+|new\s+|entire\s+)?${nouns}${end}`, 'iu')
+  const strict = new RegExp(String.raw`\b(?:write|draft|ghostwrite)\s+(?:me\s+)?(?:the|a|an|this|my|it\s+as\s+an?)\s+(?:[\p{L}\p{N}'’-]+\s+){0,2}${nouns}${end}`, 'iu')
   const forMe = /\b(write|draft)\s+(it|this|one)(\s+out)?\s+for\s+me\b|^(please\s+)?draft\s+(it|this)(\s+for\s+me)?\s*[.!]?$|\bwrite\s+(it|this)\s+(all\s+)?(out|up)(\s+for\s+me)?\s*[.!]?$/i
   const hit = strict.exec(m)
   const asked = Boolean(hit) || forMe.test(m)
@@ -148,6 +148,7 @@ export function asksForDraft(message: string, opts: { pageEmpty?: boolean } = {}
   // A part named after the piece's noun ("the post title", "the story ending") is a part.
   const after = hit ? m.slice(hit.index + hit[0].length) : m
   if (PART.test(after.split(/\b(?:about|on|around|based on)\b/i)[0])) return false
+  // Up to two words may describe the piece ("a short LinkedIn post", "an X thread"), but never a part.
   if (hit && PART.test(hit[0])) return false
   return opts.pageEmpty !== false || WHOLE.test(m)
 }
@@ -331,6 +332,9 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
   const proposals: Proposal[] = []
   const dropped: Dropped[] = []
   const sel = opts.selection ?? null
+  // The piece's own words, for telling a typo from a word the writer meant (built once, when needed).
+  let vocab: Set<string> | undefined
+  const vocabulary = () => (vocab ??= new Set(text.toLowerCase().match(/[\p{L}\p{N}'’]+/gu) ?? []))
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
     const o = item as Record<string, unknown>
@@ -390,7 +394,7 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
         drop('too many', part || own)
         continue
       }
-      const flag = opts.ask ? checkScope(opts.ask, part, piece.replace) : null
+      const flag = opts.ask ? checkScope({ ...opts.ask, vocabulary: vocabulary() }, part, piece.replace) : null
       const outside = !!sel && (start < sel[0] || end > sel[1])
       // Both notes when both hold. "Only what you asked" is never offered outside the selection.
       const beyond = [flag?.note, outside ? 'Outside the part you selected.' : ''].filter(Boolean).join(' ')

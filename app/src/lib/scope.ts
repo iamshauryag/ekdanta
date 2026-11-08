@@ -29,6 +29,8 @@ export interface Ask {
   noEmoji: boolean
   noHashtags: boolean
   noDashes: boolean
+  /** The words of the piece, lowercased: a typo fix may turn a short word into one of these. */
+  vocabulary?: Set<string>
 }
 
 const segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'word' }) : undefined
@@ -135,13 +137,30 @@ function canonical(word: string) {
     .replace(/ae|oe/g, 'e')
 }
 
-/** The same word, spelled right: a typo fixed, never a different word. Short words don't count: "He" to "We" is a new word. */
-function typo(a: string, b: string) {
+/** Very common English words: a short "word" that is none of these, nor in the piece, is likely a typo. */
+const COMMON = new Set(
+  (
+    'the and for are but not you all any can had her was one our out day get has him his how man new now old see two way who boy did its let put say she too use ' +
+    'that with have this will your from they know want been good much some time very when come here just like long make many more only over such take than them ' +
+    'well were what then also back into year most even made after where think which their there these would about other could first those people because through ' +
+    'being thing things every never always little still write wrote work works team week said says same each why may own off yes yet got via per'
+  ).split(' '),
+)
+
+/**
+ * The same word, spelled right: a typo fixed, never a different word. Longer words may differ by one
+ * edit (two from 8 letters). A word of 3 or 4 letters only when it isn't itself a word ("teh" → "the"),
+ * and becomes a common word or one the piece uses; "He" → "We" and "then" → "than" are new words.
+ */
+function typo(a: string, b: string, vocabulary?: Set<string>) {
   const x = graphemes(a.toLowerCase())
   const y = graphemes(b.toLowerCase())
   const n = Math.min(x.length, y.length)
   const d = distance(x, y)
-  return d === 0 || (n >= 5 && d === 1) || (n >= 8 && d === 2)
+  if (d === 0 || (n >= 5 && d === 1) || (n >= 8 && d === 2)) return true
+  const known = (w: string) => COMMON.has(w) || (vocabulary?.has(w) ?? false)
+  // The piece holds the typo itself, so only the common list says whether the original is a word.
+  return n >= 3 && d === 1 && !COMMON.has(a.toLowerCase()) && known(b.toLowerCase())
 }
 
 const tokens = (s: string) => s.split(/\s+/).filter(Boolean)
@@ -150,7 +169,7 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const termRe = (term: string) => new RegExp(`(^|[^\\p{L}\\p{N}])${escape(term)}(?![\\p{L}\\p{N}])`, 'giu')
 
 /** Does turning `del` into `ins` do this, and only this? */
-function fits(intent: Intent, del: string, ins: string): boolean {
+function fits(intent: Intent, del: string, ins: string, vocabulary?: Set<string>): boolean {
   switch (intent.kind) {
     case 'emoji':
       return sp(stripEmoji(del)) === sp(stripEmoji(ins)) && !hasEmoji(ins)
@@ -171,7 +190,7 @@ function fits(intent: Intent, del: string, ins: string): boolean {
       if (a.length !== b.length || !a.length || newlines(del) !== newlines(ins)) return false
       const word = (w: string) => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
       const edge = (w: string) => w.slice(0, w.length - w.replace(/^[^\p{L}\p{N}]+/u, '').length) + '|' + (w.match(/[^\p{L}\p{N}]+$/u)?.[0] ?? '')
-      return a.every((w, i) => edge(w) === edge(b[i]) && (intent.variety === 'regional' ? canonical(word(w)) === canonical(word(b[i])) : typo(word(w), word(b[i]))))
+      return a.every((w, i) => edge(w) === edge(b[i]) && (intent.variety === 'regional' ? canonical(word(w)) === canonical(word(b[i])) : typo(word(w), word(b[i]), vocabulary)))
     }
     case 'remove':
       return termRe(intent.term).test(del) && sp(del.replace(termRe(intent.term), '$1')) === sp(ins)
@@ -244,7 +263,7 @@ export function checkScope(ask: Ask, find: string, replace: string): ScopeFlag |
   const broke = `This ${limits.join(' and ')}, which you asked not to.`
   if (ask.open) return limits.length ? { note: broke } : null
 
-  const inScope = (h: { del: string; ins: string }) => ask.intents.some((i) => fits(i, h.del, h.ins))
+  const inScope = (h: { del: string; ins: string }) => ask.intents.some((i) => fits(i, h.del, h.ins, ask.vocabulary))
   const beyond = changed.filter((h) => !inScope(h))
   if (!beyond.length && !limits.length) return null
   const narrow = tidy(hunks.map((h) => h.eq + (h.del || h.ins ? (inScope(h) ? h.ins : carryOut(ask, h.del)) : '')).join(''), find)

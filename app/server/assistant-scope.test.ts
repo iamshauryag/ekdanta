@@ -511,3 +511,51 @@ test('the idea partner treats ceiling 6 as 5', async () => {
   const { partnerLevel } = await import('./idea-partner.ts')
   assert.equal(partnerLevel(6), partnerLevel(5))
 })
+
+test('a draft ask may describe the piece in a word or two, and parts are still never drafts', () => {
+  for (const m of [
+    'write a linkedin post about hiring',
+    'write a short post about remote work',
+    'write a new linkedin post',
+    'write a twitter thread on slow writing',
+    'write an X thread about pricing',
+    'draft a quick newsletter for me',
+  ])
+    assert.ok(asksForDraft(m), m)
+  for (const m of [
+    'write the email subject line',
+    'write the post title',
+    'write the story ending',
+    'write the essay conclusion',
+    'write a draft of the closing paragraph',
+    'write a post hook',
+    'write a thread opener',
+    'can you write the post in british english',
+    'write a better opening for the post',
+    'write a catchy hook post',
+  ])
+    assert.equal(asksForDraft(m), false, m)
+  assert.equal(asksForDraft('write a linkedin post about hiring', { pageEmpty: false }), false)
+})
+
+test('a typo ask fixes short typos into real words, but never swaps one real word for another', () => {
+  const typos = readAsk('fix typos')
+  const text = 'teh team shipped. Thsi week we wrote then left. He went.'
+  const r = checkProposals(
+    [
+      { find: 'teh team', replace: 'the team' },
+      { find: 'Thsi week', replace: 'This week' },
+      { find: 'wrote then left', replace: 'wrote than left' },
+      { find: 'He went', replace: 'We went' },
+    ],
+    text,
+    { level: 5, ask: typos },
+  )
+  const flagged = (f: string) => r.proposals.find((p) => p.find === f)?.beyond
+  assert.equal(flagged('teh'), undefined)
+  assert.equal(flagged('Thsi'), undefined)
+  assert.ok(flagged('then'))
+  assert.ok(flagged('He'))
+  // A word the piece uses elsewhere counts as a real word to fix towards.
+  assert.equal(checkScope({ ...typos, vocabulary: new Set(['ekdanta', 'app']) }, 'the apd', 'the app'), null)
+})
