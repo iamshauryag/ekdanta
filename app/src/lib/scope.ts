@@ -16,7 +16,7 @@ export type Intent =
   | { kind: 'dashes' }
   | { kind: 'punctuation' }
   | { kind: 'case' }
-  | { kind: 'spelling' }
+  | { kind: 'spelling'; variety: 'regional' | 'typos' }
   | { kind: 'remove'; term: string }
   | { kind: 'replace'; term: string; with: string }
 
@@ -35,12 +35,22 @@ const segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.
 /** A word diff that also splits scripts written without spaces (Chinese, Japanese, Thai) into words. */
 export const wordDiff = (a: string, b: string) => diffWordsWithSpace(a, b, segmenter ? { intlSegmenter: segmenter } : undefined)
 
-const EMOJI = /[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}️‍⃣]/gu
+// An emoji is a pictograph shown as one: emoji by default, or a text symbol (©, ®, ™, ‼, ℹ…) only when
+// followed by U+FE0F. Skin tones, keycaps, tags and joiners belong to it only inside its sequence, so a
+// zero-width joiner in Malayalam or Sinhala text is never taken for part of an emoji.
+const EMOJI_SEQ = String.raw`(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}️)(?:[\u{1F3FB}-\u{1F3FF}️⃣\u{E0020}-\u{E007F}]|‍(?:\p{Emoji_Presentation}|\p{Extended_Pictographic})️?)*|[\u{1F1E6}-\u{1F1FF}]{2}|[#*0-9]️?⃣`
+const EMOJI = new RegExp(EMOJI_SEQ, 'gu')
 const HASHTAGS = /(^|[^\p{L}\p{N}_&])#[\p{L}\p{N}_]+/gu
 const HASHTAG = /(^|[^\p{L}\p{N}_&])#[\p{L}\p{N}_]+/u
-export const hasEmoji = (s: string) => /\p{Extended_Pictographic}/u.test(s)
+export const hasEmoji = (s: string) => new RegExp(EMOJI_SEQ, 'u').test(s)
 export const stripEmoji = (s: string) => s.replace(EMOJI, '')
-const sp = (s: string) => s.replace(/\s+/g, ' ').trim()
+/** Spacing compared loosely, line breaks exactly: runs of spaces are one, spaces at line ends don't count, but a paragraph break is never the same as a space. */
+const sp = (s: string) =>
+  s
+    .replace(/[ \t ]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/^ | $/g, '')
+const newlines = (s: string) => (s.match(/\n/g) ?? []).length
 
 const REMOVE = /\b(remove|delete|strip|drop|cut|take out|get rid|lose|kill|clear|no|without|ditch)\b/i
 const OPEN =
@@ -60,7 +70,8 @@ export function readAsk(message: string): Ask {
   if (dashes && (removes || /\b(replace|swap|change|fix|use)\b/i.test(m))) intents.push({ kind: 'dashes' })
   if (/\b(punctuation|commas?|apostrophes?|quotation marks|semicolons?|oxford comma|full stops?)\b/i.test(m)) intents.push({ kind: 'punctuation' })
   if (/\b(sentence case|title case|lower ?case|upper ?case|capitali[sz]\w*|capital letters|caps)\b/i.test(m)) intents.push({ kind: 'case' })
-  if (/\b(british|uk|australian|american|us|canadian|indian)\s+(english|spellings?)\b|\b(typos?|spelling|misspell\w*)\b|\bin british\b/i.test(m)) intents.push({ kind: 'spelling' })
+  if (/\b(british|uk|australian|american|us|canadian|indian)\s+(english|spellings?)\b|\bin (british|american)\b/i.test(m)) intents.push({ kind: 'spelling', variety: 'regional' })
+  else if (/\b(typos?|spelling|misspell\w*)\b/i.test(m)) intents.push({ kind: 'spelling', variety: 'typos' })
   // No lookbehind anywhere here: it blanks the page on older Safari.
   const WORD = `([\\p{L}\\p{N}'’-]+)`
   const replace = m.match(
@@ -79,20 +90,58 @@ export function readAsk(message: string): Ask {
   return { intents, open, noEmoji: emoji && removes, noHashtags: hashtags && removes, noDashes: dashes && removes }
 }
 
-/** Levenshtein distance, for short words. */
-function distance(a: string, b: string) {
-  if (a === b) return 0
-  const row = Array.from({ length: b.length + 1 }, (_, i) => i)
-  for (let i = 1; i <= a.length; i++) {
-    let prev = row[0]
-    row[0] = i
+/** Edit distance with a swap of two neighbouring letters counted as one edit, over graphemes. */
+function distance(a: string[], b: string[]) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)))
+  for (let i = 1; i <= a.length; i++)
     for (let j = 1; j <= b.length; j++) {
-      const cur = row[j]
-      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1))
-      prev = cur
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1)
     }
+  return d[a.length][b.length]
+}
+
+const graphemer = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : undefined
+const graphemes = (s: string) => (graphemer ? [...graphemer.segment(s)].map((g) => g.segment) : [...s])
+
+/** A word in a common spelling: British and American variants of the same word come out the same. */
+function canonical(word: string) {
+  const w = word.toLowerCase().replace(/[’']/g, "'")
+  const fixed: Record<string, string> = {
+    grey: 'gray',
+    programme: 'program',
+    cheque: 'check',
+    tyre: 'tire',
+    kerb: 'curb',
+    plough: 'plow',
+    aluminium: 'aluminum',
+    mould: 'mold',
+    manoeuvre: 'maneuver',
+    jewellery: 'jewelry',
+    storey: 'story',
+    pyjamas: 'pajamas',
+    draught: 'draft',
+    sceptical: 'skeptical',
   }
-  return row[b.length]
+  if (fixed[w]) return fixed[w]
+  return w
+    .replace(/our(s|ed|ing|ite|ites|able|ful|less)?$/, 'or$1')
+    .replace(/is(e|es|ed|ing|ation|ations|er|ers)$/, 'iz$1')
+    .replace(/ys(e|es|ed|ing)$/, 'yz$1')
+    .replace(/([^aeiou])re(s|d)?$/, '$1er$2')
+    .replace(/ogue(s)?$/, 'og$1')
+    .replace(/ence(s)?$/, 'ense$1')
+    .replace(/ll(ed|ing|er|ers|ation)$/, 'l$1')
+    .replace(/ae|oe/g, 'e')
+}
+
+/** The same word, spelled right: a typo fixed, never a different word. Short words don't count: "He" to "We" is a new word. */
+function typo(a: string, b: string) {
+  const x = graphemes(a.toLowerCase())
+  const y = graphemes(b.toLowerCase())
+  const n = Math.min(x.length, y.length)
+  const d = distance(x, y)
+  return d === 0 || (n >= 5 && d === 1) || (n >= 8 && d === 2)
 }
 
 const tokens = (s: string) => s.split(/\s+/).filter(Boolean)
@@ -106,19 +155,23 @@ function fits(intent: Intent, del: string, ins: string): boolean {
     case 'emoji':
       return sp(stripEmoji(del)) === sp(stripEmoji(ins)) && !hasEmoji(ins)
     case 'hashtags':
-      return sp(del.replace(HASHTAGS, '$1')) === sp(ins) || sp(del.replace(/#(?=[\p{L}\p{N}_])/gu, '')) === sp(ins)
+      // The tag taken out whole, or only its "#" ("Great #post" → "Great post", "Issue #5" → "Issue 5").
+      return sp(del.replace(HASHTAGS, '$1')) === sp(ins) || sp(del.replace(/#(?=[\p{L}\p{N}_]|$)/gu, '')) === sp(ins)
     case 'dashes':
     case 'punctuation': {
-      const letters = (s: string) => s.replace(/[^\p{L}\p{N}]/gu, '')
-      return letters(del) === letters(ins)
+      // Only punctuation may change: the words, the emoji and every line break stay.
+      const bare = (s: string) => s.replace(/[\p{P}\s]/gu, '')
+      return bare(del) === bare(ins) && newlines(del) === newlines(ins)
     }
     case 'case':
       return del.toLocaleLowerCase() === ins.toLocaleLowerCase()
     case 'spelling': {
       const a = tokens(del)
       const b = tokens(ins)
-      if (a.length !== b.length || !a.length) return false
-      return a.every((w, i) => distance(w.toLowerCase(), b[i].toLowerCase()) <= Math.max(1, Math.floor(Math.max(w.length, b[i].length) / 3)))
+      if (a.length !== b.length || !a.length || newlines(del) !== newlines(ins)) return false
+      const word = (w: string) => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')
+      const edge = (w: string) => w.slice(0, w.length - w.replace(/^[^\p{L}\p{N}]+/u, '').length) + '|' + (w.match(/[^\p{L}\p{N}]+$/u)?.[0] ?? '')
+      return a.every((w, i) => edge(w) === edge(b[i]) && (intent.variety === 'regional' ? canonical(word(w)) === canonical(word(b[i])) : typo(word(w), word(b[i]))))
     }
     case 'remove':
       return termRe(intent.term).test(del) && sp(del.replace(termRe(intent.term), '$1')) === sp(ins)
@@ -137,6 +190,15 @@ function carryOut(ask: Ask, del: string): string {
   }
   // Taking a word out leaves its space behind: keep a single one, and none at the end.
   return out === del ? del : out.replace(/[ \t]{2,}/g, ' ').replace(/[ \t]+$/, del.match(/[ \t]+$/) && /\S/.test(out) ? ' ' : '')
+}
+
+/** Spacing a narrowed change left behind ("Nice  great day", "day ."), where the writer's own text had none. */
+function tidy(text: string, own: string) {
+  let out = text
+  if (!/[ \t]{2}/.test(own)) out = out.replace(/([^ \t\n])[ \t]{2,}(?=[^ \t\n])/g, '$1 ')
+  if (!/[ \t][.,!?;:)]/.test(own)) out = out.replace(/[ \t]+([.,!?;:)])/g, '$1')
+  if (!/[ \t]\n/.test(own)) out = out.replace(/[ \t]+\n/g, '\n')
+  return out
 }
 
 /** A change as its changed places: the unchanged text before each, what it takes out and what it puts in. */
@@ -158,7 +220,7 @@ export function hunksOf(find: string, replace: string): { eq: string; del: strin
 }
 
 const short = (s: string, n = 30) => {
-  const t = sp(s)
+  const t = s.replace(/\s+/g, ' ').trim()
   return t.length > n ? t.slice(0, n).trimEnd() + '…' : t
 }
 
@@ -185,7 +247,7 @@ export function checkScope(ask: Ask, find: string, replace: string): ScopeFlag |
   const inScope = (h: { del: string; ins: string }) => ask.intents.some((i) => fits(i, h.del, h.ins))
   const beyond = changed.filter((h) => !inScope(h))
   if (!beyond.length && !limits.length) return null
-  const narrow = hunks.map((h) => h.eq + (h.del || h.ins ? (inScope(h) ? h.ins : carryOut(ask, h.del)) : '')).join('')
+  const narrow = tidy(hunks.map((h) => h.eq + (h.del || h.ins ? (inScope(h) ? h.ins : carryOut(ask, h.del)) : '')).join(''), find)
   const shown = beyond
     .slice(0, 3)
     .map((h) => (h.del.trim() && h.ins.trim() ? `“${short(h.del)}” → “${short(h.ins)}”` : h.del.trim() ? `cuts “${short(h.del)}”` : h.ins.trim() ? `adds “${short(h.ins)}”` : 'changes spacing'))

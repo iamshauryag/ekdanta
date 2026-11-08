@@ -96,6 +96,9 @@ export function sampleSources(files: FileEntry[], platform: string, excluded: st
 
 const sourcesFor = (files: FileEntry[], platform: string, excluded: string[], brain: string) => sampleSources(files, platform, excluded, brain)
 
+/** A cut never leaves half a character: a surrogate pair split at either end is dropped. */
+const whole = (s: string) => s.replace(/^[\uDC00-\uDFFF]/, '').replace(/[\uD800-\uDBFF]$/, '')
+
 /** A piece cut to at most `cap` characters: its opening and its close, at paragraph or sentence ends where it can. */
 export function excerpt(body: string, cap: number): string[] {
   const text = body.trim()
@@ -107,7 +110,7 @@ export function excerpt(body: string, cap: number): string[] {
   let tail = text.slice(text.length - (cap - head.length))
   const from = tail.indexOf('\n\n')
   if (from >= 0 && from < tail.length * 0.5) tail = tail.slice(from)
-  return [head.trim(), tail.trim()].filter(Boolean)
+  return [whole(head).trim(), whole(tail).trim()].filter(Boolean)
 }
 
 /** Read the sources as excerpts, within a budget shared fairly between them. Starred pieces come first, so they are always in. */

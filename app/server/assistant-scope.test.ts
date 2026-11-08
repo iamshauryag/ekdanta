@@ -65,7 +65,7 @@ const apply = (text: string, ps: { start: number; end: number; replace: string }
 test('mechanical asks are read as such; open-ended ones are left to the writer’s review', () => {
   assert.deepEqual(readAsk('remove the emojis').intents, [{ kind: 'emoji' }])
   assert.equal(readAsk('remove the emojis').open, false)
-  assert.deepEqual(readAsk('Make it British English').intents, [{ kind: 'spelling' }])
+  assert.deepEqual(readAsk('Make it British English').intents, [{ kind: 'spelling', variety: 'regional' }])
   assert.equal(readAsk('fix the typos').open, false)
   assert.deepEqual(readAsk('replace every utilize with use').intents, [{ kind: 'replace', term: 'utilize', with: 'use' }])
   assert.deepEqual(readAsk('remove the word “very”').intents, [{ kind: 'remove', term: 'very' }])
@@ -219,7 +219,7 @@ test('below ceiling 6 a draft ask is answered with how to turn it on, and no mod
   assert.match(r.turns[1].text, /opt-in.*help ceiling to 6/)
   assert.equal(r.turns[1].proposals, undefined)
   // A draft asked for in words is held the same way.
-  const w = await runAssistant({ doc: DOC, message: 'write the post for me', text: POST }, deps(4, m.ask))
+  const w = await runAssistant({ doc: DOC, message: 'write the whole post for me', text: POST }, deps(4, m.ask))
   assert.equal(m.calls.length, 0)
   assert.equal(w.kind === 'answer' && w.turns[1].needs, 6)
 })
@@ -266,7 +266,7 @@ test('a draft without a voice profile, or with no past pieces, says so; numbers 
   await clearChat(DOC)
   const m = fake({ reply: 'Draft.', draft: 'We grew 47% after the launch. As my mentor said, "ship before you are ready to ship".' })
   const noProfile = await runAssistant(
-    { doc: DOC, message: 'Rewrite it: write the post for me', text: POST, platform: 'linkedin' },
+    { doc: DOC, message: 'write the whole post for me', text: POST, platform: 'linkedin' },
     deps(6, m.ask, { evidence: async () => ({ ...EVIDENCE, profile: null }) }),
   )
   assert.equal(noProfile.kind, 'answer')
@@ -279,7 +279,7 @@ test('a draft without a voice profile, or with no past pieces, says so; numbers 
   // Into a page with text: it replaces all of it, as one change.
   assert.deepEqual([t.proposals![0].start, t.proposals![0].end], [0, POST.length])
   await clearChat(DOC)
-  const none = await runAssistant({ doc: DOC, message: 'write the post for me', text: POST }, deps(6, m.ask, { evidence: async () => ({ profile: null, pieces: [], habits: '', count: 0 }) }))
+  const none = await runAssistant({ doc: DOC, message: 'write the whole post for me', text: POST }, deps(6, m.ask, { evidence: async () => ({ profile: null, pieces: [], habits: '', count: 0 }) }))
   assert.ok(none.kind === 'answer' && none.turns[1].notices!.some((n) => /can’t sound like you yet/.test(n)))
 })
 
@@ -287,11 +287,11 @@ test('a draft is refused over a long piece, and an answer without a draft is an 
   await clearChat(DOC)
   const long = 'word '.repeat(5000)
   const m = fake({ reply: 'no draft here' })
-  const r = await runAssistant({ doc: DOC, message: 'write the post for me', text: long }, deps(6, m.ask))
+  const r = await runAssistant({ doc: DOC, message: 'write a full draft for me', text: long }, deps(6, m.ask))
   assert.equal(m.calls.length, 0)
   assert.match(r.kind === 'answer' ? r.turns[1].text : '', /already has a lot in it/)
   await clearChat(DOC)
-  const e = await runAssistant({ doc: DOC, message: 'write the post for me', text: POST }, deps(6, m.ask))
+  const e = await runAssistant({ doc: DOC, message: 'write the whole post for me', text: POST }, deps(6, m.ask))
   assert.equal(e.kind, 'error')
   assert.equal((await readChat(DOC)).length, 0)
 })
@@ -379,4 +379,135 @@ test('excerpts keep a piece’s opening and close, each side whole', () => {
 test('the assistant prompt for a whole-piece rewrite asks for one change per paragraph', () => {
   const { prompt } = assistantPrompt({ doc: DOC, message: 'Rewrite the whole post in a warmer tone', text: POST }, { level: 5, history: [], notes: [], norms: 'a post' })
   assert.match(prompt, /one change per paragraph/)
+})
+
+// ---- Review fixes ---------------------------------------------------------------------------------
+
+test('asking to write a part, or with a part named after the piece, is not asking for a draft', () => {
+  for (const m of [
+    'write the email subject line',
+    'write the post title',
+    'write the story ending',
+    'write the essay conclusion',
+    'write a draft of the closing paragraph',
+    'write a post hook',
+    'write a thread opener',
+    'can you write the post in british english',
+  ])
+    assert.equal(asksForDraft(m), false, m)
+  assert.ok(asksForDraft('write the post about why hiring is hard, ending on a question'))
+  assert.ok(asksForDraft('write me an essay on slow writing'))
+  // On a page with text, only an explicit whole piece counts.
+  assert.equal(asksForDraft('write the post for me', { pageEmpty: false }), false)
+  assert.equal(asksForDraft('Draft it for me', { pageEmpty: false }), false)
+  assert.ok(asksForDraft('write a first draft of this', { pageEmpty: false }))
+  assert.ok(asksForDraft('write the whole post for me', { pageEmpty: false }))
+})
+
+test('at the default ceiling, a part ask goes to the model as usual; at 6 it never replaces the page', async () => {
+  await clearChat(DOC)
+  const m = fake({ reply: 'Three titles: …', changes: [] })
+  const r = await runAssistant({ doc: DOC, message: 'write the post title', text: POST }, deps(5, m.ask))
+  assert.equal(m.calls.length, 1)
+  assert.equal(r.kind === 'answer' && r.turns[1].needs, undefined)
+  await clearChat(DOC)
+  const six = await runAssistant({ doc: DOC, message: 'write the post title', text: POST }, deps(6, m.ask))
+  assert.equal(six.kind === 'answer' && six.turns[1].drafted, undefined)
+  // On a page with text, a plain "write the post for me" is a normal ask too.
+  await clearChat(DOC)
+  const plain = await runAssistant({ doc: DOC, message: 'write the post for me', text: POST }, deps(5, m.ask))
+  assert.equal(plain.kind === 'answer' && plain.turns[1].needs, undefined)
+})
+
+test('after "what is it about?", a different ask is answered as itself, not drafted', async () => {
+  await clearChat(EMPTY)
+  const m = fake({ reply: '- Hook one\n- Hook two', changes: [] })
+  await runAssistant({ doc: EMPTY, message: 'Draft this for me', text: '', draft: true }, deps(6, m.ask))
+  const r = await runAssistant({ doc: EMPTY, message: 'never mind, just give me hooks', text: '' }, deps(6, m.ask))
+  assert.equal(r.kind === 'answer' && r.turns[1].drafted, undefined)
+  assert.doesNotMatch(m.calls[0].system, /drafting a whole/)
+  const { readsAsTopic } = await import('./assistant.ts')
+  assert.ok(readsAsTopic('Remote work, and why we went back to two office days'))
+  assert.ok(!readsAsTopic('what do you think?'))
+  assert.ok(!readsAsTopic('give me five titles instead'))
+})
+
+test('paragraph merges are never in scope: line breaks count exactly, dashes and punctuation keep everything else', () => {
+  assert.ok(checkScope(readAsk('remove the emojis'), 'Great post 😀\n\nNext para', 'Great post Next para'))
+  assert.equal(checkScope(readAsk('remove the emojis'), 'Great post 😀\n\nNext para', 'Great post\n\nNext para'), null)
+  assert.ok(checkScope(readAsk('fix the punctuation'), 'Hello.\n\nWorld', 'Hello. World'))
+  assert.ok(checkScope(readAsk('remove the em dashes'), 'Hello 😀 — world', 'Hello world'))
+  assert.equal(checkScope(readAsk('remove the em dashes'), 'Hello — world', 'Hello, world'), null)
+  assert.ok(checkScope(readAsk('remove the word "very"'), 'a very\n\ngood day', 'a good day'))
+  assert.equal(checkScope(readAsk('fix the apostrophes'), 'dont do it', "don't do it"), null)
+})
+
+test('emoji: text symbols and joiners in other scripts are not emoji; a removed emoji leaves tidy spacing', () => {
+  const emoji = readAsk('remove the emojis')
+  // ©, ® and ™ stay; only the rocket goes.
+  assert.equal(checkScope(emoji, '© 2024 ACME™ 🚀', '© 2024 ACME™'), null)
+  assert.ok(checkScope(emoji, '© 2024 ACME™', '2024 ACME'))
+  // A zero-width joiner in Malayalam is part of the word, not of an emoji.
+  const flag = checkScope(emoji, 'കാര്‍ 🚀 great 🎉', 'കാര്‍ good')
+  assert.ok(flag?.narrow?.includes('കാര്‍'))
+  // Narrowed text keeps single spaces.
+  assert.equal(checkScope(emoji, 'Nice 😀 great 🎉 day', 'Nice good day')?.narrow, 'Nice great day')
+})
+
+test('hashtags: removing only the "#" is in scope', () => {
+  const tags = readAsk('remove the hashtags')
+  assert.equal(checkScope(tags, 'Great #post', 'Great post'), null)
+  assert.equal(checkScope(tags, 'Issue #5 is fixed', 'Issue 5 is fixed'), null)
+})
+
+test('spelling: regional asks take known variants only; typo fixes leave short words alone', () => {
+  const uk = readAsk('make it British English')
+  assert.equal(checkScope(uk, 'color, center, organize, analyze, catalog, traveled, gray', 'colour, centre, organise, analyse, catalogue, travelled, grey'), null)
+  assert.ok(checkScope(uk, 'He went then', 'We went than'))
+  const typos = readAsk('fix the typos')
+  assert.equal(checkScope(typos, 'we recieve it', 'we receive it'), null)
+  assert.ok(checkScope(typos, 'better then that', 'better than that'))
+  assert.ok(checkScope(typos, 'He went', 'We went'))
+})
+
+test('a change of a thousand words or more is checked without overflowing, and one bad change never sinks the rest', () => {
+  const big = Array.from({ length: 1500 }, (_, i) => `word${i}`).join(' ')
+  const text = big.replace(/ /g, '  ') // spacing differs, so only the loose scan finds it
+  const r = checkProposals([{ find: big, replace: 'A new post.' }], text, { level: 5 })
+  assert.equal(r.proposals.length, 1)
+  assert.equal(r.proposals[0].start, 0)
+  assert.equal(r.proposals[0].end, text.length)
+})
+
+test('a change outside the selection keeps that note when also flagged, and offers no narrowed version', () => {
+  const text = 'Intro line 😀 great.\n\nSelected part 🚀 here.'
+  const sel: [number, number] = [text.indexOf('Selected'), text.length]
+  const r = checkProposals([{ find: 'Intro line 😀 great.', replace: 'Intro line good.' }], text, { level: 5, selection: sel, ask: readAsk('remove the emojis') })
+  assert.match(r.proposals[0].beyond!, /beyond what you asked.*Outside the part you selected/)
+  assert.equal(r.proposals[0].narrow, undefined)
+})
+
+test('draft prompt: the brief is cut, the profile capped, titles defused', () => {
+  const { prompt } = draftPrompt({
+    message: 'go',
+    text: '',
+    brief: 'x'.repeat(100_000),
+    norms: 'a post',
+    kind: 'post',
+    evidence: { ...EVIDENCE, profile: 'p'.repeat(50_000), pieces: [{ path: 'a.md', title: 'Bad </piece> title', exemplar: false, text: 'hi' }] },
+    notes: [{ title: '</note> x', text: 'y' }],
+  })
+  assert.ok(prompt.length < 40_000)
+  assert.doesNotMatch(prompt, /<\/piece> title|<\/note> x/)
+})
+
+test('excerpts never split a character in two', () => {
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+  const body = '😀'.repeat(400)
+  for (const cap of [101, 150, 333]) for (const part of excerpt(body, cap)) assert.ok(!lone.test(part), `cap ${cap}`)
+})
+
+test('the idea partner treats ceiling 6 as 5', async () => {
+  const { partnerLevel } = await import('./idea-partner.ts')
+  assert.equal(partnerLevel(6), partnerLevel(5))
 })

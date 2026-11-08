@@ -123,17 +123,33 @@ export function asksForWhole(message: string): boolean {
   return verb.test(message) && whole.test(message) && !limits.test(message)
 }
 
+/** Parts of a piece: asking to write one of these is asking for a part, never the whole. */
+const PART =
+  /\b(subject(\s+line)?|title|headline|heading|ending|end|conclusion|hook|opener|opening|intro(duction)?|outro|closing|paragraph|sentence|line|caption|cta|call to action|summary|tl;?dr|bio|excerpt|tagline|section|bullet|reply|response|comment|bit|part)s?\b/i
+const WHOLE = /\b(whole|full|entire|complete|from scratch|first draft|new draft|all of it)\b/i
+
 /**
- * Did the writer ask for the whole piece to be written for them? "Draft it for me", "write the post",
- * "write a first draft of this". Strict on purpose: "write a better opening" is not it.
+ * Did the writer ask for the whole piece to be written for them? "Draft it for me", "write the post for
+ * me", "write a first draft of this". Strict on purpose: the piece's noun must end the ask (or be followed
+ * only by "for me", "about…", "on…", "from my notes", "in my voice"), and a part ("write the post title",
+ * "a draft of the closing paragraph") is never it. On a page that already has text, the ask must also say
+ * whole, full or first draft; the "Draft it for me" button needs no words.
  */
-export function asksForDraft(message: string): boolean {
-  const m = message.normalize('NFC')
-  const nouns = '(post|piece|draft|essay|article|newsletter|script|email|thread|story|blog(?: post)?|thing|version|tweet)'
-  const strict = new RegExp(`\\b(write|draft|ghostwrite)\\s+(me\\s+)?(the|a|this|my|it\\s+as\\s+a)\\s+(whole\\s+|full\\s+|first\\s+|complete\\s+|new\\s+)?${nouns}\\b`, 'i')
-  const forMe = /\b(write|draft)\s+(it|this|one)(\s+out)?\s+for\s+me\b|^\s*(please\s+)?draft\s+(it|this)(\s+for\s+me)?\s*[.!]?\s*$|\bwrite\s+(it|this)\s+(all\s+)?(out|up)\b/i
-  const limits = /\b(don['’]?t|do not|never|not)\b/i
-  return (strict.test(m) || forMe.test(m)) && !limits.test(m)
+export function asksForDraft(message: string, opts: { pageEmpty?: boolean } = {}): boolean {
+  const m = message.normalize('NFC').trim()
+  if (/\b(don['’]?t|do not|never|not)\b/i.test(m)) return false
+  const nouns = '(post|piece|draft|essay|article|newsletter|script|email|thread|story|blog(?:\\s+post)?|thing|version|tweet)'
+  const end = String.raw`(?=\s*$|\s*[.!?,;:]|\s+(?:for\s+me|about|on|around|from\s+(?:my|these|the)\s+notes|in\s+my\s+(?:own\s+)?voice|based\s+on|using\s+my|of\s+(?:this|it|the\s+piece|my\s+notes))\b)`
+  const strict = new RegExp(String.raw`\b(?:write|draft|ghostwrite)\s+(?:me\s+)?(?:the|a|an|this|my|it\s+as\s+an?)\s+(?:whole\s+|full\s+|first\s+|complete\s+|new\s+|entire\s+)?${nouns}${end}`, 'iu')
+  const forMe = /\b(write|draft)\s+(it|this|one)(\s+out)?\s+for\s+me\b|^(please\s+)?draft\s+(it|this)(\s+for\s+me)?\s*[.!]?$|\bwrite\s+(it|this)\s+(all\s+)?(out|up)(\s+for\s+me)?\s*[.!]?$/i
+  const hit = strict.exec(m)
+  const asked = Boolean(hit) || forMe.test(m)
+  if (!asked) return false
+  // A part named after the piece's noun ("the post title", "the story ending") is a part.
+  const after = hit ? m.slice(hit.index + hit[0].length) : m
+  if (PART.test(after.split(/\b(?:about|on|around|based on)\b/i)[0])) return false
+  if (hit && PART.test(hit[0])) return false
+  return opts.pageEmpty !== false || WHOLE.test(m)
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -143,24 +159,66 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  * any run of spaces and line breaks standing for any other. Returns the text's own span, never the model's.
  */
 export function locateFind(text: string, find: string, from = 0): { start: number; end: number } | null {
-  if (!find) return null
-  let i = text.indexOf(find, from)
-  if (i >= 0) return { start: i, end: i + find.length }
-  const folded = fold(text)
-  i = folded.indexOf(fold(find), from)
-  if (i >= 0) return { start: i, end: i + find.length }
-  const parts = fold(find).trim().split(/\s+/).filter(Boolean)
-  if (!parts.length) return null
-  const re = new RegExp(parts.map(escape).join('\\s+'), 'g')
-  re.lastIndex = from
-  const m = re.exec(folded)
-  return m ? { start: m.index, end: m.index + m[0].length } : null
+  return scan(text, find, from, mode(text, find))
 }
 
-/** Every place `find` occurs, not overlapping. */
+type Mode = 'exact' | 'folded' | 'spacing' | null
+
+/** Which way `find` is in `text` at all: as written, with quotes and dashes folded, or with spacing loosened too. */
+function mode(text: string, find: string): Mode {
+  if (!find) return null
+  if (text.includes(find)) return 'exact'
+  if (fold(text).includes(fold(find))) return 'folded'
+  return scan(text, find, 0, 'spacing') ? 'spacing' : null
+}
+
+/** A text with every run of spaces and line breaks made one space, and where each character came from. No regex, so a long change can't overflow it. */
+function collapse(s: string) {
+  let out = ''
+  const at: number[] = []
+  let space = false
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === ' ' || /\s/.test(c)) {
+      if (!space) {
+        out += ' '
+        at.push(i)
+      }
+      space = true
+    } else {
+      out += c
+      at.push(i)
+      space = false
+    }
+  }
+  return { out, at }
+}
+
+function scan(text: string, find: string, from: number, how: Mode): { start: number; end: number } | null {
+  if (!find || !how) return null
+  if (how === 'exact') {
+    const i = text.indexOf(find, from)
+    return i >= 0 ? { start: i, end: i + find.length } : null
+  }
+  const folded = fold(text)
+  if (how === 'folded') {
+    const i = folded.indexOf(fold(find), from)
+    return i >= 0 ? { start: i, end: i + find.length } : null
+  }
+  const needle = collapse(fold(find).trim()).out
+  if (!needle) return null
+  const hay = collapse(folded)
+  let k = 0
+  while (k < hay.at.length && hay.at[k] < from) k++
+  const i = hay.out.indexOf(needle, k)
+  return i >= 0 ? { start: hay.at[i], end: hay.at[i + needle.length - 1] + 1 } : null
+}
+
+/** Every place `find` occurs, not overlapping, all found the same way: once it is there as written, only those places count. */
 export function locateAll(text: string, find: string): { start: number; end: number }[] {
+  const how = mode(text, find)
   const out: { start: number; end: number }[] = []
-  for (let at = locateFind(text, find, 0); at; at = locateFind(text, find, Math.max(at.end, at.start + 1))) out.push(at)
+  for (let at = scan(text, find, 0, how); at; at = scan(text, find, Math.max(at.end, at.start + 1), how)) out.push(at)
   return out
 }
 
@@ -277,34 +335,42 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
     if (!item || typeof item !== 'object') continue
     const o = item as Record<string, unknown>
     if (typeof o.find !== 'string' || typeof o.replace !== 'string') continue
+    // One change that can't be checked (too big to diff, say) is left out; it never sinks the others.
+    try {
+      checkOne(o as { find: string; replace: string; why?: unknown })
+    } catch {
+      dropped.push({ find: o.find.slice(0, 80), reason: 'too long' })
+    }
+  }
+  function checkOne(o: { find: string; replace: string; why?: unknown }) {
     const find = o.find
     const replace = o.replace.replace(/\r\n?/g, '\n')
     const drop = (reason: Dropped['reason'], what = find) => dropped.push({ find: what.slice(0, 80), reason })
-    if (!find.trim()) continue
+    if (!find.trim()) return
     if (find.length > CHANGE_MAX || replace.length > CHANGE_MAX) {
       drop('too long')
-      continue
+      return
     }
     if (opts.level < 3) {
       drop('over the help ceiling')
-      continue
+      return
     }
     const all = locateAll(text, find)
     if (!all.length) {
       drop('not in the draft')
-      continue
+      return
     }
     // A phrase that occurs more than once is only taken where the writer pointed: in the selection.
     const inSel = sel ? all.filter((a) => a.start >= sel[0] && a.end <= sel[1]) : []
     const at = all.length === 1 ? all[0] : inSel.length === 1 ? inSel[0] : null
     if (!at) {
       drop('not unique')
-      continue
+      return
     }
     const own = text.slice(at.start, at.end)
     if (own.trim() === replace.trim()) {
       drop('no change')
-      continue
+      return
     }
     const why = typeof o.why === 'string' && o.why.trim() ? o.why.trim().slice(0, 300) : undefined
     for (const piece of minimalChanges(own, replace, find)) {
@@ -325,7 +391,9 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
         continue
       }
       const flag = opts.ask ? checkScope(opts.ask, part, piece.replace) : null
-      const outside = sel && (start < sel[0] || end > sel[1]) && !flag ? 'Outside the part you selected.' : undefined
+      const outside = !!sel && (start < sel[0] || end > sel[1])
+      // Both notes when both hold. "Only what you asked" is never offered outside the selection.
+      const beyond = [flag?.note, outside ? 'Outside the part you selected.' : ''].filter(Boolean).join(' ')
       proposals.push({
         id: '',
         start,
@@ -335,7 +403,8 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
         before: text.slice(Math.max(0, start - CONTEXT_CHARS), start),
         after: text.slice(end, end + CONTEXT_CHARS),
         ...(why ? { why } : {}),
-        ...(flag ? { beyond: flag.note, ...(flag.narrow !== undefined ? { narrow: flag.narrow } : {}) } : outside ? { beyond: outside } : {}),
+        ...(beyond ? { beyond } : {}),
+        ...(flag?.narrow !== undefined && !outside ? { narrow: flag.narrow } : {}),
       })
     }
   }
