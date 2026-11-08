@@ -66,7 +66,7 @@ const short = (s: string, n = 60) => (s.length > n ? s.slice(0, n).trimEnd() + '
 export function AssistantTab(p: Props) {
   const [turns, setTurns] = useState<Turn[]>([])
   const [input, setInput] = useState('')
-  const [busy, setBusy] = useState<string | null>(null) // the ask being answered
+  const [busy, setBusy] = useState<{ text: string; again: boolean } | null>(null) // the ask being answered
   const [problem, setProblem] = useState<{ message: string; fix?: string } | null>(null)
   const [selection, setSelection] = useState<{ text: string; start: number } | null>(null)
   const [detached, setDetached] = useState<string | null>(null) // the selection the writer took off
@@ -123,27 +123,28 @@ export function AssistantTab(p: Props) {
   const attached = selection && selection.text !== detached && selection.text.length <= SELECTION_MAX ? selection : null
 
   const send = useCallback(
-    async (message: string, allowOnce = false) => {
+    /** Ask; or, with `allowOnce` (the id of a turn that went past the ceiling), have the server ask that turn's question again at level 5. */
+    async (message: string, allowOnce?: string) => {
       const ed = p.editor
-      if (!p.doc || !ed || busy || !message.trim()) return
+      if (!p.doc || !ed || busy || (!message.trim() && !allowOnce)) return
       const ctl = new AbortController()
       abort.current = ctl
-      setBusy(message.trim())
+      setBusy({ text: message.trim(), again: !!allowOnce })
       setProblem(null)
-      setInput('')
+      if (!allowOnce) setInput('')
+      // What was typed goes back in the box when the ask doesn't land.
+      const restore = () => !allowOnce && setInput(message)
       try {
-        const r = await call<Reply>('POST', '/api/assistant', { doc: p.doc, message, text: pageText(ed).text, platform: p.platform, selection: attached, allowOnce }, ctl.signal)
-        if (r.kind === 'answer') setTurns((t) => [...t, ...r.turns])
+        const body = allowOnce ? { doc: p.doc, allowOnce, text: pageText(ed).text, platform: p.platform } : { doc: p.doc, message, text: pageText(ed).text, platform: p.platform, selection: attached }
+        const r = await call<Reply>('POST', '/api/assistant', body, ctl.signal)
+        if (r.kind === 'answer') setTurns((t) => [...t.map((x) => (x.id === allowOnce ? { ...x, allowSpent: true } : x)), ...r.turns])
         else if (r.kind === 'error') {
           setProblem({ message: r.message, fix: r.fix })
-          setInput(message)
+          restore()
         }
       } catch (e) {
-        if (ctl.signal.aborted) setInput(message)
-        else {
-          setProblem({ message: (e as Error).message })
-          setInput(message)
-        }
+        if (!ctl.signal.aborted) setProblem({ message: (e as Error).message })
+        restore()
       } finally {
         if (abort.current === ctl) abort.current = null
         setBusy(null)
@@ -283,18 +284,17 @@ export function AssistantTab(p: Props) {
                   'rejected',
                 )
               }
-              onAllowOnce={() => {
-                const ask = turns[i - 1]
-                if (ask?.role === 'writer') send(ask.text, true)
-              }}
+              onAllowOnce={() => send('', t.id)}
             />
           ),
         )}
         {busy && (
           <>
-            <div className="as-writer">
-              <div className="as-bubble">{busy}</div>
-            </div>
+            {!busy.again && (
+              <div className="as-writer">
+                <div className="as-bubble">{busy.text}</div>
+              </div>
+            )}
             <div className="as-busy" role="status">
               <span className="as-dots" aria-hidden="true">
                 <i />
@@ -436,7 +436,8 @@ function AssistantTurn(p: {
           </ul>
         </details>
       )}
-      {p.last && overCeiling > 0 && p.ceiling >= 1 && p.ceiling < 5 && !p.busy && (
+      {t.allowOnceFor && <div className="muted as-meta">Asked again with Passage help, this once</div>}
+      {p.last && overCeiling > 0 && !t.allowSpent && !t.allowOnceFor && p.ceiling >= 1 && p.ceiling < 5 && !p.busy && (
         <button className="link as-once" onClick={p.onAllowOnce} title="Ask the same again with full help, this once. The ceiling stays as it is.">
           Allow once: ask again with Passage help
         </button>
