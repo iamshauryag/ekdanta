@@ -52,7 +52,7 @@ export const APPEARANCE_DEFAULTS: Appearance = {
   textSize: 18.5,
   lineWidth: 'comfortable',
   lineHeight: 'normal',
-  paragraphSpacing: 'none',
+  paragraphSpacing: 'half',
   wordCount: true,
   spellcheck: true,
   newDocView: 'page',
@@ -73,7 +73,8 @@ const STACKS: Record<Exclude<Font, 'custom'>, string> = {
 // Measured in rem, so the column keeps its width when the text size changes. 40rem is the old 640px.
 const MEASURES: Record<Exclude<LineWidth, 'full'>, string> = { narrow: '34rem', comfortable: '40rem', wide: '48rem' }
 const LEADING: Record<LineHeight, string> = { compact: '1.4', normal: '1.6', airy: '1.85' }
-// Space between paragraphs, in lines of the page's own leading. None is the page as it always was.
+// Space between paragraphs, in lines of the page's own leading. Half a line is the default, so a new
+// paragraph reads differently from a line break inside one; None sets them alike.
 const GAPS: Record<Spacing, string> = { none: '0', half: 'calc(var(--page-leading) * 0.5em)', line: 'calc(var(--page-leading) * 1em)' }
 
 const oneOf = <T extends string>(list: readonly T[], v: unknown, fallback: T): T => (list.includes(v as T) ? (v as T) : fallback)

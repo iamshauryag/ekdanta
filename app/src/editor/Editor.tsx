@@ -12,7 +12,7 @@ import { helpLevel } from './caret.ts'
 import { HelpController, type HistoryItem } from './controller.ts'
 import type { EdgeSlot } from '../lib/edge.ts'
 import { helpKey, helpOf, helpPlugin, noteCmdWorks, paragraphAt, textOf, type Help, type Level } from './help.ts'
-import { parseMarkdown, serializeMarkdown, type Source } from './markdown.ts'
+import { carryGaps, parseMarkdown, serializeMarkdown, type Source } from './markdown.ts'
 import { PageLinkMenu, SlashMenu, type PageRef, type TemplateItems } from './menus.ts'
 import { caretFor, isPromptSelected, promptPlugin, promptRanges } from './prompts.ts'
 import { extensions, resolver } from './schema.ts'
@@ -218,12 +218,20 @@ export function Editor(props: Props) {
         // A restored version brings the source of its blocks, so it's written back exactly as it was kept.
         // The old blocks' source stays too, for ⌘Z.
         const restored = transaction.getMeta('ekdanta-source') as Source | undefined
-        if (restored) source.current = { prefix: restored.prefix, blocks: new Map([...(source.current?.blocks ?? []), ...restored.blocks]), last: restored.last }
+        if (restored)
+          source.current = {
+            prefix: restored.prefix,
+            blocks: new Map([...(source.current?.blocks ?? []), ...restored.blocks]),
+            last: restored.last,
+            gaps: new Map([...(source.current?.gaps ?? []), ...restored.gaps]),
+          }
         p().onChange(serializeMarkdown(editor.state.doc, source.current))
         report(editor)
       },
       onTransaction: ({ editor, transaction }) => {
         if (editor !== editorRef.current) return
+        // Edited blocks keep the blank lines the file had after them (before onUpdate writes the file).
+        if (source.current && !transaction.getMeta('ekdanta-load')) carryGaps(transaction.before, editor.state.doc, source.current)
         // Typing over a suggestion dismisses it; note that in the history.
         const now = helpOf(editor.state)
         const before = lastHelp.current
