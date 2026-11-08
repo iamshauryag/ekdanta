@@ -193,6 +193,8 @@ export interface Source {
    * next one (an edit never needs to add or remove blank lines). Edited blocks inherit them; see carryGaps.
    */
   gaps: Map<PMNode, string>
+  /** The block each one followed in the file, so one written after a different block can be kept apart from it. */
+  follows: Map<PMNode, PMNode | null>
 }
 
 export function parseMarkdown(schema: Schema, text: string): { doc: PMNode; source: Source } {
@@ -205,6 +207,7 @@ export function parseMarkdown(schema: Schema, text: string): { doc: PMNode; sour
   const starts = maps.map((m) => m[0])
   const blocks = new Map<PMNode, string>()
   const gaps = new Map<PMNode, string>()
+  const follows = new Map<PMNode, PMNode | null>()
   let prefix = ''
   if (starts.length === doc.childCount) {
     prefix = lines
@@ -216,11 +219,12 @@ export function parseMarkdown(schema: Schema, text: string): { doc: PMNode; sour
       const from = starts[i]
       const to = i + 1 < starts.length ? starts[i + 1] : lines.length
       blocks.set(child, lines.slice(from, to).join('\n') + (to < lines.length ? '\n' : ''))
+      follows.set(child, i > 0 ? doc.child(i - 1) : null)
       const after = lines.slice(Math.min(maps[i][1], to), to)
       if (i + 1 < starts.length && after.every((l) => !l.trim())) gaps.set(child, '\n'.repeat(after.length + 1))
     })
   }
-  return { doc, source: { prefix: starts.length === doc.childCount ? prefix : '', blocks, last: blocks.size ? doc.lastChild : null, gaps } }
+  return { doc, source: { prefix: starts.length === doc.childCount ? prefix : '', blocks, last: blocks.size ? doc.lastChild : null, gaps, follows } }
 }
 
 /**
@@ -250,10 +254,24 @@ export function carryGaps(before: PMNode, after: PMNode, source: Source) {
 
 const mark = (open: string, close = open) => ({ open, close, mixable: true, expelEnclosingWhitespace: true })
 
+/** Writing a table cell, which is one line: a line break there is a space. */
+let inCell = false
+
 /** A table cell, written as one line: its paragraphs joined, pipes escaped. */
 function cellText(cell: PMNode) {
-  return serializer.serialize(cell, { tightLists: true }).replace(/\n+/g, ' ').replace(/\|/g, '\\|').trim() || ' '
+  inCell = true
+  try {
+    return serializer.serialize(cell, { tightLists: true }).replace(/\n+/g, ' ').replace(/\|/g, '\\|').trim() || ' '
+  } finally {
+    inCell = false
+  }
 }
+
+/**
+ * The start of a line that would end a paragraph or change it: a list item, a quote, a heading, a fence,
+ * a setext underline or a rule. Characters Markdown escapes everywhere (* _ ` ~) are left to that.
+ */
+const INTERRUPTS = /^([ \t]*)(?:([-+])(?= |\t|$)|(>)|(#)(?=#{0,5}(?:\s|$))|1([.)])(?= |\t|$)|(=)(?==*\s*$)|(-)(?=(?:[ \t]*-){2,}[ \t]*$))/
 
 export const serializer = new MarkdownSerializer(
   {
@@ -301,25 +319,29 @@ export const serializer = new MarkdownSerializer(
       // Not at the very end of a paragraph, where it would mean nothing.
       for (let i = index + 1; i < parent.childCount; i++) {
         if (parent.child(i).type !== node.type) {
-          // A heading is one line in Markdown: a break there would end it.
-          state.write(parent.type.name === 'heading' ? ' ' : (node.attrs.markup ?? '') + '\n')
+          // A heading or a table cell is one line in Markdown: a break there would end it.
+          if (inCell || parent.type.name === 'heading') state.write(' ')
+          // A break on an empty line (a second one in a row, or the first thing in the paragraph) needs
+          // Markdown's backslash: a bare newline there would be a blank line, ending the paragraph.
+          else if (index === 0 || parent.child(index - 1).type === node.type) state.write('\\\n')
+          else state.write((node.attrs.markup ?? '') + '\n')
           return
         }
       }
     },
     text: (state, node, parent, index) => {
-      const s = state as unknown as { inAutolink?: boolean; atBlockStart: boolean; out: string; delim: string }
+      const s = state as unknown as { inAutolink?: boolean; out: string; delim: string }
       let text = node.text ?? ''
-      // Text starting a line after a line break is escaped as at the start of a paragraph, so a line
-      // reading "# 3 reasons" or "- not a list" stays text instead of turning into a heading or a list.
-      if (!s.inAutolink && index > 0 && parent.child(index - 1).type.name === 'hardBreak' && (s.out.endsWith('\n') || s.out.endsWith('\n' + s.delim))) {
-        s.atBlockStart = true
-        // Two the standard escaping misses: a line of = (it would make the line above a heading), and "1)".
-        const lead = /^(\s*)(=|\d+(?=\)\s))/.exec(text)
-        if (lead) {
-          state.text(lead[1] + (lead[2] === '=' ? '\\=' : lead[2] + '\\'), false)
-          text = text.slice(lead[0].length)
-          s.atBlockStart = false
+      // Text starting a line after a line break: a line reading "# 3 reasons" or "- a note" stays text
+      // instead of turning into a heading or a list. Only what would really end the paragraph is escaped.
+      if (!s.inAutolink && !inCell && index > 0 && parent.child(index - 1).type.name === 'hardBreak' && (s.out.endsWith('\n') || s.out.endsWith('\n' + s.delim))) {
+        const m = INTERRUPTS.exec(text)
+        if (m) {
+          // The match ends at the one character to escape.
+          const at = m[0].length - 1
+          state.text(text.slice(0, at), false)
+          state.text('\\', false)
+          text = text.slice(at)
         }
       }
       state.text(text, !s.inAutolink)
@@ -360,12 +382,15 @@ export const serializer = new MarkdownSerializer(
 )
 
 /**
- * The newlines between two blocks: the file's own when it had them, else a blank line. One newline is
- * kept only beside a heading; between two other blocks it could run them together.
+ * The newlines after a block: the file's own when it had them, else a blank line. One newline is kept
+ * only after an ATX heading (# Title), which always ends at its line; anything else (a paragraph, an HTML
+ * block, a setext heading's text) could run into the block after it.
  */
-function join(gap: string | undefined, a: PMNode | null, b: PMNode | null) {
+function join(gap: string | undefined, a: PMNode | null, source?: Source) {
   if (!gap || !/^\n+$/.test(gap)) return '\n\n'
-  return gap.length > 1 || a?.type.name === 'heading' || b?.type.name === 'heading' ? gap : '\n\n'
+  if (gap.length > 1) return gap
+  const kept = a ? source?.blocks.get(a) : undefined
+  return a?.type.name === 'heading' && (kept === undefined || /^ {0,3}#/.test(kept)) ? gap : '\n\n'
 }
 
 /** The document as Markdown: untouched blocks exactly as they were read, edited ones written fresh. */
@@ -376,6 +401,12 @@ export function serializeMarkdown(doc: PMNode, source?: Source): string {
   doc.forEach((child, _o, i) => {
     const original = source?.blocks.get(child)
     if (original !== undefined) {
+      // Written after a block it didn't follow in the file (one moved, edited or deleted): it starts
+      // after a blank line, as an edited block would.
+      if (out.trim() && source!.follows.get(child) !== prev) {
+        const had = /\n*$/.exec(out)![0]
+        if (had.length < 2) out = out.slice(0, out.length - had.length) + join(had, prev, source)
+      }
       out += original
       prev = child
       return
@@ -387,10 +418,10 @@ export function serializeMarkdown(doc: PMNode, source?: Source): string {
     // run into the one before.
     if (out.trim()) {
       const had = /\n*$/.exec(out)![0]
-      out = out.slice(0, out.length - had.length) + (had.length > 1 ? had : join(had, prev, child))
+      out = out.slice(0, out.length - had.length) + join(had, prev, source)
     } else out = ''
     out += text
-    if (i < n - 1) out += join(source?.gaps.get(child), child, doc.child(i + 1))
+    if (i < n - 1) out += join(source?.gaps.get(child), child, source)
     prev = child
   })
   // Untouched to the end (an empty line to type on doesn't count): the file ends as it did.

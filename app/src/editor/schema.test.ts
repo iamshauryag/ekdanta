@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { getSchema } from '@tiptap/core'
 import { EditorState, TextSelection } from '@tiptap/pm/state'
-import { extensions, hintDecorations, isBlank, plainTextSlice } from './schema.ts'
+import { extensions, hintDecorations, isBlank, pasteTarget, plainTextSlice } from './schema.ts'
 import { parseMarkdown, serializeMarkdown } from './markdown.ts'
 
 const schema = getSchema(extensions())
@@ -70,4 +70,28 @@ test('pasted plain text drops the newline a copied line ends with, and stays one
 
 test('pasted plain text is kept as written, not read as Markdown', () => {
   assert.equal(pasted('**not bold**\n# not a heading'), '\\*\\*not bold\\*\\*\n\\# not a heading\n')
+})
+
+test('pasted lines in a heading or a table cell are joined with spaces, since each is one line in the file', () => {
+  const heading = plainTextSlice(schema, 'one\ntwo', [], 'heading')
+  assert.equal(heading.content.childCount, 1)
+  assert.equal(heading.content.firstChild!.textContent, 'one two')
+  const cell = plainTextSlice(schema, 'one\ntwo\n\nthree', [], 'cell')
+  assert.equal(cell.content.childCount, 1)
+  assert.equal(cell.content.firstChild!.textContent, 'one two three')
+})
+
+test('pasted text knows when it lands in a heading or a table cell', () => {
+  const doc = parseMarkdown(schema, '# Title\n\nText\n\n| a | b |\n| --- | --- |\n| c | d |\n').doc
+  const at = (needle: string) => {
+    let found = -1
+    doc.descendants((n, pos) => {
+      if (found < 0 && n.isText && n.text === needle) found = pos + 1
+    })
+    return doc.resolve(found)
+  }
+  assert.equal(pasteTarget(at('Title')), 'heading')
+  assert.equal(pasteTarget(at('Text')), 'text')
+  assert.equal(pasteTarget(at('c')), 'cell')
+  assert.equal(pasteTarget(at('a')), 'cell')
 })

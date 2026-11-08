@@ -16,7 +16,7 @@ import { Paragraph } from '@tiptap/extension-paragraph'
 import { Strike } from '@tiptap/extension-strike'
 import { TableKit } from '@tiptap/extension-table'
 import { Underline } from '@tiptap/extension-underline'
-import { Fragment, Slice, type Mark, type Node as PMNode, type Schema } from '@tiptap/pm/model'
+import { Fragment, Slice, type Mark, type Node as PMNode, type ResolvedPos, type Schema } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
 import { StarterKit } from '@tiptap/starter-kit'
@@ -45,16 +45,7 @@ export const PageLink = Node.create({
   renderHTML: ({ node, HTMLAttributes }) => {
     const title = node.attrs.label || resolver.pageTitle(node.attrs.target) || node.attrs.target
     const missing = !resolver.pageTitle(node.attrs.target)
-    return [
-      'span',
-      mergeAttributes(HTMLAttributes, {
-        'data-page': node.attrs.target,
-        'data-label': node.attrs.label ?? '',
-        class: 'pm-pagelink' + (missing ? ' is-missing' : ''),
-        title: missing ? `No page called “${node.attrs.target}” yet` : `${node.attrs.target} · ⌘-click to open`,
-      }),
-      title,
-    ]
+    return ['span', mergeAttributes(HTMLAttributes, { 'data-page': node.attrs.target, 'data-label': node.attrs.label ?? '', class: 'pm-pagelink' + (missing ? ' is-missing' : ''), title: missing ? `No page called “${node.attrs.target}” yet` : `${node.attrs.target} · ⌘-click to open` }), title]
   },
   renderText: ({ node }) => node.attrs.label || resolver.pageTitle(node.attrs.target) || node.attrs.target,
 })
@@ -89,16 +80,7 @@ const VaultImage = Image.extend({
       src: { default: null, renderHTML: (a) => ({ src: a.src ? resolver.assetUrl(a.src) : null, 'data-src': a.src }) },
     }
   },
-  parseHTML: () => [
-    {
-      tag: 'img[src]',
-      getAttrs: (el) => ({
-        src: (el as HTMLElement).dataset.src || (el as HTMLImageElement).getAttribute('src'),
-        alt: (el as HTMLImageElement).alt || null,
-        title: (el as HTMLImageElement).title || null,
-      }),
-    },
-  ],
+  parseHTML: () => [{ tag: 'img[src]', getAttrs: (el) => ({ src: (el as HTMLElement).dataset.src || (el as HTMLImageElement).getAttribute('src'), alt: (el as HTMLImageElement).alt || null, title: (el as HTMLImageElement).title || null }) }],
 }).configure({ inline: true, allowBase64: false })
 
 /** Return in a heading starts a normal paragraph, and Shift-Return is a line break, as in Docs. */
@@ -135,28 +117,41 @@ const Hint = Extension.create<{ text: string }>({
 /**
  * Plain text pasted (from a text editor, a terminal, the Markdown view): a blank line starts a new
  * paragraph and a single newline is a line break, as they are in a Markdown file. ProseMirror on its
- * own makes every line a paragraph, which turns each line break into a paragraph break.
+ * own makes every line a paragraph, which turns each line break into a paragraph break. A heading or a
+ * table cell is one line in the file, so there the lines are joined with spaces (and a cell's paragraphs too).
  */
-export function plainTextSlice(schema: Schema, text: string, marks: readonly Mark[] = []): Slice {
-  const paragraphs = text
-    .replace(/\r\n?/g, '\n')
-    .replace(/^\s*\n|\n\s*$/g, '')
-    .split(/\n[ \t]*\n\s*/)
-    .map((para) => {
-      const content: PMNode[] = []
+export function plainTextSlice(schema: Schema, text: string, marks: readonly Mark[] = [], into: 'text' | 'heading' | 'cell' = 'text'): Slice {
+  const clean = text.replace(/\r\n?/g, '\n').replace(/^\s*\n|\n\s*$/g, '')
+  const paragraphs = (into === 'cell' ? [clean] : clean.split(/\n[ \t]*\n\s*/)).map((para) => {
+    const content: PMNode[] = []
+    if (into !== 'text') {
+      const line = para.replace(/\s*\n\s*/g, ' ')
+      if (line) content.push(schema.text(line, marks))
+    } else
       para.split('\n').forEach((line, i) => {
         if (i) content.push(schema.nodes.hardBreak.create())
         if (line) content.push(schema.text(line, marks))
       })
-      return schema.nodes.paragraph.create(null, content)
-    })
+    return schema.nodes.paragraph.create(null, content)
+  })
   return Slice.maxOpen(Fragment.from(paragraphs))
+}
+
+/** Where pasted text lands: in a heading, a table cell, or ordinary text. */
+export function pasteTarget($pos: ResolvedPos): 'text' | 'heading' | 'cell' {
+  for (let d = $pos.depth; d > 0; d--) if (['tableCell', 'tableHeader'].includes($pos.node(d).type.name)) return 'cell'
+  return $pos.parent.type.name === 'heading' ? 'heading' : 'text'
 }
 
 const PlainPaste = Extension.create({
   name: 'plainPaste',
   addProseMirrorPlugins() {
-    return [new Plugin({ key: new PluginKey('plainPaste'), props: { clipboardTextParser: (text, $context) => plainTextSlice($context.doc.type.schema, text, $context.marks()) } })]
+    return [
+      new Plugin({
+        key: new PluginKey('plainPaste'),
+        props: { clipboardTextParser: (text, $context) => plainTextSlice($context.doc.type.schema, text, $context.marks(), pasteTarget($context)) },
+      }),
+    ]
   },
 })
 

@@ -23,8 +23,23 @@ const shape = (doc: PMNode) => {
   return out
 }
 
+/** A document as plain data, without how each break was written and without empty paragraphs at the end. */
+function plain(doc: PMNode) {
+  const json = doc.toJSON() as { content: { type: string; content?: unknown[] }[] }
+  while (json.content.length > 1 && json.content.at(-1)!.type === 'paragraph' && !json.content.at(-1)!.content) json.content.pop()
+  return JSON.parse(JSON.stringify(json, (k, v) => (k === 'attrs' && v && 'markup' in v ? undefined : v)))
+}
+
+/** Edit, save, and open the saved file again: it must read back as the edited document. */
+function roundTrip(text: string, change: (state: EditorState) => Transaction | Transaction[]) {
+  let edited: PMNode | null = null
+  const out = edit(text, change, (d) => (edited = d))
+  assert.deepEqual(plain(parseMarkdown(schema, out).doc), plain(edited!), `${JSON.stringify(text)} → ${JSON.stringify(out)}`)
+  return out
+}
+
 /** Open a file, make an edit as the editor would (gaps carried on every change), and save it. */
-function edit(text: string, change: (state: EditorState) => Transaction | Transaction[]) {
+function edit(text: string, change: (state: EditorState) => Transaction | Transaction[], seen?: (doc: PMNode) => void) {
   const { doc, source } = parseMarkdown(schema, text)
   let state = EditorState.create({ schema, doc })
   const trs = change(state)
@@ -33,6 +48,7 @@ function edit(text: string, change: (state: EditorState) => Transaction | Transa
     carryGaps(state.doc, next.doc, source)
     state = next
   }
+  seen?.(state.doc)
   return serializeMarkdown(state.doc, source)
 }
 
@@ -147,4 +163,61 @@ test('lists and quotes with line breaks round-trip through an edit', () => {
 test('CRLF bodies read the same as LF ones', () => {
   // A CRLF file's body arrives as LF (lib/frontmatter.ts), and is written back as CRLF.
   assert.deepEqual(shape(parseMarkdown(schema, 'a\r\nb\r\n\r\nc\r\n').doc), ['paragraph:a⏎b', 'paragraph:c'])
+})
+
+test('an HTML block keeps a blank line before a heading added after it', () => {
+  const out = roundTrip('<div>\nhi\n</div>\n', (s) => s.tr.insert(s.doc.content.size, schema.nodes.heading.create({ level: 1 }, schema.text('New'))))
+  assert.equal(out, '<div>\nhi\n</div>\n\n# New\n')
+})
+
+test('a heading turned into a paragraph does not join a setext heading below', () => {
+  const out = roundTrip('# H\nT\n===\n', (s) => s.tr.setNodeMarkup(0, schema.nodes.paragraph))
+  assert.equal(out, 'H\n\nT\n===\n')
+})
+
+test('two line breaks in a row stay two line breaks, not a new paragraph', () => {
+  const two = (s: EditorState) => s.tr.insert(posAfter(s.doc, 'a'), [schema.nodes.hardBreak.create(), schema.nodes.hardBreak.create()])
+  assert.equal(roundTrip('ab\n', two), 'a\n\\\nb\n')
+  // Three, at the start of a paragraph, in a list and in a quote.
+  roundTrip('ab\n', (s) => s.tr.insert(posAfter(s.doc, 'a'), [schema.nodes.hardBreak.create(), schema.nodes.hardBreak.create(), schema.nodes.hardBreak.create()]))
+  roundTrip('ab\n', (s) => s.tr.insert(1, schema.nodes.hardBreak.create()))
+  roundTrip('- ab\n- c\n', two)
+  roundTrip('> ab\n', two)
+})
+
+test('only what would end a paragraph is escaped after a line break', () => {
+  for (const line of ['1990. was a year', '2) two', '-5 degrees', '#hashtag', '+1 from me', '=> arrow']) {
+    const out = roundTrip('Intro\n\nEnd.\n', lineBreak('Intro', line))
+    assert.ok(out.includes(`\n${line}\n`), `${line} → ${JSON.stringify(out)}`)
+  }
+  for (const line of ['1. first', '1) first', '## two', '- - -', '= =', '>quote']) roundTrip('Intro\n\nEnd.\n', lineBreak('Intro', line))
+  // An indented dash is escaped too (Markdown drops the spaces at the start of a continued line).
+  const out = edit('Intro\n\nEnd.\n', lineBreak('Intro', '  - indented dash'))
+  assert.deepEqual(shape(parseMarkdown(schema, out).doc), ['paragraph:Intro⏎- indented dash', 'paragraph:End.'])
+})
+
+test('a line break in a table cell is written as a space', () => {
+  const table = '| a | b |\n| --- | --- |\n| c | d |\n'
+  const out = edit(table, lineBreak('c', '- z'))
+  assert.equal(out, '| a | b |\n| --- | --- |\n| c - z | d |\n')
+  const cell = edit(table, (s) => s.tr.insert(posAfter(s.doc, 'c'), [schema.nodes.hardBreak.create({ markup: '\\' }), schema.text('z')]))
+  assert.equal(cell, '| a | b |\n| --- | --- |\n| c z | d |\n')
+})
+
+test('a block written after one it did not follow in the file starts after a blank line', () => {
+  // The heading between them is deleted: A and B were never next to each other.
+  const out = roundTrip('A\n# H\n\nB\n', (s) => {
+    const h = s.doc.child(1)
+    return s.tr.delete(s.doc.child(0).nodeSize, s.doc.child(0).nodeSize + h.nodeSize)
+  })
+  assert.equal(out, 'A\n\nB\n')
+  // Untouched neighbours stay exactly as they were.
+  assert.equal(edit('A\n# H\nB\n', type('B', '!')), 'A\n# H\nB!\n')
+})
+
+test('round trips: edits across lists, quotes, headings and breaks read back as edited', () => {
+  const file = '# Title\nIntro line\nsecond  \nthird\\\nfourth\n\n\n- one\n  more\n- two\n\n> a\n> b\n\n```\ncode\n\nmore\n```\n'
+  for (const needle of ['Title', 'second', 'fourth', 'more', 'two', 'b']) roundTrip(file, type(needle, '!'))
+  roundTrip(file, lineBreak('Intro line', '# not a heading'))
+  roundTrip(file, (s) => s.tr.split(posAfter(s.doc, 'Intro line')))
 })

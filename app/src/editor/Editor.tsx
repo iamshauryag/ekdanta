@@ -224,6 +224,7 @@ export function Editor(props: Props) {
             blocks: new Map([...(source.current?.blocks ?? []), ...restored.blocks]),
             last: restored.last,
             gaps: new Map([...(source.current?.gaps ?? []), ...restored.gaps]),
+            follows: new Map([...(source.current?.follows ?? []), ...restored.follows]),
           }
         p().onChange(serializeMarkdown(editor.state.doc, source.current))
         report(editor)
