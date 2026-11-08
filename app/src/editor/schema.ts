@@ -45,7 +45,16 @@ export const PageLink = Node.create({
   renderHTML: ({ node, HTMLAttributes }) => {
     const title = node.attrs.label || resolver.pageTitle(node.attrs.target) || node.attrs.target
     const missing = !resolver.pageTitle(node.attrs.target)
-    return ['span', mergeAttributes(HTMLAttributes, { 'data-page': node.attrs.target, 'data-label': node.attrs.label ?? '', class: 'pm-pagelink' + (missing ? ' is-missing' : ''), title: missing ? `No page called “${node.attrs.target}” yet` : `${node.attrs.target} · ⌘-click to open` }), title]
+    return [
+      'span',
+      mergeAttributes(HTMLAttributes, {
+        'data-page': node.attrs.target,
+        'data-label': node.attrs.label ?? '',
+        class: 'pm-pagelink' + (missing ? ' is-missing' : ''),
+        title: missing ? `No page called “${node.attrs.target}” yet` : `${node.attrs.target} · ⌘-click to open`,
+      }),
+      title,
+    ]
   },
   renderText: ({ node }) => node.attrs.label || resolver.pageTitle(node.attrs.target) || node.attrs.target,
 })
@@ -80,7 +89,16 @@ const VaultImage = Image.extend({
       src: { default: null, renderHTML: (a) => ({ src: a.src ? resolver.assetUrl(a.src) : null, 'data-src': a.src }) },
     }
   },
-  parseHTML: () => [{ tag: 'img[src]', getAttrs: (el) => ({ src: (el as HTMLElement).dataset.src || (el as HTMLImageElement).getAttribute('src'), alt: (el as HTMLImageElement).alt || null, title: (el as HTMLImageElement).title || null }) }],
+  parseHTML: () => [
+    {
+      tag: 'img[src]',
+      getAttrs: (el) => ({
+        src: (el as HTMLElement).dataset.src || (el as HTMLImageElement).getAttribute('src'),
+        alt: (el as HTMLImageElement).alt || null,
+        title: (el as HTMLImageElement).title || null,
+      }),
+    },
+  ],
 }).configure({ inline: true, allowBase64: false })
 
 /** Return in a heading starts a normal paragraph, and Shift-Return is a line break, as in Docs. */
