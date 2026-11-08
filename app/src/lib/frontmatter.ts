@@ -32,7 +32,8 @@ export interface FrontMatter {
 
 const FENCE = /^---[ \t]*\n(?:([\s\S]*?)\n)?---[ \t]*(?:\n|$)/
 // A key: letters (any script), digits, _ . - and single spaces, as Obsidian vaults write them.
-const KEY = /^([\p{L}\p{N}_][\p{L}\p{N}\p{M}_.-]*(?: [\p{L}\p{N}\p{M}_.-]+)*)[ ]*:(?:[ ]+(.*?))?[ ]*$/u
+// Lines are already split at \n, so `s` only lets a value hold U+2028 or U+2029 as written.
+const KEY = /^([\p{L}\p{N}_][\p{L}\p{N}\p{M}_.-]*(?: [\p{L}\p{N}\p{M}_.-]+)*)[ ]*:(?:[ ]+(.*?))?[ ]*$/su
 
 /** Split a document into its front matter and body. */
 export function splitFrontMatter(content: string): FrontMatter {
@@ -127,7 +128,7 @@ function read(line: string, children: string[], out: Entry[]): string | undefine
     if (value !== '') return `“${key}” continues over several lines.`
     for (const child of children) {
       if (/^\s*#/.test(child)) continue // a comment among the items; kept until the list changes
-      const item = child.match(/^(\s*-)(?:[ ]+(.*?))?[ ]*$/)
+      const item = child.match(/^(\s*-)(?:[ ]+(.*?))?[ ]*$/s)
       if (!item) return `“${key}” has nested values.`
       const v = scalar(item[2] ?? '')
       if (v === null || /^[[{]/.test(item[2] ?? '')) return `“${key}” has a list item Ekdanta can't read.`
@@ -174,7 +175,8 @@ function scalar(v: string): string | null {
     const m = v.match(/^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$/)
     if (!m) return null
     try {
-      return JSON.parse(`"${m[1].replace(/\\'/g, "'")}"`) as string
+      // YAML allows \' where JSON doesn't. Escapes are read in pairs, so the \\ in \\' stays an escaped backslash.
+      return JSON.parse(`"${m[1].replace(/\\([\s\S])/g, (pair, c: string) => (c === "'" ? "'" : pair))}"`) as string
     } catch {
       return m[1]
     }
@@ -325,13 +327,19 @@ export const patchContent = (content: string, patch: MetaPatch) => joinDoc(patch
 
 const blockList = (key: string, items: string[], indent: string) => [`${key}:`, ...items.map((i) => `${indent}- ${yamlValue(i)}`)]
 
-const flowValue = (items: string[]) => `[${items.map((i) => (/[,[\]{}#"']|^\s|\s$/.test(i) || i === '' ? JSON.stringify(i) : yamlValue(i))).join(', ')}]`
+const flowValue = (items: string[]) => `[${items.map((i) => (/[,[\]{}#"']|^\s|\s$/.test(i) || i === '' ? quoted(i) : yamlValue(i))).join(', ')}]`
 
 /**
  * Quote a value only when plain YAML would misread it (a colon, a comment, a leading quote or symbol),
- * or when reading it back would change it (a value ending in a quote mark, or spanning lines).
+ * or when reading it back would change it (a value ending in a quote mark, or spanning lines, U+2028 and U+2029 included).
  */
 function yamlValue(value: string) {
-  if (value === '' || !/(: |:$|\s#|^[\s"'`!&*?|>%@{}[\],#-]|["'\s]$|[\r\n])/.test(value)) return value
-  return JSON.stringify(value)
+  if (value === '' || !/(: |:$|\s#|^[\s"'`!&*?|>%@{}[\],#-]|["'\s]$|[\r\n\u2028\u2029])/.test(value)) return value
+  return quoted(value)
 }
+
+/** A double-quoted YAML string. JSON leaves U+2028 and U+2029 bare, and a bare one ends the line for a reader, so they're escaped too. */
+const quoted = (value: string) =>
+  JSON.stringify(value)
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029')

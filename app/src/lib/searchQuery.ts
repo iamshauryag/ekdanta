@@ -12,6 +12,7 @@
 // Case and accents don't matter unless matchCase is on. Shared by the app (which checks the query
 // before asking) and the server (which runs it); DOM-free, tested in searchQuery.test.ts.
 import { fold } from './fuzzy.ts'
+import { listOf, splitFrontMatter } from './frontmatter.ts'
 
 export { fold }
 
@@ -161,12 +162,27 @@ export function plainLines(body: string): string[] {
   return body.split('\n').map((l) => (/^\s*(```|~~~)/.test(l) ? '' : plainLine(l)))
 }
 
-/** A list in front matter: `key: [a, b]`, `key: a, b`, or a YAML block of `- a` lines. */
+/**
+ * A list in front matter: `key: [a, b]`, `key: a, b`, or a YAML block of `- a` lines, indented or not.
+ * It's read by the shared parser, so CRLF and BOM files read as they do everywhere else. The key matches in any case.
+ * When the parser can't read the key (`aliases: @home`, a `|` block, a nested or tab-indented list), its
+ * text is split plainly instead, so an alias or tag that was found before is still found.
+ */
 export function frontMatterList(content: string, key: string): string[] {
-  const fm = content.match(/^---\n([\s\S]*?)\n---/)
+  const fm = splitFrontMatter(content)
+  const want = key.toLowerCase()
+  const k = Object.keys(fm.meta).find((x) => x.toLowerCase() === want)
+  return k ? listOf(fm, k) : plainList(content, key)
+}
+
+/** A front-matter key's items split as plain text, for a value the parser can't read. */
+function plainList(content: string, key: string): string[] {
+  const text = content.replace(/^﻿/, '').replace(/\r\n/g, '\n')
+  const fm = text.match(/^---\n([\s\S]*?)\n---/)
   if (!fm) return []
   const lines = fm[1].split('\n')
-  const i = lines.findIndex((l) => new RegExp(`^${key}:`, 'i').test(l))
+  const head = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:`, 'i')
+  const i = lines.findIndex((l) => head.test(l))
   if (i < 0) return []
   const inline = lines[i].slice(key.length + 1).trim()
   const items: string[] = []

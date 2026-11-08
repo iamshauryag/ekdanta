@@ -116,6 +116,39 @@ test('a value spanning lines is quoted, so the block stays valid YAML', () => {
   assert.equal(back.meta.after, 'kept')
 })
 
+test('a backslash before an apostrophe survives quoting and reading back', () => {
+  for (const value of ["x: a\\'b", "C:\\'s", "ends with \\'", "a \\\\' b: c"]) {
+    const back = splitFrontMatter(patchContent('x', { title: value, tags: [value] }))
+    assert.equal(back.meta.title, value)
+    assert.deepEqual(back.lists.tags, [value])
+    assert.equal(back.readonly, false)
+  }
+  // A list in flow style goes through the same quoting.
+  const flow = splitFrontMatter(patchContent('---\naliases: [one]\n---\nx', { aliases: ["a\\'b, c"] }))
+  assert.deepEqual(flow.lists.aliases, ["a\\'b, c"])
+  // YAML's own \' escape still reads as an apostrophe.
+  assert.equal(splitFrontMatter('---\ntitle: "it\\\'s"\n---\nx').meta.title, "it's")
+})
+
+test('U+2028 and U+2029 are quoted as escapes, and a hand-written one is still readable', () => {
+  for (const sep of ['\u2028', '\u2029']) {
+    const value = `one${sep}two`
+    const text = patchContent('x', { title: value, after: 'kept' })
+    assert.ok(!text.includes(sep), 'written as an escape, not the bare character')
+    const back = splitFrontMatter(text)
+    assert.equal(back.meta.title, value)
+    assert.equal(back.meta.after, 'kept')
+    assert.equal(back.body, 'x')
+    const list = splitFrontMatter(patchContent('---\naliases: [a]\n---\nx', { aliases: [value, 'b'] }))
+    assert.deepEqual(list.lists.aliases, [value, 'b'])
+    // Written by another tool: the front matter is still front matter, not body text.
+    const raw = splitFrontMatter(`---\ntitle: ${value}\ntags:\n  - ${value}\n---\nx`)
+    assert.equal(raw.meta.title, value)
+    assert.deepEqual(raw.lists.tags, [value])
+    assert.equal(raw.body, 'x')
+  }
+})
+
 test('applyPatch keeps working on flat meta', () => {
   assert.deepEqual(applyPatch({ a: '1', b: '2' }, { a: null, c: '3', d: ['x', 'y'] }), { b: '2', c: '3', d: 'x, y' })
 })

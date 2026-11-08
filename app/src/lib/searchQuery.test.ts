@@ -135,7 +135,38 @@ test('front-matter lists and tags', () => {
   assert.deepEqual(frontMatterList('no front matter', 'tags'), [])
   const body = content.slice(content.indexOf('---\n', 4) + 4)
   assert.deepEqual(tagsOf(content, body).sort(), ['craft', 'craft/notes', 'editing', 'inline'])
-  assert.deepEqual(tagsOf('---\ntags: #a #b\n---\n', ''), ['a', 'b'])
+  // ' #' starts a YAML comment. Search now reads these as the sidebar's Tags group does (docTags).
+  assert.deepEqual(tagsOf('---\ntags: a #b\n---\n', ''), ['a'])
+  assert.deepEqual(tagsOf('---\ntags: #a #b\n---\n', ''), ['a'])
+})
+
+test('front-matter lists read as the shared parser reads them: CRLF, BOM, unindented items, any key case', () => {
+  assert.deepEqual(frontMatterList('---\r\ntitle: X\r\naliases: [Room, "The room"]\r\n---\r\nBody', 'aliases'), ['Room', 'The room'])
+  assert.deepEqual(frontMatterList('﻿---\naliases:\n  - Room\n---\nBody', 'aliases'), ['Room'])
+  assert.deepEqual(frontMatterList('---\naliases:\n- Room\n- "The: room"\ntitle: X\n---\nBody', 'aliases'), ['Room', 'The: room'])
+  assert.deepEqual(frontMatterList('---\nAliases: Room, The room\n---\n', 'aliases'), ['Room', 'The room'])
+  assert.deepEqual(frontMatterList('---\ntitle: X\n---\n', 'aliases'), [])
+  // A horizontal rule at the top is text, not front matter.
+  assert.deepEqual(frontMatterList('---\nJust a rule\n---\n', 'aliases'), [])
+})
+
+test('a key the parser cannot read is split as plain text, as before', () => {
+  for (const v of ['@home', '*Star*', '!x', '&x']) assert.deepEqual(frontMatterList(`---\ntitle: X\naliases: ${v}\n---\n`, 'aliases'), [v])
+  assert.deepEqual(frontMatterList('---\naliases: [a, [b]]\n---\n', 'aliases'), ['a', '[b]'])
+  assert.deepEqual(frontMatterList('---\naliases: [a, {b}]\n---\n', 'aliases'), ['a', '{b}'])
+  assert.deepEqual(frontMatterList('---\naliases:\n\t- Room\n\t- The room\n---\n', 'aliases'), ['Room', 'The room'])
+  assert.deepEqual(frontMatterList('---\r\naliases:\r\n\t- Room\r\n---\r\n', 'aliases'), ['Room'])
+  // A block scalar reads as the old split read it (its marker), rather than vanishing.
+  assert.deepEqual(frontMatterList('---\naliases: |\n  Room\n---\n', 'aliases'), ['|'])
+  assert.deepEqual(tagsOf('---\ntags:\n\t- craft\n---\n', ''), ['craft'])
+  // Another key's problem doesn't stop a readable key from being read properly.
+  assert.deepEqual(frontMatterList('---\nnote: @x\naliases: Room #1\n---\n', 'aliases'), ['Room'])
+})
+
+test('the YAML-correct readings stay: comments, doubled quotes, the last duplicate key', () => {
+  assert.deepEqual(frontMatterList('---\naliases: Room #1\n---\n', 'aliases'), ['Room'])
+  assert.deepEqual(frontMatterList("---\naliases: ['it''s', b]\n---\n", 'aliases'), ["it's", 'b'])
+  assert.deepEqual(frontMatterList('---\naliases: A\naliases: B\n---\n', 'aliases'), ['B'])
 })
 
 test('snippets are about 80 characters around the first match, cut at words', () => {
