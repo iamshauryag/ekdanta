@@ -22,6 +22,7 @@ import { captureIdea, dismissIdeaTitle, listIdeas, starIdea, startIdeaPiece } fr
 import { keepPartnerIdea, runPartner } from './idea-partner.ts'
 import { runReader, type ReaderRequest } from './reader.ts'
 import { assistantRoutes } from './assistant.ts'
+import { breakdownRoutes } from './breakdown.ts'
 import { HttpError, isLocalRequest, isSameOrigin, local, readJson, statusOf } from './net.ts'
 import { addUpload, commit, convert, openBatch, preview, undo } from './import/index.ts'
 import { exportDoc, pandoc, type ExportRequest } from './export.ts'
@@ -455,6 +456,7 @@ const routes: Record<string, Handler> = {
   'POST /api/brain/lookup': local(async (req) => lookup((await body<{ input: string }>(req)).input)),
   // The Assistant tab: a chat per document (server/assistant.ts). This computer only; bodies are capped.
   ...assistantRoutes,
+  ...breakdownRoutes,
 }
 
 /** Keep a version before the server moves or rewrites a document. A failure never blocks the move. */

@@ -18,6 +18,7 @@ import { VersionPreview } from './components/VersionPreview.tsx'
 import type { VersionRow } from './lib/versions.ts'
 import { Settings } from './components/Settings.tsx'
 import { ExportSheet } from './components/ExportSheet.tsx'
+import { BreakdownSheet } from './components/BreakdownSheet.tsx'
 import { ThinkingSpace } from './components/ThinkingSpace.tsx'
 import { VoicePage } from './components/VoicePage.tsx'
 import { MoreMenu } from './components/MoreMenu.tsx'
@@ -164,6 +165,8 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [exporting, setExporting] = useState<string | null>(null) // the document the Export sheet is for
   const closeExport = useCallback(() => setExporting(null), [])
+  const [breakingDown, setBreakingDown] = useState<string | null>(null) // the piece the Break it down sheet is for
+  const closeBreakdown = useCallback(() => setBreakingDown(null), [])
   // Something the server couldn't do, shown in a banner over the page until dismissed.
   const [error, setError] = useState<string | null>(null)
   const fail = useCallback((e: unknown) => setError(e instanceof Error ? e.message : String(e)), [])
@@ -1610,6 +1613,7 @@ export function App() {
       star: () => void (docRef.current && toggleExemplar(docRef.current.path)),
       settings: () => setSettingsOpen((o) => !o),
       export: () => docRef.current && setExporting(docRef.current.path),
+      breakdown: () => docRef.current && setBreakingDown(docRef.current.path),
       newDraft: () => newDraft(),
       newFromTemplate: () => setPicker('new'),
       import: () => startImport(),
@@ -1792,10 +1796,11 @@ export function App() {
   const whyNot = (id: string): string | undefined => {
     const group = COMMANDS.find((c) => c.id === id)?.group
     const onPage = group === 'Text' || group === 'Blocks' || id === 'find' || id === 'readAloud'
-    const needsDoc = onPage || ['save', 'star', 'thinking', 'brief', 'saveVersion', 'readAs'].includes(id)
+    const needsDoc = onPage || ['save', 'star', 'thinking', 'brief', 'saveVersion', 'readAs', 'breakdown'].includes(id)
     if (needsDoc && (!loaded || voiceView || ideasView || brainView)) return 'No document open'
     if (onPage && !livePreview) return 'Not in Markdown view'
     if (id === 'readAs' && ceiling < 2) return 'Needs help ceiling 2 or more'
+    if (id === 'breakdown' && ceiling < 1) return 'Help is off (ceiling 0)'
     if (onPage && thinkingOpen) return 'Thinking Space is open'
     if (onPage && !editor) return 'No document open'
   }
@@ -2206,6 +2211,8 @@ export function App() {
           platform={platform}
           ceiling={ceiling}
           onCeiling={(ceiling) => changeSettings({ ceiling })}
+          files={files}
+          onBreakDown={() => loaded && setBreakingDown(loaded.path)}
           field={(() => {
             const f = fieldSlot(platform)
             return f && loaded ? { ...f, value: loaded.meta[f.key] ?? '', canSuggest: livePreview, onChange: (v: string) => setMeta({ [f.key]: v || null }) } : null
@@ -2294,6 +2301,22 @@ export function App() {
           flush={flush}
           onSaved={refreshFiles}
           onClose={closeExport}
+        />
+      )}
+
+      {breakingDown && (
+        <BreakdownSheet
+          path={breakingDown}
+          flush={flush}
+          onOpenDoc={openDoc}
+          onCreated={() => {
+            refreshFiles()
+            api
+              .settings()
+              .then(setSettings)
+              .catch(() => {})
+          }}
+          onClose={closeBreakdown}
         />
       )}
 

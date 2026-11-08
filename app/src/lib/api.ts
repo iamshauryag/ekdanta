@@ -7,6 +7,7 @@ import type { EdgeCandidate, EdgeSlot } from './edge.ts'
 import type { VersionEntry, VersionRow } from './versions.ts'
 import type { Reader, ReaderQuestion } from './reader.ts'
 import type { SourceFields, SourceType } from './brain.ts'
+import type { CreateReply, Options, PlanReply, PostRequest, Target } from './breakdown.ts'
 // Thin client for the local server in server/api.ts.
 /** Why a kind change left a document where it was (see server/vault.ts). */
 export type PlaceStay = 'special' | 'excluded' | 'brain' | 'unknown-kind' | 'target-special' | 'target-excluded' | 'target-brain'
@@ -26,6 +27,8 @@ export interface FileEntry {
   brief?: boolean
   /** The idea this piece was started from. */
   fromIdea?: string
+  /** The piece this post was broken down from, as a wiki link (front matter `derived-from`). */
+  derivedFrom?: string
   aliases?: string[]
 }
 
@@ -360,6 +363,9 @@ export const api = {
   snippets: () => fetch('/api/snippets').then(json<string[]>),
   snippet: (path: string) => fetch('/api/snippet?path=' + encodeURIComponent(path)).then(json<{ css: string; error?: string }>),
   files: () => fetch('/api/files').then(json<FileEntry[]>),
+  breakdownOptions: (doc: string) => fetch('/api/breakdown/options?doc=' + encodeURIComponent(doc)).then(json<Options>),
+  breakdownPlan: (doc: string, targets: Target[], signal?: AbortSignal) => fetch('/api/breakdown/plan', { ...send('POST', { doc, targets }), signal }).then(json<PlanReply>),
+  breakdownCreate: (doc: string, posts: PostRequest[], signal?: AbortSignal) => fetch('/api/breakdown/create', { ...send('POST', { doc, posts }), signal }).then(json<CreateReply>),
   read: (path: string) =>
     fetch('/api/file?path=' + encodeURIComponent(path))
       .then(json<{ content: string }>)
