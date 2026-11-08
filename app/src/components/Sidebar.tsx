@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { findKind, kindDisplayName, kindName, kindOfFolder, kinds, pieceName, plural } from '../lib/kinds.ts'
 import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
-import { countsTags, hasTag, type TagCount } from '../lib/tags.ts'
+import { cleanTag, countsTags, hasTag, type TagCount } from '../lib/tags.ts'
+import { Chips } from './Properties.tsx'
 import { Icon } from './Icon.tsx'
 import { briefLabel } from '../lib/brief.ts'
 import { helpMod } from '../editor/help.ts'
@@ -56,6 +57,8 @@ export interface FileActions {
   pinBrief: (path: string) => void
   /** Whether the page has a brief pinned, as far as the app knows. */
   hasBrief: (path: string) => boolean
+  /** Add and take away the page's front-matter tags, without opening it. */
+  tag: (path: string, add: string[], remove: string[]) => void
 }
 
 /** Fewer than this and a voice profile has too little to go on. */
@@ -158,6 +161,7 @@ function Vault({ files: all, current, onOpen, onCreate, onStar, canStar, brainFo
                 actions={actions}
                 folders={allFolders}
                 brainFolder={brainFolder}
+                vaultTags={tags}
               />
             ))}
         </div>
@@ -251,7 +255,7 @@ function VaultMenu({ onImport }: { onImport: () => void }) {
   )
 }
 
-function Exemplars({ files, current, onOpen, onStar, canStar, actions }: Props) {
+function Exemplars({ files, current, onOpen, onStar, canStar, actions, tags }: Props) {
   const folders = [...new Set(files.map((f) => f.folder))].sort()
   const platformOf = (f: FileEntry) => (f.platform ?? 'essay').toLowerCase()
   // The usual platforms first, then anything else the vault uses (notes, say).
@@ -270,7 +274,16 @@ function Exemplars({ files, current, onOpen, onStar, canStar, actions }: Props) 
               <span className="count">{starred.length}</span>
             </div>
             {starred.map((f) => (
-              <FileRow key={f.path} f={f} current={current} onOpen={onOpen} onStar={f.exemplar || !canStar || canStar(f.path) ? onStar : undefined} actions={actions} folders={folders} />
+              <FileRow
+                key={f.path}
+                f={f}
+                current={current}
+                onOpen={onOpen}
+                onStar={f.exemplar || !canStar || canStar(f.path) ? onStar : undefined}
+                actions={actions}
+                folders={folders}
+                vaultTags={tags}
+              />
             ))}
             {ids.includes(pl) && starred.length < ENOUGH && (
               <p className="sidebar-hint">
@@ -314,6 +327,7 @@ function FileRow({
   actions,
   folders,
   brainFolder,
+  vaultTags,
 }: {
   f: FileEntry
   current: string | null
@@ -322,8 +336,9 @@ function FileRow({
   actions: FileActions
   folders: string[]
   brainFolder?: string
+  vaultTags: TagCount[]
 }) {
-  const [menu, setMenu] = useState<null | 'main' | 'move' | 'new-folder'>(null)
+  const [menu, setMenu] = useState<null | 'main' | 'move' | 'new-folder' | 'tags'>(null)
   const [renaming, setRenaming] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -388,6 +403,9 @@ function FileRow({
           <button role="menuitem" onClick={() => setMenu('move')}>
             Move to… <span className="muted">›</span>
           </button>
+          <button role="menuitem" onClick={() => setMenu('tags')}>
+            Tags… <span className="muted">{f.fmTags?.length ? f.fmTags.length : '›'}</span>
+          </button>
           <button role="menuitem" onClick={act(() => actions.duplicate(f.path))}>
             Duplicate
           </button>
@@ -428,6 +446,7 @@ function FileRow({
           </button>
         </div>
       )}
+      {menu === 'tags' && <TagsMenu f={f} vaultTags={vaultTags} onBack={() => setMenu('main')} onChange={(add, remove) => actions.tag(f.path, add, remove)} />}
       {menu === 'new-folder' && (
         <form
           className="menu"
@@ -440,6 +459,39 @@ function FileRow({
           <input name="folder" placeholder="Folder name" aria-label="Folder name" autoFocus />
         </form>
       )}
+    </div>
+  )
+}
+
+/**
+ * A page's tags from its ⋯ menu, without opening it: the same chips and suggestions as Properties.
+ * Only front-matter tags can be taken away here; #tags in the text are listed, to be edited there.
+ */
+function TagsMenu({ f, vaultTags, onBack, onChange }: { f: FileEntry; vaultTags: TagCount[]; onBack: () => void; onChange: (add: string[], remove: string[]) => void }) {
+  const own = f.fmTags ?? []
+  const lower = new Set(own.map((t) => t.toLowerCase()))
+  const inText = f.tags.filter((t) => !lower.has(t.toLowerCase()))
+  return (
+    <div className="menu file-tags" role="dialog" aria-label={`Tags for ${f.title}`}>
+      <button className="menu-back" onClick={onBack}>
+        ‹ Tags
+      </button>
+      <Chips
+        label={`tags for ${f.title}`}
+        values={own}
+        clean={cleanTag}
+        suggestions={vaultTags}
+        prefix="#"
+        autoFocus
+        onChange={(next) => {
+          const had = (list: string[], t: string) => list.some((x) => x.toLowerCase() === t.toLowerCase())
+          onChange(
+            next.filter((t) => !had(own, t)),
+            own.filter((t) => !had(next, t)),
+          )
+        }}
+      />
+      {inText.length > 0 && <p className="file-tags-note">In the text: {inText.map((t) => `#${t}`).join(' ')}</p>}
     </div>
   )
 }

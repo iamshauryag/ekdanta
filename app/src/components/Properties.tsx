@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { listOf, type FrontMatter, type MetaPatch } from '../lib/frontmatter.ts'
 import { cleanTag, metaTags, type TagCount } from '../lib/tags.ts'
+import { modifiedLabel, modifiedStamp } from '../lib/modified.ts'
 
 interface Props {
   fm: Pick<FrontMatter, 'meta' | 'lists' | 'readonly' | 'problem' | 'raw'>
@@ -9,6 +10,8 @@ interface Props {
   onPatch: (patch: MetaPatch) => void
   /** Every tag in the vault, for suggestions. */
   vaultTags: TagCount[]
+  /** When the file last changed on disk (its mtime), shown as a read-only property. */
+  modified?: number
 }
 
 const STATUSES = ['draft', 'ready', 'published']
@@ -25,7 +28,7 @@ const today = () => {
 }
 
 /** The document's properties: one quiet line under the title, a table when opened. */
-export function Properties({ fm, open, onOpen, onPatch, vaultTags }: Props) {
+export function Properties({ fm, open, onOpen, onPatch, vaultTags, modified }: Props) {
   const status = fm.meta.status
   // Read as the vault's counts read it: `tags: craft essays` is two tags.
   const tags = metaTags(fm)
@@ -86,6 +89,14 @@ export function Properties({ fm, open, onOpen, onPatch, vaultTags }: Props) {
                 )}
               </Row>
             ))}
+          {/* From the file itself, so it can't be edited or removed here. A `modified` key the writer keeps (an Obsidian plugin's, say) shows instead. */}
+          {modified !== undefined && !('modified' in fm.meta) && (
+            <Row name="modified">
+              <span className="props-derived" title={`${modifiedStamp(modified)}, from the file`}>
+                {modifiedLabel(modified)}
+              </span>
+            </Row>
+          )}
           {adding ? (
             <NewKey
               taken={(k) => k in fm.meta || k === 'status' || k === 'tags'}
@@ -172,13 +183,14 @@ function NewKey({ taken, onAdd }: { taken: (k: string) => boolean; onAdd: (k: st
 }
 
 /** A list of values as chips. Return or a comma adds; Backspace in an empty field removes the last. */
-function Chips({
+export function Chips({
   label,
   values,
   onChange,
   clean,
   suggestions,
   prefix = '',
+  autoFocus,
 }: {
   label: string
   values: string[]
@@ -186,6 +198,7 @@ function Chips({
   clean: (s: string) => string
   suggestions?: TagCount[]
   prefix?: string
+  autoFocus?: boolean
 }) {
   const [text, setText] = useState('')
   const [pick, setPick] = useState(-1) // the highlighted suggestion; -1 for none
@@ -229,6 +242,7 @@ function Chips({
       <span className="prop-chips-field">
         <input
           ref={input}
+          autoFocus={autoFocus}
           className="prop-chips-input"
           aria-label={`Add to ${label}`}
           placeholder={values.length ? '' : 'Add…'}

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { applyPatch, joinDoc, joinFrontMatter, listOf, patchContent, patchFrontMatter, splitFrontMatter } from './frontmatter.ts'
-import { countTags, docTags, hasTag, inlineTags, metaTags, tagsInText, vaultTagCounts } from './tags.ts'
+import { countTags, docTags, editTags, hasTag, inlineTags, metaTags, tagsInText, vaultTagCounts } from './tags.ts'
 
 const doc = (...lines: string[]) => lines.join('\n')
 
@@ -226,4 +226,10 @@ test('the vault counts leave out templates and ideas.md', () => {
     { path: 'ideas.md', tags: ['someday'] },
   ])
   assert.deepEqual(counts, [{ tag: 'craft', count: 1 }])
+})
+
+test('editTags adds and takes away tags, ignoring case and keeping the casing typed', () => {
+  assert.deepEqual(editTags(['craft', 'Voice'], ['#new', 'VOICE', ' two words '], ['CRAFT']), ['Voice', 'new', 'two-words'])
+  assert.deepEqual(editTags([], ['', '#'], []), [])
+  assert.deepEqual(editTags(['a'], [], ['#a']), [])
 })

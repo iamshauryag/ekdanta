@@ -17,6 +17,8 @@ export interface FileEntry {
   mtime: number
   /** Front-matter and inline tags, as written. */
   tags: string[]
+  /** Just the front matter's `tags`: the ones the sidebar can add and take away. */
+  fmTags?: string[]
   /** A brief is pinned to it. */
   brief?: boolean
   /** The idea this piece was started from. */
@@ -304,7 +306,10 @@ export const api = {
   changes: (since?: number) => fetch('/api/changes' + (since === undefined ? '' : '?since=' + since)).then(json<Changes>),
   create: (folder: string, platform?: string) => fetch('/api/new', send('POST', { folder, platform })).then(json<{ path: string }>),
   name: (path: string, title: string) => fetch('/api/name', send('POST', { path, title })).then(json<Moved>),
-  place: (path: string) => fetch('/api/place', send('POST', { path })).then(json<Moved>),
+  /** File a document in its kind's folder; `stay` says why it didn't move. */
+  place: (path: string) => fetch('/api/place', send('POST', { path })).then(json<Moved & { stay?: 'special' | 'excluded' | 'brain' | 'unknown-kind' }>),
+  /** Undo a kind change that moved a document: the old kind back, and the document back at `prev`. */
+  unplace: (path: string, prev: string, platform: string) => fetch('/api/place/undo', send('POST', { path, prev, platform })).then(json<Moved>),
   rename: (path: string, title: string) => fetch('/api/rename', send('POST', { path, title })).then(json<Moved>),
   move: (path: string, folder: string) => fetch('/api/move', send('POST', { path, folder })).then(json<Moved>),
   duplicate: (path: string) => fetch('/api/duplicate', send('POST', { path })).then(json<Moved>),
@@ -315,6 +320,8 @@ export const api = {
   discard: (path: string) => fetch('/api/discard', send('POST', { path })).then(json<{ discarded: boolean }>),
   patchMeta: (path: string, patch: MetaPatch) => fetch('/api/meta', send('POST', { path, patch })).then(json<{ ok: true; touched?: Touched[] }>),
   tags: () => fetch('/api/tags').then(json<TagCount[]>),
+  /** Add and take away front-matter tags on a note that isn't open. */
+  editTags: (path: string, add: string[], remove: string[]) => fetch('/api/tags/edit', send('POST', { path, add, remove })).then(json<{ tags: string[]; touched?: Touched[] }>),
   voice: () => fetch('/api/voice').then(json<VoiceSummary[]>),
   voiceProfile: (platform: string) =>
     fetch('/api/voice/profile?platform=' + encodeURIComponent(platform))

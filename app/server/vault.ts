@@ -4,10 +4,11 @@ import { createHash } from 'node:crypto'
 import { constants, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { joinDoc, joinFrontMatter, patchContent, patchFrontMatter, splitFrontMatter, type MetaPatch } from '../src/lib/frontmatter.ts'
-import { docTags } from '../src/lib/tags.ts'
+import { docTags, metaTags } from '../src/lib/tags.ts'
 import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
 import { docDefaults } from '../src/lib/docstyle.ts'
 import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
+import { isBrainPath } from '../src/lib/brain.ts'
 import { docSlug, sameName, slug } from '../src/lib/slug.ts'
 import { frontMatterList } from '../src/lib/searchQuery.ts'
 import { createFileCache, type FileStat } from './cache.ts'
@@ -27,6 +28,8 @@ export interface FileEntry {
   aliases?: string[]
   /** Front-matter and inline tags, as written. */
   tags: string[]
+  /** Just the front matter's `tags`: the ones the sidebar can add and take away. Left out when there are none. */
+  fmTags?: string[]
   /** The idea from ideas.md this piece was started from (front matter `from-idea`). */
   fromIdea?: string
 }
@@ -50,10 +53,16 @@ const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
     exemplar: meta.exemplar === 'true',
     mtime: stat.mtime,
     tags: docTags(fm),
+    ...fmTagsOf(fm),
     ...(meta['from-idea']?.trim() ? { fromIdea: meta['from-idea'] } : {}),
     ...aliasesOf(raw),
   }
 })
+
+function fmTagsOf(fm: Parameters<typeof metaTags>[0]) {
+  const fmTags = metaTags(fm)
+  return fmTags.length ? { fmTags } : {}
+}
 
 function aliasesOf(raw: string) {
   const aliases = frontMatterList(raw, 'aliases')
@@ -622,23 +631,140 @@ const exists = (abs: string) =>
     () => false,
   )
 
+/** Why a document stays where it is when its kind changes. */
+export type Stay = 'special' | 'excluded' | 'brain' | 'unknown-kind'
+
+export interface PlaceOptions {
+  /** The writer's excluded folders (settings). */
+  excluded?: readonly string[]
+  /** The Brain's folder (settings). */
+  brain?: string
+}
+
 /**
- * After a platform change, move a document into that platform's folder. Only documents in
- * another platform's folder (or loose at the top of the vault) move; one the writer filed
- * somewhere of their own stays put.
+ * Where a document's kind files it: the folder it moves to, or null when it's already in that
+ * kind's folder (at any depth: essays/2024/ is still the essays folder) or stays put for a reason.
+ * A kind's folder is the one already in the vault that holds it, in whatever case it was written,
+ * or else the kind's own. Special folders and files, the writer's excluded folders and the Brain
+ * keep their notes whatever kind they name: they hold material, or what the writer set aside.
  */
-export async function placeDoc(kinds: Kind[], rel: string) {
-  const { meta } = splitFrontMatter(await readDoc(rel))
-  const kind = findKind(kinds, meta.platform ?? '')
-  const folder = folderOf(rel)
+export async function placement(kinds: Kind[], rel: string, opts: PlaceOptions = {}): Promise<{ to: string | null; stay?: Stay }> {
+  if (isSpecialPath(rel)) return { to: null, stay: 'special' }
+  if (opts.brain && isBrainPath(rel, opts.brain)) return { to: null, stay: 'brain' }
+  if (isSpecialPath(rel, opts.excluded)) return { to: null, stay: 'excluded' }
+  const kind = findKind(kinds, splitFrontMatter(await readDoc(rel)).meta.platform ?? '')
+  if (!kind) return { to: null, stay: 'unknown-kind' }
   const holds = (f: string) => kindOfFolder(kinds, f)?.id
-  // Templates, a journal, sources and the like stay where they are, whatever kind they name.
-  if (isSpecialPath(rel)) return rel
-  if (!kind || holds(folder) === kind.id) return rel
-  if (folder && !holds(folder)) return rel
+  const top = rel.includes('/') ? rel.split('/')[0] : ''
+  if (top && holds(top) === kind.id) return { to: null }
   const dirs = (await fs.readdir(VAULT, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name)
-  const target = dirs.find((d) => holds(d) === kind.id) ?? kind.folder
-  return moveDoc(rel, await freePath(target, path.posix.basename(rel, '.md')))
+  return { to: dirs.find((d) => holds(d) === kind.id) ?? kind.folder }
+}
+
+/**
+ * After a kind change, file the document in that kind's folder. It moves from anywhere else,
+ * a folder of the writer's own included, through relocate, so everything that belongs to it
+ * follows. A name already taken there gets -2. Returns its path, and why it stayed, if it did.
+ */
+export async function fileByKind(kinds: Kind[], rel: string, opts: PlaceOptions = {}): Promise<{ path: string; stay?: Stay }> {
+  const { to, stay } = await placement(kinds, rel, opts)
+  if (to === null) return stay ? { path: rel, stay } : { path: rel }
+  return { path: await relocate(rel, await freePath(to, path.posix.basename(rel, '.md'))) }
+}
+
+/** fileByKind, for callers that only want the path. */
+export const placeDoc = async (kinds: Kind[], rel: string, opts: PlaceOptions = {}) => (await fileByKind(kinds, rel, opts)).path
+
+/**
+ * Undo a kind change that moved a document: its kind goes back to `platform` and the document to
+ * `prev` (or prev-2 if something has taken that name since). Either half is skipped when there's
+ * nothing to put back.
+ */
+export async function unfileDoc(rel: string, prev: string, platform?: string) {
+  if (platform !== undefined) {
+    const fm = splitFrontMatter(await readDoc(rel))
+    if ((fm.meta.platform ?? '') !== platform) {
+      await editableFrontMatter(rel, 'change the kind of')
+      await patchDoc(rel, { platform: platform || null }, 'move')
+    }
+  }
+  if (prev === rel) return rel
+  resolveInVault(prev)
+  if (!prev.endsWith('.md')) throw new HttpError(400, 'Not a document')
+  return relocate(rel, await freePath(folderOf(prev), path.posix.basename(prev, '.md')))
+}
+
+/**
+ * Move a document the way a writer expects a move to work: its sidecars go with it (moveDoc), its
+ * relative links and pictures still point at the same files from the new folder, and [[links]] to
+ * it by path point at it again. Links by name are changed too when the move had to rename it, but
+ * not when another page still has the old name: those may well have meant that one.
+ */
+async function relocate(rel: string, next: string) {
+  const moved = await moveDoc(rel, next)
+  const from = folderOf(rel)
+  const to = folderOf(moved)
+  if (from !== to) {
+    const text = await readDoc(moved)
+    const fm = splitFrontMatter(text)
+    const body = rebaseLinks(fm.body, from, to)
+    if (body !== fm.body) await writeDoc(moved, joinDoc({ ...fm, body }), { reason: 'move' })
+  }
+  const oldName = path.posix.basename(rel, '.md')
+  const byName = !(await listFiles()).some((f) => sameName(path.posix.basename(f.path, '.md'), oldName))
+  await relinkAll([[rel, moved]], { byName })
+  return moved
+}
+
+/**
+ * Relative Markdown links and pictures in a body, rewritten for a document that moved from folder
+ * `from` to folder `to`, so `../attachments/a.png` still finds its picture. Links to the web, to
+ * anchors on the page, vault-absolute ones and anything in code are left alone; so are [[links]],
+ * which find their page by name.
+ */
+export function rebaseLinks(body: string, from: string, to: string): string {
+  if (from === to) return body
+  const fix = (target: string) => {
+    if (!target || /^([a-z][a-z0-9+.-]*:|#|\/)/i.test(target)) return target
+    const hash = target.search(/[?#]/)
+    const file = hash < 0 ? target : target.slice(0, hash)
+    const rest = hash < 0 ? '' : target.slice(hash)
+    if (!file) return target
+    const abs = path.posix.normalize(path.posix.join(from || '.', file))
+    // A link that already pointed outside the vault isn't Ekdanta's to repair.
+    if (abs.startsWith('../')) return target
+    return path.posix.relative(to || '.', abs) + rest
+  }
+  const link = /(!?\[(?:[^\]\\]|\\.)*\]\()(<[^>\n]*>|[^\s()]+)((?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\))/g
+  let fence: string | null = null
+  return body
+    .split('\n')
+    .map((line) => {
+      const f = line.match(/^\s{0,3}(`{3,}|~{3,})/)
+      if (fence) {
+        if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null
+        return line
+      }
+      if (f) {
+        fence = f[1]
+        return line
+      }
+      // Inline code is cut out, rebased around, and put back as it was.
+      return line
+        .split(/(`+[^`]*`+)/)
+        .map((part) =>
+          part.startsWith('`')
+            ? part
+            : part.replace(link, (_m, open: string, target: string, close: string) => {
+                const angled = target.startsWith('<')
+                const inner = angled ? target.slice(1, -1) : target
+                const out = fix(inner)
+                return open + (angled ? `<${out}>` : out) + close
+              }),
+        )
+        .join('')
+    })
+    .join('\n')
 }
 
 const folderOf = (rel: string) => (path.posix.dirname(rel) === '.' ? '' : path.posix.dirname(rel))
@@ -679,13 +805,14 @@ export async function renameDoc(rel: string, title: string) {
 const relink = (prev: string, next: string) => relinkAll([[prev, next]])
 
 /** Point [[links]] at several documents' new names in one pass over the vault, so a link is changed at most once. */
-async function relinkAll(moves: [prev: string, next: string][]) {
+async function relinkAll(moves: [prev: string, next: string][], { byName = true } = {}) {
   const to = new Map<string, string>()
   for (const [prev, next] of moves) {
     const oldName = path.posix.basename(prev, '.md')
     const newName = path.posix.basename(next, '.md')
-    to.set(prev.replace(/\.md$/, ''), next.replace(/\.md$/, ''))
-    if (oldName !== newName) to.set(oldName, newName)
+    // A page at the top of the vault is linked by its name alone, which a move leaves working.
+    if (prev.includes('/')) to.set(prev.replace(/\.md$/, ''), next.replace(/\.md$/, ''))
+    if (oldName !== newName && byName) to.set(oldName, newName)
   }
   if (!to.size) return
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -781,7 +908,7 @@ export async function moveToFolder(kinds: Kind[], rel: string, folder: string) {
   const platform = kindOfFolder(kinds, folder)?.id
   // A kind's folder files the page as that kind; one whose front matter can't change can't say so, so it stays put.
   if (platform && splitFrontMatter(await readDoc(rel)).meta.platform?.toLowerCase() !== platform) await editableFrontMatter(rel, 'move')
-  const next = await moveDoc(rel, await freePath(folder, path.posix.basename(rel, '.md')))
+  const next = await relocate(rel, await freePath(folder, path.posix.basename(rel, '.md')))
   if (platform) await patchDoc(next, { platform }, 'move')
   return next
 }
