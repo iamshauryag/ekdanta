@@ -39,7 +39,7 @@ export interface Thoughts {
   renameGroup: (id: string, label: string) => void
 }
 
-const LEVEL: Record<number, string> = { 1: 'Recall', 2: 'Nudge', 3: 'Word', 4: 'Sentence', 5: 'Passage' }
+const LEVEL: Record<number, string> = { 1: 'Recall', 2: 'Nudge', 3: 'Word', 4: 'Sentence', 5: 'Passage', 6: 'Whole draft, written by AI' }
 
 interface Props {
   tab: PanelTab
@@ -150,6 +150,7 @@ export function Panel(p: Props) {
             status={p.status}
             onOpenDoc={p.onOpenDoc}
             onPiece={() => p.onTab('piece')}
+            onVoice={p.onVoice}
             notify={p.notify}
           />
         </div>
@@ -371,7 +372,7 @@ function HistoryLog({ history, onClear }: { history: HistoryItem[]; onClear: () 
         <div key={i} className="help-item">
           <div className="help-item-head">
             <span className="level">
-              {helpMod}
+              {h.level <= 5 ? helpMod : ''}
               {h.level} · {LEVEL[h.level]}
             </span>
             <span className="muted">{new Date(h.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -510,8 +511,15 @@ function Piece(p: Props) {
           <dt>Help ceiling</dt>
           <dd>
             <div className="seg" role="radiogroup" aria-label="Help ceiling">
-              {[0, 1, 2, 3, 4, 5].map((n) => (
-                <button key={n} role="radio" aria-checked={p.ceiling === n} className={p.ceiling === n ? 'is-on' : ''} onClick={() => p.onCeiling(n)}>
+              {[0, 1, 2, 3, 4, 5, 6].map((n) => (
+                <button
+                  key={n}
+                  role="radio"
+                  aria-checked={p.ceiling === n}
+                  className={p.ceiling === n ? 'is-on' : ''}
+                  title={n === 6 ? 'Whole drafts: the assistant may write a whole draft in your voice when you ask. Off unless you pick 6.' : undefined}
+                  onClick={() => p.onCeiling(n)}
+                >
                   {n}
                 </button>
               ))}

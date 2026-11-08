@@ -73,6 +73,8 @@ export type Help =
       sideBySide: boolean
       /** Proposed from the Assistant tab, which hears how it was decided. */
       source?: 'assistant'
+      /** A whole draft written by AI (help level 6): the help log says so. */
+      drafted?: boolean
     }
 
 interface HelpState {
@@ -174,6 +176,8 @@ export interface PageProposal {
   level: 3 | 4 | 5
   instruction: string
   accept?: boolean
+  /** A whole draft written by AI, recorded as such in the help log. */
+  drafted?: boolean
   onDone?: (outcome: 'accepted' | 'rejected' | 'partly accepted') => void
 }
 

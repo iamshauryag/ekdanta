@@ -3,6 +3,7 @@
 // showing it as a diff. A proposal only ever replaces text that is really in the draft.
 import { diffWordsWithSpace } from 'diff'
 import { fold } from './reader.ts'
+import { checkScope, hunksOf, type Ask } from './scope.ts'
 
 /** What one ask may carry. The server refuses more (413), the page stops the writer typing more. */
 export const MESSAGE_MAX = 4000
@@ -10,17 +11,22 @@ export const DOC_MAX = 200_000
 export const SELECTION_MAX = 20_000
 /** A whole request body, in bytes: the draft at its longest, in any script, and the rest. */
 export const BODY_MAX = 1_000_000
-export const MAX_PROPOSALS = 8
+/**
+ * How many proposals one answer may carry. A whole-piece ask ("remove the emojis") comes back as many
+ * small changes rather than one big one, so this is generous; the rest wait for the next ask.
+ */
+export const MAX_PROPOSALS = 40
 /** How many of the model's changes are looked at, at most. */
-export const MAX_RAW_CHANGES = 32
+export const MAX_RAW_CHANGES = 80
 /** The longest reply, and the longest text one proposal may replace or put in, kept in the chat file. */
 export const REPLY_MAX = 8000
 export const CHANGE_MAX = 20_000
 /** How much of the draft on each side of a proposal is kept, so it is only ever found again at the same spot. */
 export const CONTEXT_CHARS = 24
 
-/** The help levels, as the assistant uses them. 0 is off. */
-export const LEVEL_NAMES: Record<number, string> = { 0: 'Off', 1: 'Recall', 2: 'Nudge', 3: 'Word', 4: 'Sentence', 5: 'Passage' }
+/** The help levels, as the assistant uses them. 0 is off; 6 lets it write whole drafts when asked (opt-in, never the default). */
+export const LEVEL_NAMES: Record<number, string> = { 0: 'Off', 1: 'Recall', 2: 'Nudge', 3: 'Word', 4: 'Sentence', 5: 'Passage', 6: 'Whole drafts' }
+export const DRAFT_LEVEL = 6
 
 export interface NoteRef {
   doc: string
@@ -41,11 +47,16 @@ export interface Proposal {
   after?: string
   /** What the writer did with it, once they did. */
   state?: 'accepted' | 'rejected' | 'partly accepted'
+  /** It does more than the writer asked: what, in plain words. Left out of "Accept all". */
+  beyond?: string
+  /** The same change with only the asked-for part, when there is one. */
+  narrow?: string
 }
 
 /** A change the model sent that the writer doesn't see, and why. */
 export interface Dropped {
   find: string
+  /** 'the whole piece' is no longer given; older chat files may still hold it. */
   reason: 'not in the draft' | 'not unique' | 'overlaps another change' | 'no change' | 'over the help ceiling' | 'the whole piece' | 'too many' | 'too long'
 }
 
@@ -69,6 +80,16 @@ export interface Turn {
   allowOnceFor?: string
   /** Assistant: its Allow once has been used. */
   allowSpent?: boolean
+  /** Assistant: the help level the ask needed, when that is above the level it was answered at. */
+  needs?: number
+  /** Assistant: its proposal is a whole draft written by AI (level 6). */
+  drafted?: boolean
+  /** Assistant: plain notes from the app (not the model) about this answer: what was held back and why. */
+  notices?: string[]
+  /** Assistant: a draft written without a voice profile for the platform (the tab offers to build one). */
+  noVoice?: boolean
+  /** Assistant: it asked what a draft should be about; the writer's next message answers that. */
+  awaitingTopic?: boolean
 }
 
 // Word and sentence counts that work for every script, including those written without spaces
@@ -100,6 +121,19 @@ export function asksForWhole(message: string): boolean {
   const whole = /\b(whole|entire|everything|all of it|full (piece|post|draft|essay|article|text|email|newsletter|script|story)|from scratch|top to bottom)\b/i
   const limits = /\b(don['’]?t|do not|doesn['’]?t|not|never|no|without|keep|leave|except|apart from|other than|rest of|the rest)\b|\b(everything|all) else\b|n['’]t\b/i
   return verb.test(message) && whole.test(message) && !limits.test(message)
+}
+
+/**
+ * Did the writer ask for the whole piece to be written for them? "Draft it for me", "write the post",
+ * "write a first draft of this". Strict on purpose: "write a better opening" is not it.
+ */
+export function asksForDraft(message: string): boolean {
+  const m = message.normalize('NFC')
+  const nouns = '(post|piece|draft|essay|article|newsletter|script|email|thread|story|blog(?: post)?|thing|version|tweet)'
+  const strict = new RegExp(`\\b(write|draft|ghostwrite)\\s+(me\\s+)?(the|a|this|my|it\\s+as\\s+a)\\s+(whole\\s+|full\\s+|first\\s+|complete\\s+|new\\s+)?${nouns}\\b`, 'i')
+  const forMe = /\b(write|draft)\s+(it|this|one)(\s+out)?\s+for\s+me\b|^\s*(please\s+)?draft\s+(it|this)(\s+for\s+me)?\s*[.!]?\s*$|\bwrite\s+(it|this)\s+(all\s+)?(out|up)\b/i
+  const limits = /\b(don['’]?t|do not|never|not)\b/i
+  return (strict.test(m) || forMe.test(m)) && !limits.test(m)
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -160,39 +194,92 @@ export function levelAllows(level: number, find: string, replace: string): boole
 
 export interface CheckOptions {
   level: number
-  /** The writer asked for the whole piece (asksForWhole). */
-  whole?: boolean
   /** The selection the ask was about, as offsets into the text: an ambiguous phrase is taken there. */
   selection?: [number, number] | null
+  /** What the writer asked for (scope.ts readAsk): changes that go beyond it are flagged. */
+  ask?: Ask
 }
 
-/** How much of a text a set of spans covers: the larger of its share of words and of characters. */
-function share(text: string, spans: { start: number; end: number }[], totalWords: number) {
-  const w = spans.reduce((n, p) => n + words(text.slice(p.start, p.end)), 0)
-  const c = spans.reduce((n, p) => n + (p.end - p.start), 0)
-  return Math.max(totalWords ? w / totalWords : 0, text.length ? c / text.length : 0)
+/** Unchanged text this long (with a letter or digit in it) between two changed places makes them separate changes. */
+const SPLIT_GAP = 12
+
+/**
+ * One change from the model, cut down to the places it really changes. "find" may be a whole paragraph
+ * where one emoji goes; what comes back is that emoji alone, so the writer reviews exactly what changes and
+ * everything else stays as written. Changed places close together stay one change; a change that rewrites
+ * most of its text stays whole (a rewrite reads better as one).
+ */
+export function minimalChanges(own: string, replace: string, quoted = own): { start: number; end: number; replace: string }[] {
+  const hunks = hunksOf(own, replace)
+  const spots: { start: number; end: number; replace: string; gap: string }[] = []
+  // Where the model quoted the draft with its spacing, quotes or dashes tidied, a difference only in those
+  // is the model's copying, not a change it meant: the writer's own characters stay.
+  const sameish = (a: string, b: string) => fold(a).replace(/\s+/g, ' ') === fold(b).replace(/\s+/g, ' ')
+  // Only when the model's own quote-to-replacement diff has no such difference: then it meant none.
+  const copying = quoted !== own && !hunksOf(quoted, replace).some((h) => (h.del || h.ins) && sameish(h.del, h.ins))
+  let pos = 0
+  let gap = ''
+  for (const h of hunks) {
+    pos += h.eq.length
+    gap += h.eq
+    if (h.del || h.ins) {
+      if (copying && sameish(h.del, h.ins)) gap += h.del
+      else {
+        // A space both sides end or start with isn't part of the change.
+        let del = h.del
+        let ins = h.ins
+        let lead = 0
+        while (lead < del.length && lead < ins.length && del[lead] === ins[lead] && /\s/.test(del[lead])) lead++
+        del = del.slice(lead)
+        ins = ins.slice(lead)
+        let tail = 0
+        while (tail < del.length && tail < ins.length && del[del.length - 1 - tail] === ins[ins.length - 1 - tail] && /\s/.test(del[del.length - 1 - tail])) tail++
+        spots.push({ start: pos + lead, end: pos + h.del.length - tail, replace: ins.slice(0, ins.length - tail), gap: gap + h.del.slice(0, lead) })
+        gap = h.del.slice(h.del.length - tail)
+      }
+    }
+    pos += h.del.length
+  }
+  if (!spots.length) return []
+  const changedChars = spots.reduce((n, x) => n + Math.max(x.end - x.start, x.replace.length), 0)
+  // Merged spots keep the writer's own text between them.
+  const merge = (list: typeof spots) => {
+    let start = list[0].start
+    let end = list[list.length - 1].end
+    let rep = list.map((x, i) => (i ? own.slice(list[i - 1].end, x.start) : '') + x.replace).join('')
+    // Spaces both sides start or end with aren't part of the change.
+    while (start < end && rep && own[start] === rep[0] && /\s/.test(rep[0])) (start++, (rep = rep.slice(1)))
+    while (start < end && rep && own[end - 1] === rep[rep.length - 1] && /\s/.test(rep[rep.length - 1])) (end--, (rep = rep.slice(0, -1)))
+    return { start, end, replace: rep }
+  }
+  if (changedChars > own.length * 0.5) return [merge(spots)]
+  const groups: (typeof spots)[] = []
+  for (const x of spots) {
+    const last = groups[groups.length - 1]
+    if (last && (x.gap.length < SPLIT_GAP || !/[\p{L}\p{N}]/u.test(x.gap))) last.push(x)
+    else groups.push([x])
+  }
+  return groups.map(merge)
 }
 
 /**
  * The model's changes, as the writer may see them: each one found in the draft at exactly one place
- * (or one place inside the selection), within the help level as found, not overlapping another,
- * really a change, and together not most of the piece unless the writer asked.
+ * (or one place inside the selection), cut down to what it really changes, each piece within the help
+ * level, not overlapping another and really a change. Pieces that go beyond the ask are kept and flagged.
  */
 export function checkProposals(raw: unknown, text: string, opts: CheckOptions): { proposals: Proposal[]; dropped: Dropped[] } {
-  // A model that sends a flood of changes gets the first few looked at, not all of them.
+  // A model that sends a flood of changes gets the first ones looked at, not all of them.
   const list = Array.isArray(raw) ? raw.slice(0, MAX_RAW_CHANGES) : []
   const proposals: Proposal[] = []
   const dropped: Dropped[] = []
-  const totalWords = words(text)
-  const big = totalWords >= 60 || text.length >= 300
+  const sel = opts.selection ?? null
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
     const o = item as Record<string, unknown>
     if (typeof o.find !== 'string' || typeof o.replace !== 'string') continue
     const find = o.find
     const replace = o.replace.replace(/\r\n?/g, '\n')
-    const label = find.slice(0, 80)
-    const drop = (reason: Dropped['reason']) => dropped.push({ find: label, reason })
+    const drop = (reason: Dropped['reason'], what = find) => dropped.push({ find: what.slice(0, 80), reason })
     if (!find.trim()) continue
     if (find.length > CHANGE_MAX || replace.length > CHANGE_MAX) {
       drop('too long')
@@ -208,15 +295,10 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
       continue
     }
     // A phrase that occurs more than once is only taken where the writer pointed: in the selection.
-    const sel = opts.selection ?? null
     const inSel = sel ? all.filter((a) => a.start >= sel[0] && a.end <= sel[1]) : []
     const at = all.length === 1 ? all[0] : inSel.length === 1 ? inSel[0] : null
     if (!at) {
       drop('not unique')
-      continue
-    }
-    if (proposals.some((p) => at.start < p.end && at.end > p.start)) {
-      drop('overlaps another change')
       continue
     }
     const own = text.slice(at.start, at.end)
@@ -224,33 +306,41 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
       drop('no change')
       continue
     }
-    // The level is checked on the draft's own text, which may differ from what the model quoted.
-    if (!levelAllows(opts.level, own, replace)) {
-      drop('over the help ceiling')
-      continue
-    }
-    // Most of a piece of any length, replaced at once (by one change or several): only when asked.
-    if (!opts.whole && big && share(text, [...proposals, at], totalWords) > 0.6) {
-      drop('the whole piece')
-      continue
-    }
-    if (proposals.length >= MAX_PROPOSALS) {
-      drop('too many')
-      continue
-    }
     const why = typeof o.why === 'string' && o.why.trim() ? o.why.trim().slice(0, 300) : undefined
-    proposals.push({
-      id: `p${proposals.length + 1}`,
-      start: at.start,
-      end: at.end,
-      find: own,
-      replace,
-      before: text.slice(Math.max(0, at.start - CONTEXT_CHARS), at.start),
-      after: text.slice(at.end, at.end + CONTEXT_CHARS),
-      ...(why ? { why } : {}),
-    })
+    for (const piece of minimalChanges(own, replace, find)) {
+      const start = at.start + piece.start
+      const end = at.start + piece.end
+      const part = text.slice(start, end)
+      if (proposals.some((p) => start < p.end && end > p.start)) {
+        drop('overlaps another change', part || own)
+        continue
+      }
+      // The level is checked on each piece of the draft's own text, which may differ from what the model quoted.
+      if (!levelAllows(opts.level, part, piece.replace)) {
+        drop('over the help ceiling', part || own)
+        continue
+      }
+      if (proposals.length >= MAX_PROPOSALS) {
+        drop('too many', part || own)
+        continue
+      }
+      const flag = opts.ask ? checkScope(opts.ask, part, piece.replace) : null
+      const outside = sel && (start < sel[0] || end > sel[1]) && !flag ? 'Outside the part you selected.' : undefined
+      proposals.push({
+        id: '',
+        start,
+        end,
+        find: part,
+        replace: piece.replace,
+        before: text.slice(Math.max(0, start - CONTEXT_CHARS), start),
+        after: text.slice(end, end + CONTEXT_CHARS),
+        ...(why ? { why } : {}),
+        ...(flag ? { beyond: flag.note, ...(flag.narrow !== undefined ? { narrow: flag.narrow } : {}) } : outside ? { beyond: outside } : {}),
+      })
+    }
   }
   proposals.sort((a, b) => a.start - b.start)
+  proposals.forEach((p, i) => (p.id = `p${i + 1}`))
   return { proposals, dropped }
 }
 
