@@ -108,6 +108,14 @@ test('values that YAML would misread are quoted', () => {
   assert.deepEqual(back.lists.aliases, ['x, y', 'z'])
 })
 
+test('a value spanning lines is quoted, so the block stays valid YAML', () => {
+  const text = patchContent('x', { title: 'Two\nlines', after: 'kept' })
+  assert.equal(text, doc('---', 'title: "Two\\nlines"', 'after: kept', '---', '', 'x'))
+  const back = splitFrontMatter(text)
+  assert.equal(back.meta.title, 'Two\nlines')
+  assert.equal(back.meta.after, 'kept')
+})
+
 test('applyPatch keeps working on flat meta', () => {
   assert.deepEqual(applyPatch({ a: '1', b: '2' }, { a: null, c: '3', d: ['x', 'y'] }), { b: '2', c: '3', d: 'x, y' })
 })

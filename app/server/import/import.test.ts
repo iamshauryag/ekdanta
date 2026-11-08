@@ -335,14 +335,59 @@ test('an import batch: inbox, uploads, failures, duplicates, collisions, undo', 
   await fs.appendFile(path.join(root, att.imported!.path), '\nMy own words.\n')
   const undone = await imp.undo(b.batch)
   assert.deepEqual(undone.removed.sort(), ['imported/data.md', 'imported/field-notes-2.md'])
-  assert.deepEqual(undone.kept, ['imported/data.md'])
+  assert.deepEqual(undone.trashed, ['imported/data.md'])
+  assert.deepEqual(undone.missing, [])
   assert.ok(!(await exists(path.join(root, 'imported/field-notes-2.md'))))
-  assert.ok(!(await exists(path.join(root, 'attachments/data'))))
+  assert.ok(await exists(path.join(root, 'attachments/data/data.bin')), 'the edited note keeps its attachment')
   assert.ok(await exists(path.join(root, '_inbox/Field.docx')), 'back in the inbox')
   assert.ok((await vault.listTrash()).some((t) => t.path === 'imported/data.md'))
   assert.ok(await exists(path.join(root, 'imported/field-notes.md')), 'the writer’s own note is untouched')
   // After an undo it's no longer a duplicate.
   assert.equal((await imp.convert(b2.batch, again.id)).status, 'converted')
+})
+
+test('undo removes attachments only with an untouched note; edited and renamed notes keep theirs', async () => {
+  const b = await imp.openBatch()
+  const [same, edited, renamed] = await Promise.all(['same.bin', 'edited.bin', 'renamed.bin'].map((name, i) => upload(b.batch, name, Buffer.from([9, 9, i]))))
+  const note = async (id: string) => (await imp.commit(b.batch, id, { folder: 'undo-test' })).imported!
+  const [s, e, r] = [await note(same.id), await note(edited.id), await note(renamed.id)]
+  for (const done of [s, e, r]) assert.equal(done.media.length, 1)
+  // The link in a note resolves, relative to the note's folder, to its attachment.
+  const linked = async (rel: string) => {
+    const target = (await fs.readFile(path.join(root, rel), 'utf8')).match(/\]\(([^)]+)\)/)![1]
+    return exists(path.join(root, path.posix.dirname(rel), decodeURIComponent(target)))
+  }
+  for (const done of [s, e, r]) assert.ok(await linked(done.path))
+
+  await fs.appendFile(path.join(root, e.path), '\nMy own words.\n')
+  await fs.rename(path.join(root, r.path), path.join(root, 'undo-test/my-name.md'))
+  const undone = await imp.undo(b.batch)
+  assert.deepEqual(undone.removed.sort(), [s.path, e.path].sort())
+  assert.deepEqual(undone.trashed, [e.path])
+  assert.deepEqual(undone.missing, [r.path])
+
+  // Untouched: the note and its attachments are gone, folder and all.
+  assert.ok(!(await exists(path.join(root, s.path))))
+  assert.ok(!(await exists(path.join(root, path.posix.dirname(s.media[0])))))
+  // Edited: in Recently deleted, and restoring it brings back a note whose picture still shows.
+  assert.ok(!(await exists(path.join(root, e.path))))
+  assert.ok(await exists(path.join(root, e.media[0])))
+  const trashed = (await vault.listTrash()).find((t) => t.path === e.path)!
+  const restored = await vault.restoreDoc(trashed.id)
+  assert.equal(restored, e.path)
+  assert.match(await fs.readFile(path.join(root, restored), 'utf8'), /My own words/)
+  assert.ok(await linked(restored))
+  // Renamed: left alone, and its link still works.
+  assert.ok(await exists(path.join(root, r.media[0])))
+  assert.ok(await linked('undo-test/my-name.md'))
+})
+
+test('a title spanning lines becomes one line, and the front matter stays valid', async () => {
+  const b = await imp.openBatch()
+  const item = await upload(b.batch, 'lines.docx', docx(para('Just a paragraph, no heading.'), { title: 'Two\n   Lines' }))
+  assert.equal(item.title, 'Two Lines')
+  const done = await imp.commit(b.batch, item.id, { folder: 'undo-test' })
+  assert.match(await fs.readFile(path.join(root, done.imported!.path), 'utf8'), /^title: Two Lines$/m)
 })
 
 test('openBatch refuses a bad batch id and unknown rows', async () => {

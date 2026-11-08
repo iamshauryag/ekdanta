@@ -18,7 +18,7 @@ interface Props {
   folders: string[]
   onClose: (batch: string | null, imported: string[]) => void
   onImported: (paths: string[]) => void
-  onUndone: (paths: string[]) => void
+  onUndone: (result: { removed: string[]; trashed: string[]; missing: string[] }) => void
   /** Progress for the status bar ("Importing 3/12…"), or null when idle. */
   onProgress: (text: string | null) => void
 }
@@ -235,12 +235,12 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
     queue.current = queue.current.then(async () => {
       progress('Undoing the import…')
       try {
-        const { removed } = await api.importUndo(batch)
+        const result = await api.importUndo(batch)
         const undone = new Set(items.filter((it) => it.imported).map((it) => it.id))
         setItems((list) => list.map((it) => ({ ...it, imported: undefined })))
         // Undone rows can be imported again, so they're ticked again.
         setChoices((c) => Object.fromEntries(Object.entries(c).map(([id, ch]) => [id, undone.has(id) ? { ...ch, checked: true } : ch])))
-        onUndone(removed)
+        onUndone(result)
       } catch (e) {
         setError((e as Error).message)
       }

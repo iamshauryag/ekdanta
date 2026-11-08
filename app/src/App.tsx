@@ -946,14 +946,21 @@ export function App() {
   const [importProgress, setImportProgress] = useState<string | null>(null)
   const startImport = useCallback((files?: File[]) => setImporting((open) => open ?? { files, pick: !files }), [])
   /** Notes the import just took back out: the open one can't stay open (a save would bring it back). */
-  const importUndone = async (paths: string[]) => {
-    if (docRef.current && paths.includes(docRef.current.path)) {
+  const importUndone = async ({ removed, trashed, missing }: { removed: string[]; trashed: string[]; missing: string[] }) => {
+    if (docRef.current && removed.includes(docRef.current.path)) {
       saver.close()
       docRef.current = null
       setLoaded(null)
     }
     await refreshFiles()
     refreshTrash()
+    // Say what undo left behind, so a note that's still there (or in Recently deleted) isn't a surprise.
+    const notes = (n: number) => `${n} ${n === 1 ? 'note' : 'notes'}`
+    const left = [
+      trashed.length && `${notes(trashed.length)} you’d edited ${trashed.length === 1 ? 'is' : 'are'} in Recently deleted`,
+      missing.length && `${notes(missing.length)} you’d renamed or moved ${missing.length === 1 ? 'was' : 'were'} left as ${missing.length === 1 ? 'it is' : 'they are'}`,
+    ].filter(Boolean)
+    if (left.length) notify(`Import undone. ${left.join('; ')}, pictures and all.`)
   }
   const importDone = async (paths: string[]) => {
     await refreshFiles()
@@ -963,12 +970,7 @@ export function App() {
   const importClosed = (batch: string | null, paths: string[]) => {
     setImporting(null)
     if (!batch || !paths.length) return
-    notify(`Imported ${paths.length} ${paths.length === 1 ? 'note' : 'notes'}`, () =>
-      api
-        .importUndo(batch)
-        .then(({ removed }) => importUndone(removed))
-        .catch(fail),
-    )
+    notify(`Imported ${paths.length} ${paths.length === 1 ? 'note' : 'notes'}`, () => api.importUndo(batch).then(importUndone).catch(fail))
   }
 
   const setMeta = (patch: MetaPatch) => {

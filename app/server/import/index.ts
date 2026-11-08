@@ -431,7 +431,9 @@ export async function convert(batch: string, id: string): Promise<ImportItem> {
     // properties say, else any heading, else the file name.
     const own = splitFrontMatter(out.markdown).meta
     const h1 = out.markdown.match(/^#[ \t]+\S.*$/m)?.[0]
-    it.title = own.title || (h1 && firstHeading(h1)) || out.title || firstHeading(out.markdown) || titleFromFileName(item.name)
+    // A multi-line <title> or dc:title becomes one line.
+    const oneLine = (s: string | undefined) => s?.replace(/\s+/g, ' ').trim()
+    it.title = oneLine(own.title) || (h1 && firstHeading(h1)) || oneLine(out.title) || firstHeading(out.markdown) || titleFromFileName(item.name)
     it.created = out.created ?? dateOf(own.created) ?? it.created
     it.platform = platform
     it.folder = (platform && kinds.find((k) => k.id === platform)?.folder) || DEFAULT_FOLDER
@@ -523,31 +525,42 @@ export async function commit(batch: string, id: string, choice: { platform?: str
   })
 }
 
+export interface Undone {
+  /** Notes taken out of the vault, deleted or moved to Recently deleted. */
+  removed: string[]
+  /** Notes the writer had changed: they're in Recently deleted, their pictures still in attachments/. */
+  trashed: string[]
+  /** Notes no longer where they were imported (renamed, moved or deleted since); they and their pictures are left alone. */
+  missing: string[]
+}
+
 /**
- * Take a batch's notes and pictures back out of the vault and return inbox files to _inbox/. A note
- * the writer has changed since goes to Recently deleted instead of being removed.
+ * Take a batch's notes and pictures back out of the vault and return inbox files to _inbox/. Only a
+ * note the writer hasn't touched is deleted, with its pictures. One they've changed goes to Recently
+ * deleted and keeps its pictures, so restoring it brings back a working note; one that's been renamed
+ * or moved is left where it is, pictures and all.
  */
-export async function undo(batch: string): Promise<{ removed: string[]; kept: string[] }> {
+export async function undo(batch: string): Promise<Undone> {
   return serial(async () => {
     const m = await readManifest(batch)
     const ledger = await readLedger()
-    const removed: string[] = []
-    const kept: string[] = []
+    const result: Undone = { removed: [], trashed: [], missing: [] }
     for (const item of m.items) {
       const done = item.imported
       if (!done) continue
       const text = await readDoc(done.path).catch(() => null)
-      if (text !== null) {
-        if (hashOf(text) === done.hash) await deleteDoc(done.path)
-        else {
-          await trashDoc(done.path)
-          kept.push(done.path)
-        }
-        removed.push(done.path)
+      if (text === null) result.missing.push(done.path)
+      else if (hashOf(text) !== done.hash) {
+        await trashDoc(done.path)
+        result.trashed.push(done.path)
+        result.removed.push(done.path)
+      } else {
+        await deleteDoc(done.path)
+        result.removed.push(done.path)
+        for (const rel of done.media) await fs.rm(resolveInVault(rel), { force: true })
+        const dirs = new Set(done.media.map((rel) => path.posix.dirname(rel)))
+        for (const dir of dirs) await fs.rmdir(resolveInVault(dir)).catch(() => {}) // only if empty
       }
-      for (const rel of done.media) await fs.rm(resolveInVault(rel), { force: true })
-      const dirs = new Set(done.media.map((rel) => path.posix.dirname(rel)))
-      for (const dir of dirs) await fs.rmdir(resolveInVault(dir)).catch(() => {}) // only if empty
       if (item.inbox && !(await exists(resolveInVault(item.inbox)))) {
         await fs.mkdir(path.dirname(resolveInVault(item.inbox)), { recursive: true })
         await fs.copyFile(inside(path.join(batchDir(batch), 'originals'), item.name), resolveInVault(item.inbox))
@@ -557,7 +570,7 @@ export async function undo(batch: string): Promise<{ removed: string[]; kept: st
     }
     await writeLedger(ledger)
     await writeManifest(m)
-    return { removed, kept }
+    return result
   })
 }
 

@@ -372,7 +372,7 @@ export const api = {
       .then(json<{ content: string }>)
       .then((d) => d.content),
   importCommit: (batch: string, id: string, platform: string, folder: string) => fetch('/api/import/commit', send('POST', { batch, id, platform, folder })).then(json<ImportItem>),
-  importUndo: (batch: string) => fetch('/api/import/undo', send('POST', { batch })).then(json<{ removed: string[]; kept: string[] }>),
+  importUndo: (batch: string) => fetch('/api/import/undo', send('POST', { batch })).then(json<{ removed: string[]; trashed: string[]; missing: string[] }>),
   brief: (doc: string) =>
     fetch('/api/brief?doc=' + encodeURIComponent(doc))
       .then(json<{ text: string }>)
