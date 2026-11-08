@@ -4041,7 +4041,8 @@ button.keymap-key:hover {
   --page-font: var(--serif);
   --page-size: 18.5px;
   --page-leading: 1.6;
-  --para-gap: 0;
+  /* The same as Settings · Appearance · Paragraph spacing at its default, half a line. */
+  --para-gap: calc(var(--page-leading) * 0.5em);
 }
 .editor .pm {
   font-family: var(--page-font);
@@ -4060,6 +4061,7 @@ button.keymap-key:hover {
 .doc-title {
   font-size: calc(var(--page-size) * 1.5);
 }
+/* A paragraph break gets this gap; a line break inside a paragraph is just the next line. */
 .pm > p + p {
   margin-top: var(--para-gap);
 }

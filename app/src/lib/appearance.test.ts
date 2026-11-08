@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { APPEARANCE_DEFAULTS, appearanceVars, cleanAppearance, cleanFamily, cleanSnippet, fontStack, kindsInExcluded, newNoteFolder, searchRows } from './appearance.ts'
 import { DEFAULT_KINDS } from './kinds.ts'
 
@@ -13,7 +14,7 @@ test('wrong types, unknown choices and out-of-range numbers fall back or clamp',
   assert.equal(a.textSize, 22)
   assert.equal(a.lineWidth, 'comfortable')
   assert.equal(a.lineHeight, 'normal')
-  assert.equal(a.paragraphSpacing, 'none')
+  assert.equal(a.paragraphSpacing, 'half')
   assert.equal(a.wordCount, true)
   assert.equal(a.autosaveMs, 400)
   assert.equal(a.newDocView, 'page')
@@ -42,6 +43,15 @@ test('appearance becomes CSS custom properties', () => {
   assert.deepEqual(v, { '--page-font': 'var(--sans)', '--page-size': '20px', '--page-leading': '1.85', '--para-gap': 'calc(var(--page-leading) * 0.5em)', '--measure': '48rem' })
   // The default column is the one the app always had: 40rem = 640px.
   assert.equal(appearanceVars(APPEARANCE_DEFAULTS)['--measure'], '40rem')
+})
+
+test('paragraphs are set apart by default, so a new paragraph reads differently from a line break', () => {
+  const gap = appearanceVars(APPEARANCE_DEFAULTS)['--para-gap']
+  assert.notEqual(gap, '0')
+  // The stylesheet's own default (before settings load) is the same gap.
+  const css = readFileSync(new URL('../styles.css', import.meta.url), 'utf8')
+  assert.ok(css.includes(`--para-gap: ${gap};`), 'styles.css :root --para-gap matches the default')
+  assert.equal(appearanceVars({ ...APPEARANCE_DEFAULTS, paragraphSpacing: 'none' })['--para-gap'], '0')
 })
 
 test('snippets must be vault-relative .css files', () => {
