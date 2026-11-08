@@ -94,6 +94,17 @@ export class HttpError extends Error {
 export const statusOf = (e: unknown) => (e instanceof HttpError ? e.status : 500)
 
 /**
+ * A request's JSON body. The bytes are joined before decoding: a character split across two chunks
+ * (a curly quote, an em-dash, Devanagari) would otherwise become U+FFFD and be saved that way.
+ */
+export async function readJson<T>(req: AsyncIterable<Buffer | string>): Promise<T> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+  const raw = Buffer.concat(chunks).toString('utf8')
+  return JSON.parse(raw || '{}') as T
+}
+
+/**
  * Wrap a route so it answers only requests made on this machine (not over the tailnet, not from
  * another site): for routes that run programs or write outside the vault. Others get a 403.
  */

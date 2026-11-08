@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HttpError, isLocalRequest, isLoopbackAddress, isSameOrigin, local, runTool, statusOf, which } from './net.ts'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { HttpError, isLocalRequest, isLoopbackAddress, isSameOrigin, local, readJson, runTool, statusOf, which } from './net.ts'
 
 const req = (remoteAddress: string | undefined, headers: Record<string, string>, method?: string) => ({ method, socket: { remoteAddress }, headers })
 
@@ -115,4 +117,32 @@ test('which finds installed programs and not missing ones', async () => {
   assert.equal(await which('ekdanta-no-such-program'), null)
   assert.equal(await which(''), null)
   assert.equal(await which(process.execPath), process.execPath)
+})
+
+test('a character split across body chunks survives', async () => {
+  const bytes = Buffer.from(JSON.stringify({ content: 'a “quote” — नमस्ते' }))
+  // Cut inside every multi-byte character: each cut lands mid-sequence at least once.
+  for (let cut = 1; cut < bytes.length; cut++) {
+    const chunks = [bytes.subarray(0, cut), bytes.subarray(cut)]
+    async function* req() {
+      yield* chunks
+    }
+    assert.deepEqual(await readJson(req()), { content: 'a “quote” — नमस्ते' }, `cut at ${cut}`)
+  }
+  assert.deepEqual(await readJson((async function* () {})()), {})
+})
+
+test('a large body over HTTP keeps every character', async () => {
+  const content = '“é—” नमस्ते '.repeat(15000) // ~330 KB, many socket reads
+  const server = http.createServer(async (req, res) => res.end(JSON.stringify(await readJson<{ content: string }>(req))))
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  try {
+    const { port } = server.address() as AddressInfo
+    const res = await fetch(`http://127.0.0.1:${port}/`, { method: 'PUT', body: JSON.stringify({ content }) })
+    const got = (await res.json()) as { content: string }
+    assert.equal(got.content.includes('\uFFFD'), false)
+    assert.equal(got.content, content)
+  } finally {
+    server.close()
+  }
 })

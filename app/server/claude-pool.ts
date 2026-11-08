@@ -51,6 +51,7 @@ class Session {
     )
     readline.createInterface({ input: this.child.stdout }).on('line', (line) => this.onLine(line))
     let stderr = ''
+    this.child.stderr.setEncoding('utf8') // whole characters, even when one spans two reads
     this.child.stderr.on('data', (d) => (stderr = (stderr + d).slice(-500)))
     this.child.on('close', () => {
       this.dead = true

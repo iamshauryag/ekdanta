@@ -20,7 +20,7 @@ import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
 import { captureIdea, listIdeas, starIdea, startIdea } from './ideas.ts'
 import { runReader, type ReaderRequest } from './reader.ts'
-import { HttpError, isLocalRequest, isSameOrigin, local, statusOf } from './net.ts'
+import { HttpError, isLocalRequest, isSameOrigin, local, readJson, statusOf } from './net.ts'
 import { addUpload, commit, convert, openBatch, preview, undo } from './import/index.ts'
 import { exportDoc, pandoc, type ExportRequest } from './export.ts'
 import { addHighlight, addSource, brainFolder, listSources, lookup, previewImport, runImport } from './brain.ts'
@@ -81,11 +81,7 @@ const header = (req: IncomingMessage, name: string) => {
   return (Array.isArray(v) ? v[0] : v) ?? ''
 }
 
-async function body<T>(req: IncomingMessage): Promise<T> {
-  let raw = ''
-  for await (const chunk of req) raw += chunk
-  return JSON.parse(raw || '{}') as T
-}
+const body = <T>(req: IncomingMessage) => readJson<T>(req)
 
 const routes: Record<string, Handler> = {
   'GET /api/status': async () => ({ ...(await status()), vault: VAULT, embedder: embedder().id }),
