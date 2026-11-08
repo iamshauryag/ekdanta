@@ -384,6 +384,8 @@ export async function runAssistant(input: AssistRequest, deps: AssistDeps = {}):
   // Allow once: checked here against the chat file, never taken on the page's word.
   let spend: string | undefined
   if (req.allowOnce) {
+    // Allowing once lifts a single answer from the current ceiling; below 2 there is no model help to lift.
+    if (levelFor(ceiling) < 2) throw new HttpError(409, 'Allow once needs the help ceiling at 2 or more.')
     const allowed = allowance(history, req.allowOnce)
     if (typeof allowed === 'string') throw new HttpError(409, allowed)
     const selection = selectionNow(req.text, allowed.writer.selection, allowed.writer.selectionStart)

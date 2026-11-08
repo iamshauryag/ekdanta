@@ -11,6 +11,8 @@ export const SELECTION_MAX = 20_000
 /** A whole request body, in bytes: the draft at its longest, in any script, and the rest. */
 export const BODY_MAX = 1_000_000
 export const MAX_PROPOSALS = 8
+/** How many of the model's changes are looked at, at most. */
+export const MAX_RAW_CHANGES = 32
 /** The longest reply, and the longest text one proposal may replace or put in, kept in the chat file. */
 export const REPLY_MAX = 8000
 export const CHANGE_MAX = 20_000
@@ -88,11 +90,16 @@ export function sentences(s: string): number {
     .filter((x) => /[\p{L}\p{N}]/u.test(x)).length
 }
 
-/** Did the writer ask, in so many words, for the whole piece to be rewritten? A rewriting verb and a whole-piece word, both. */
+/**
+ * Did the writer ask, in so many words, for the whole piece to be rewritten? A rewriting verb and a
+ * whole-piece word, both, and nothing that limits or negates it ("don't…", "keep everything else",
+ * "except…"). When unsure the answer is no, so the whole-piece guard stays on.
+ */
 export function asksForWhole(message: string): boolean {
   const verb = /\b(re-?write|redo|re-?draft|rework|restructure|start over|from scratch)\b/i
   const whole = /\b(whole|entire|everything|all of it|full (piece|post|draft|essay|article|text|email|newsletter|script|story)|from scratch|top to bottom)\b/i
-  return verb.test(message) && whole.test(message)
+  const limits = /\b(don['’]?t|do not|doesn['’]?t|not|never|no|without|keep|leave|except|apart from|other than|rest of|the rest)\b|\b(everything|all) else\b|n['’]t\b/i
+  return verb.test(message) && whole.test(message) && !limits.test(message)
 }
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -123,25 +130,32 @@ export function locateAll(text: string, find: string): { start: number; end: num
   return out
 }
 
-/** The words a change adds, from a word diff of what it replaces and what it becomes. */
-function added(find: string, replace: string) {
-  return diffWordsWithSpace(find, replace)
-    .filter((p) => p.added)
-    .map((p) => p.value)
-    .join(' ')
+/** The words a change adds and the words it takes out, from a word diff of what it replaces and what it becomes. */
+function changed(find: string, replace: string) {
+  const parts = diffWordsWithSpace(find, replace)
+  const join = (keep: (p: (typeof parts)[number]) => boolean | undefined) =>
+    parts
+      .filter(keep)
+      .map((p) => p.value)
+      .join(' ')
+  return { added: join((p) => p.added), removed: join((p) => p.removed) }
 }
+
+/** At most one sentence, of a bounded length. */
+const oneSentence = (t: string) => sentences(t) <= 1 && words(t) <= 60 && t.length <= 400
 
 /**
  * Does the help level allow this change? `find` is the draft's own text. Level 3 swaps a word or short
- * phrase; level 4 rewrites or adds at most one sentence, inside one line; level 5 any passage. Below 3
+ * phrase; level 4 rewrites, adds or removes at most one sentence, inside one line; level 5 any passage. Below 3
  * nothing is written at all. Characters are capped beside words, for scripts whose words are long.
  */
 export function levelAllows(level: number, find: string, replace: string): boolean {
   if (level < 3) return false
   if (level >= 5) return true
   if (level === 3) return words(find) <= 4 && words(replace) <= 4 && find.length <= 40 && replace.length <= 40 && !/\n/.test(find + replace)
-  const more = added(find, replace)
-  return !/\n/.test(find) && !/\n\s*\n/.test(replace) && sentences(more) <= 1 && words(more) <= 60 && more.length <= 400
+  // Level 4 bounds both sides: what goes in, and what comes out (rewriting or deleting ten sentences is not "a sentence").
+  const { added, removed } = changed(find, replace)
+  return !/\n/.test(find) && !/\n\s*\n/.test(replace) && oneSentence(added) && oneSentence(removed)
 }
 
 export interface CheckOptions {
@@ -165,7 +179,8 @@ function share(text: string, spans: { start: number; end: number }[], totalWords
  * really a change, and together not most of the piece unless the writer asked.
  */
 export function checkProposals(raw: unknown, text: string, opts: CheckOptions): { proposals: Proposal[]; dropped: Dropped[] } {
-  const list = Array.isArray(raw) ? raw : []
+  // A model that sends a flood of changes gets the first few looked at, not all of them.
+  const list = Array.isArray(raw) ? raw.slice(0, MAX_RAW_CHANGES) : []
   const proposals: Proposal[] = []
   const dropped: Dropped[] = []
   const totalWords = words(text)

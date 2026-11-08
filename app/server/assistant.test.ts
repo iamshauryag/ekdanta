@@ -557,3 +557,44 @@ test('a reply over the cap is cut, and the lock for a chat goes once its writes 
   await new Promise((resolve) => setTimeout(resolve, 0))
   assert.equal(pendingChats(), 0)
 })
+
+// ---- Second review: what level 4 removes, Allow once below 2, limited "whole piece" asks, floods ----
+
+test('level 4 bounds what a change takes out, not only what it puts in', () => {
+  const line = Array.from({ length: 10 }, (_, i) => `Sentence ${i} is here.`).join(' ')
+  assert.ok(!levelAllows(4, line, 'One sentence.'))
+  assert.ok(!levelAllows(4, line, ''))
+  assert.ok(!levelAllows(4, 'First sentence. Second sentence.', ''))
+  assert.ok(levelAllows(4, 'It is not a risk.', ''))
+  assert.ok(levelAllows(4, 'It is not a risk. It is the job.', 'It is not a risk. It is the work.'))
+  const r = checkProposals([{ find: line, replace: 'One sentence.' }], line, { level: 4 })
+  assert.equal(r.dropped[0].reason, 'over the help ceiling')
+})
+
+test('Allow once is refused once the ceiling is below 2, and no model is asked', async () => {
+  await clearChat(DOC)
+  const para = { find: 'Speed is a habit. It is not a risk.', replace: 'Speed is a habit you build. Every day you practise it. It is the job.' }
+  const r = await runAssistant({ doc: DOC, message: 'Rework', text: DRAFT }, deps(3, fake({ reply: 'ok', changes: [para] }).ask))
+  const id = r.kind === 'answer' ? r.turns[1].id : ''
+  const m = fake({ reply: 'x' })
+  await assert.rejects(runAssistant({ doc: DOC, message: '', text: DRAFT, allowOnce: id }, deps(1, m.ask)), /ceiling at 2 or more/)
+  assert.equal(m.calls.length, 0)
+  assert.equal((await readChat(DOC))[1].allowSpent, undefined)
+})
+
+test('a whole-piece ask that is limited or negated keeps the guard on', () => {
+  assert.ok(!asksForWhole('rewrite this but keep everything else'))
+  assert.ok(!asksForWhole('don’t rewrite the whole thing'))
+  assert.ok(!asksForWhole("Don't rewrite the whole thing, just the ending"))
+  assert.ok(!asksForWhole('Rewrite the whole post except the hook'))
+  assert.ok(!asksForWhole('rework the entire draft without changing the stories'))
+  assert.ok(asksForWhole('Rewrite the whole thing from scratch'))
+  assert.ok(asksForWhole('Please redo the entire post in a warmer tone'))
+})
+
+test('only the first 32 changes a model sends are looked at', () => {
+  const text = Array.from({ length: 50 }, (_, i) => `w${i}`).join(' ')
+  const flood = Array.from({ length: 50 }, (_, i) => ({ find: `w${i}`, replace: `v${i}` }))
+  const r = checkProposals(flood, text, { level: 3 })
+  assert.equal(r.proposals.length + r.dropped.length, 32)
+})
