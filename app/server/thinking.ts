@@ -7,7 +7,7 @@ import path from 'node:path'
 import { generate, parseJson, status } from './ai.ts'
 import { embedder } from './embed.ts'
 import { search } from './recall.ts'
-import { META_DIR, readDoc, resolveInVault, splitFrontMatter } from './vault.ts'
+import { adoptOldKey, readDoc, resolveInVault, splitFrontMatter, thinkingSideFile } from './vault.ts'
 
 export interface Fragment {
   id: string
@@ -28,7 +28,7 @@ function canvasPath(doc: string) {
 }
 function sidePath(doc: string) {
   resolveInVault(doc)
-  return path.join(META_DIR, 'thinking', doc.replace(/\.md$/, '').replace(/\//g, '__') + '.json')
+  return thinkingSideFile(doc) // the path the sidecar registry moves with the document
 }
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
@@ -40,6 +40,7 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
 }
 
 export async function readThinking(doc: string) {
+  await adoptOldKey(doc)
   return {
     canvas: await readJson(canvasPath(doc), EMPTY_CANVAS),
     side: await readJson<Record<string, unknown>>(sidePath(doc), {}),
@@ -48,6 +49,7 @@ export async function readThinking(doc: string) {
 
 export async function writeThinking(doc: string, canvas: Canvas, side: unknown) {
   await fs.access(resolveInVault(doc)) // only next to a document that exists
+  await adoptOldKey(doc)
   const nodes = Array.isArray(canvas?.nodes) ? canvas.nodes : []
   const file = canvasPath(doc)
   // An empty Thinking Space leaves no file behind.

@@ -200,6 +200,7 @@ export async function writeDoc(rel: string, content: string, opts: WriteOptions 
 
 async function writeNow(rel: string, abs: string, content: string, opts: WriteOptions): Promise<{ mtime: number }> {
   const reason = opts.reason ?? 'save'
+  await adoptOldKey(rel) // before the write hooks and the record touch its sidecars
   const disk = await readCurrent(abs)
   if (!disk && opts.create === false) throw new MissingDoc(rel)
   if (disk && disk.content === content) {
@@ -333,8 +334,16 @@ export async function changesSince(since?: number): Promise<Changes> {
 
 export const hashOf = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex')
 
-/** A document's key for Ekdanta's per-document files: `essays/on-walking.md` → `essays__on-walking`. */
-export const docKey = (rel: string) => rel.replace(/\.md$/, '').replace(/\//g, '__')
+/**
+ * A document's key for Ekdanta's per-document files: `essays/on-walking.md` → `essays__on-walking`.
+ * `/` becomes `__` and `_` becomes `_-`, so no two paths share a key (`a/b__c.md` and `a__b/c.md` once
+ * did, and so shared their versions). A path without `_` keeps the key it always had.
+ */
+export const docKey = (rel: string) => keyOf(rel)
+const currentKey = (rel: string) => rel.replace(/\.md$/, '').replace(/[/_]/g, (c) => (c === '/' ? '__' : '_-'))
+/** The key before that: `/` → `__` only. Used to find files still kept under it (adoptOldKey). */
+const legacyKey = (rel: string) => rel.replace(/\.md$/, '').replace(/\//g, '__')
+let keyOf = currentKey
 
 const WRITTEN = path.join(META_DIR, 'written')
 const writtenInfo = (rel: string) => path.join(WRITTEN, docKey(rel) + '.json')
@@ -343,6 +352,7 @@ const writtenBody = (rel: string) => path.join(WRITTEN, docKey(rel) + '.md')
 /** What Ekdanta last wrote to a document (the whole file, front matter included), or null if it never has. */
 export async function lastWritten(rel: string): Promise<{ mtime: number; hash: string; body: string } | null> {
   resolveInVault(rel)
+  await adoptOldKey(rel)
   try {
     const info = JSON.parse(await fs.readFile(writtenInfo(rel), 'utf8')) as { mtime: number; hash: string }
     const body = await fs.readFile(writtenBody(rel), 'utf8')
@@ -373,6 +383,178 @@ export function registerSidecar(name: string, of: (rel: string) => string, opts:
 
 /** A document's sidecars: [absolute path, name]. */
 const sidecarsOf = (rel: string) => sidecarList.map((s) => [s.of(rel), s.name] as const)
+
+// ---- Sidecars kept under the old document key ---------------------------------------------
+// A document whose path has `_` in it had a different key before. The first time such a document's
+// sidecars are used, each one still under the old key is renamed to the new key: one fs.rename,
+// so a crash leaves either name, never half of each. Nothing is ever deleted or merged.
+//
+// Whose files are where:
+// - An old key shared by two documents in the vault can't be told apart: its files are left where
+//   they are, and both start fresh.
+// - A new key can be another document's old key (`a_b.md` → `a_-b`, the old key of `a_-b.md`).
+//   Until the first document has used its new key, what's there is the other's: the other is
+//   brought over first (and so on down the chain, which ends because keys only get longer), and
+//   anything it couldn't take is set aside, never used as the first document's own.
+// - Once a document has been brought over, a marker named by its new key (.ekdanta/keys/<key>)
+//   says that key is in use under the new scheme, so it's never taken for an old key again, and
+//   later runs of the server skip the work. Before its first file moves, a pending marker
+//   (.ekdanta/keys-pending/<key>) says what's at the new key is its own: a start after a crash
+//   part-way finishes the moves instead of taking its own files for someone else's.
+// - Not handled: a plain document (no `_`) keeps its key, which can be a `_` document's old key
+//   (`a/b.md` and `a__b.md` both had `a__b`). The `_` document starts fresh and the plain one
+//   keeps the folder; whose each file was can't be told.
+
+const CLAIMED = path.join(META_DIR, 'keys')
+/** Where files that can't be given to anyone go, rather than being deleted or mixed in. */
+const SET_ASIDE = path.join(META_DIR, 'set-aside')
+const PENDING = path.join(META_DIR, 'keys-pending')
+const claimed = (key: string) => exists(path.join(CLAIMED, key))
+
+/**
+ * The documents in the vault whose old key is `key`. Each `__` may have been a `/`, but only where
+ * the path so far is a folder that exists, so a deep path costs a few checks, not one per guess.
+ */
+async function oldKeyOwners(key: string): Promise<string[]> {
+  const out = new Set<string>()
+  const isDir = new Map<string, Promise<boolean>>()
+  const dirExists = (rel: string) => {
+    let p = isDir.get(rel)
+    if (!p) {
+      let abs: string
+      try {
+        abs = resolveInVault(rel)
+      } catch {
+        abs = ''
+      }
+      p = abs
+        ? fs.stat(abs).then(
+            (s) => s.isDirectory(),
+            () => false,
+          )
+        : Promise.resolve(false)
+      isDir.set(rel, p)
+    }
+    return p
+  }
+  const seen = new Set<string>()
+  async function walk(i: number, dir: string, seg: string): Promise<void> {
+    const state = `${i}\0${dir}\0${seg}`
+    if (seen.has(state)) return
+    seen.add(state)
+    if (i >= key.length) {
+      const rel = dir + seg + '.md'
+      if (seg && (await docExists(rel))) out.add(rel)
+      return
+    }
+    if (key.startsWith('__', i) && seg && (await dirExists(dir + seg))) await walk(i + 2, dir + seg + '/', '')
+    await walk(i + 1, dir, seg + key[i])
+  }
+  await walk(0, '', '')
+  return [...out]
+}
+
+/** A sidecar's path under the old key. `of` is synchronous, so nothing else runs while the key is swapped. */
+function legacyPathOf(of: (rel: string) => string, rel: string) {
+  keyOf = legacyKey
+  try {
+    return of(rel)
+  } finally {
+    keyOf = currentKey
+  }
+}
+
+const docExists = async (rel: string) => {
+  try {
+    return (await fs.stat(resolveInVault(rel))).isFile()
+  } catch {
+    return false // missing, or not a path in the vault
+  }
+}
+
+async function setAside(abs: string, name: string) {
+  let dest = path.join(SET_ASIDE, name, path.basename(abs))
+  for (let n = 2; await exists(dest); n++) dest = path.join(SET_ASIDE, name, `${path.basename(abs)}-${n}`)
+  await fs.mkdir(path.dirname(dest), { recursive: true })
+  await fs.rename(abs, dest)
+  console.warn(`[ekdanta] ${path.relative(VAULT, abs)} belonged to another document; set aside as ${path.relative(VAULT, dest)}`)
+}
+
+const adopting = new Map<string, Promise<void>>()
+
+/**
+ * Bring a document's sidecars over from its old key, once per document per run of the server. Every
+ * read or write of a sidecar awaits this first, so the rename always happens before anything reads
+ * or writes the new name. Costs nothing for a path without `_`: its key never changed.
+ *
+ * `arriving`: a document is being moved or restored to `rel` and brings its own sidecars, so
+ * anything under `rel`'s keys (old or new) is someone else's and isn't taken.
+ */
+export function adoptOldKey(rel: string, opts: { arriving?: boolean } = {}): Promise<void> {
+  if (legacyKey(rel) === currentKey(rel)) return Promise.resolve()
+  let p = adopting.get(rel)
+  if (!p) {
+    // A failure is kept until the server restarts: every use of the document's files fails with it,
+    // rather than reading (or pruning) files under its new key it can't vouch for.
+    p = adoptNow(rel, Boolean(opts.arriving)).catch((e: Error) => {
+      console.error(`[ekdanta] couldn't bring over the files kept for ${rel}:`, e)
+      throw new Error(`Ekdanta couldn’t sort out the files it keeps for ${rel}, so it won’t use them until it’s restarted (${e.message})`, { cause: e })
+    })
+    p.catch(() => {}) // the callers handle it
+    adopting.set(rel, p)
+  }
+  return p
+}
+
+async function adoptNow(rel: string, arriving: boolean) {
+  const key = currentKey(rel)
+  if (await claimed(key)) return // brought over in an earlier run
+  const pending = path.join(PENDING, key)
+  // Stopped part-way last time: what's at the new key is already this document's own.
+  if (!(await exists(pending))) await clearNewKey(rel, key)
+  await fs.mkdir(PENDING, { recursive: true })
+  await fs.writeFile(pending, '')
+  // This document's own old files: only if no other document has the same old key, and that key
+  // isn't one some document already uses under the new scheme.
+  const old = legacyKey(rel)
+  const sharing = (await oldKeyOwners(old)).filter((d) => d !== rel)
+  if (sharing.length) console.warn(`[ekdanta] ${rel} shares its old key with ${sharing.join(', ')}; what was kept under it is left where it is`)
+  if (!arriving && !sharing.length && !(await claimed(old))) {
+    for (const s of sidecarList) {
+      const from = legacyPathOf(s.of, rel)
+      const to = s.of(rel)
+      if (from === to || (await exists(to)) || !(await exists(from))) continue
+      try {
+        await fs.mkdir(path.dirname(to), { recursive: true })
+        await fs.rename(from, to)
+      } catch (e) {
+        console.error(`[ekdanta] couldn't bring over ${s.name} for ${rel}; it stays under the old key:`, e)
+      }
+    }
+  }
+  await fs.mkdir(CLAIMED, { recursive: true })
+  await fs.writeFile(path.join(CLAIMED, key), '')
+  await fs.rm(pending, { force: true })
+}
+
+/** Before a document first uses its new key: whatever is there is someone else's. */
+async function clearNewKey(rel: string, key: string) {
+  // It may be the old files of other documents: they go to their own new keys first.
+  for (const other of await oldKeyOwners(key)) if (other !== rel) await adoptOldKey(other)
+  // Anything still there isn't this document's. Set aside, so it's never read or pruned as this document's.
+  for (const s of sidecarList) {
+    const to = s.of(rel)
+    if (to === legacyPathOf(s.of, rel) || !(await exists(to))) continue
+    try {
+      await setAside(to, s.name)
+    } catch (e) {
+      throw new Error(`${path.relative(VAULT, to)} isn't ${rel}'s and couldn't be set aside`, { cause: e })
+    }
+  }
+}
+
+/** For tests: forget what this run has brought over, as a restart would. */
+export const forgetAdoptions = () => adopting.clear()
 
 // New documents start as untitled.md and take their name from the title once it's written.
 
@@ -417,10 +599,12 @@ export async function nameDoc(rel: string, title: string) {
 
 /** Rename a document. Its sidecars (history, Thinking Space, Ekdanta's notes on it) move too, if there are any yet. */
 async function moveDoc(rel: string, next: string) {
+  await adoptOldKey(rel) // so what's still under the old key moves too
   await fs.mkdir(path.dirname(resolveInVault(next)), { recursive: true })
   await fs.rename(resolveInVault(rel), resolveInVault(next))
   cache.invalidate(rel)
   cache.invalidate(next)
+  await adoptOldKey(next, { arriving: true }) // whatever is under the new name's keys isn't this document's
   const to = new Map(sidecarsOf(next).map(([abs, name]) => [name, abs]))
   for (const [from, name] of sidecarsOf(rel)) {
     const dest = to.get(name)!
@@ -629,6 +813,7 @@ export interface Trashed {
 }
 
 export async function trashDoc(rel: string): Promise<Trashed> {
+  await adoptOldKey(rel)
   const { meta, body } = splitFrontMatter(await readDoc(rel))
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
   const dir = path.join(TRASH, id)
@@ -659,6 +844,7 @@ export async function restoreDoc(id: string) {
   const item = JSON.parse(await fs.readFile(path.join(dir, 'info.json'), 'utf8')) as Trashed
   const rel = await freePath(folderOf(item.path), path.posix.basename(item.path, '.md'))
   await fs.mkdir(path.dirname(resolveInVault(rel)), { recursive: true })
+  await adoptOldKey(rel, { arriving: true }) // it brings its own sidecars
   for (const [to, from] of parts(rel)) {
     if (!(await exists(path.join(dir, from)))) continue
     await fs.mkdir(path.dirname(to), { recursive: true })
@@ -718,6 +904,7 @@ export async function discardIfEmpty(rel: string) {
  * them. Only for documents with nothing of the writer's in them (an empty draft, an untouched import).
  */
 export async function deleteDoc(rel: string) {
+  await adoptOldKey(rel)
   await fs.unlink(resolveInVault(rel))
   cache.invalidate(rel)
   for (const [abs] of sidecarsOf(rel)) await fs.rm(abs, { recursive: true, force: true }).catch(() => {})
@@ -784,7 +971,8 @@ function firstHeading(body: string) {
 }
 
 const canvasOf = (rel: string) => rel.replace(/\.md$/, '.canvas')
-const sideFile = (rel: string) => path.join(META_DIR, 'thinking', docKey(rel) + '.json')
+/** Where a document's Thinking Space keeps what only Ekdanta needs. thinking.ts reads and writes it here, so it follows the document. */
+export const thinkingSideFile = (rel: string) => path.join(META_DIR, 'thinking', docKey(rel) + '.json')
 
 // Help history: one JSON object per line, per document.
 function historyFile(doc: string) {
@@ -794,12 +982,13 @@ function historyFile(doc: string) {
 // The built-in sidecars. The names match what older trash folders hold, so those still restore.
 registerSidecar('doc.canvas', (rel) => resolveInVault(canvasOf(rel)))
 registerSidecar('history.jsonl', historyFile)
-registerSidecar('thinking.json', sideFile)
+registerSidecar('thinking.json', thinkingSideFile)
 registerSidecar('written.json', writtenInfo)
 registerSidecar('written.md', writtenBody)
 
 export async function appendHistory(doc: string, item: unknown) {
   resolveInVault(doc)
+  await adoptOldKey(doc)
   const file = historyFile(doc)
   await fs.mkdir(path.dirname(file), { recursive: true })
   await fs.appendFile(file, JSON.stringify(item) + '\n', 'utf8')
@@ -808,6 +997,7 @@ export async function appendHistory(doc: string, item: unknown) {
 /** Clear a document's help log. The file stays, empty, so the log reads empty after a reload too. */
 export async function clearHistory(doc: string) {
   resolveInVault(doc)
+  await adoptOldKey(doc)
   await fs.truncate(historyFile(doc), 0).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== 'ENOENT') throw e
   })
@@ -815,6 +1005,7 @@ export async function clearHistory(doc: string) {
 
 export async function readHistory(doc: string): Promise<unknown[]> {
   resolveInVault(doc)
+  await adoptOldKey(doc)
   try {
     const raw = await fs.readFile(historyFile(doc), 'utf8')
     return raw

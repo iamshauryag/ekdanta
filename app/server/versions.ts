@@ -5,7 +5,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { countWords, isVersionId, retain, splitDoc, versionId, wordDelta, type VersionEntry, type VersionRow } from '../src/lib/versions.ts'
-import { META_DIR, betweenWrites, docKey, hashOf, lastWritten, onBeforeWrite, readDoc, readWithMtime, registerSidecar, resolveInVault, atomicWrite } from './vault.ts'
+import { META_DIR, adoptOldKey, betweenWrites, docKey, hashOf, lastWritten, onBeforeWrite, readDoc, readWithMtime, registerSidecar, resolveInVault, atomicWrite } from './vault.ts'
 import { HttpError } from './net.ts'
 
 /** Saves closer together than this don't each get a version. */
@@ -23,7 +23,9 @@ registerSidecar('versions', dirOf)
 const queue = new Map<string, Promise<unknown>>()
 function serial<T>(rel: string, fn: () => Promise<T>): Promise<T> {
   const key = dirOf(rel)
-  const run = (queue.get(key) ?? Promise.resolve()).then(fn, fn)
+  // Versions still under the document's old key are brought over first.
+  const go = () => adoptOldKey(rel).then(fn)
+  const run = (queue.get(key) ?? Promise.resolve()).then(go, go)
   const tail = run.catch(() => {})
   queue.set(key, tail)
   tail.then(() => queue.get(key) === tail && queue.delete(key))
@@ -153,6 +155,7 @@ function cachedDelta(a: string, b: string) {
 export async function readVersion(rel: string, id: string): Promise<string> {
   resolveInVault(rel)
   if (!isVersionId(id)) throw new HttpError(404, 'No such version')
+  await adoptOldKey(rel)
   return fs.readFile(path.join(dirOf(rel), id + '.md'), 'utf8').catch(() => {
     throw new HttpError(404, 'No such version')
   })
