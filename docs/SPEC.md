@@ -94,7 +94,9 @@ Not every document — or sentence — represents a writer equally well. Weighti
 ## Importing existing writing
 
 - The official [Obsidian Importer](https://github.com/obsidianmd/obsidian-importer) (MIT) covers Apple Notes, Notion, Evernote, Google Keep, OneNote, Bear, Roam, Logseq, HTML, Markdown and more, but not Word or Google Docs.
-- Word (.docx) and Google Docs (exported as .docx) convert with [Pandoc](https://pandoc.org): `pandoc in.docx -t gfm -o out.md --extract-media=media`. PDFs fall back to text extraction.
+- Word (.docx) and Google Docs (exported as .docx) convert with [Pandoc](https://pandoc.org): `pandoc in.docx -t gfm -o out.md --extract-media=media`.
+- PDFs with a text layer convert with pdf.js (via unpdf, no native code), read in a worker thread with a memory cap and a time limit. Reading order is rebuilt from positions: paragraphs, words broken at line ends, headings by font size, lists, two columns, tables; running headers, footers and page numbers are dropped. Anything doubtful puts the file up for review with a plain reason (empty scanned pages, two columns, tables, pictures and links left out, garbled text). A scan with no text fails with a message: no OCR yet.
+- The writer can add labels to one file or to the whole batch before importing; they're written to the note's `tags`.
 - First sources to support: **Google Docs, Word and Google Keep**.
 - Ekdanta's importer adds front-matter to each file: original creation date (export tools often reset file dates), source app, platform (guessed, then confirmed by the writer) and title.
 

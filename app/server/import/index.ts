@@ -15,7 +15,8 @@ import { csvToMarkdown } from './csv.ts'
 import { docxToMarkdown, ImportError } from './docx.ts'
 import { dateOf, htmlToMarkdown, type Converted } from './html.ts'
 import { splitFrontMatter } from '../../src/lib/frontmatter.ts'
-import { buildNote, countWords, firstHeading, guessPlatform, titleFromFileName, ymd } from './meta.ts'
+import { buildNote, cleanLabels, countWords, firstHeading, guessPlatform, titleFromFileName, ymd } from './meta.ts'
+import { pdfToMarkdown } from './pdf.ts'
 import { MEDIA_PREFIX } from './sanitize.ts'
 import { clippingsToMarkdown, decodeText, isKindleClippings, normalizeNewlines, textToMarkdown } from './text.ts'
 
@@ -27,7 +28,7 @@ export const DEFAULT_FOLDER = 'imported'
 /** The most one upload may be. The app asks before sending anything over 50 MB. */
 const MAX_BYTES = 1024 * 1024 * 1024
 
-export type FileType = 'docx' | 'doc' | 'html' | 'text' | 'markdown' | 'rtf' | 'csv' | 'other'
+export type FileType = 'docx' | 'doc' | 'pdf' | 'html' | 'text' | 'markdown' | 'rtf' | 'csv' | 'other'
 export type ItemStatus = 'pending' | 'converted' | 'review' | 'failed' | 'duplicate' | 'unsupported'
 
 export interface ImportItem {
@@ -51,6 +52,8 @@ export interface ImportItem {
   /** The guessed kind. */
   platform?: string
   folder: string
+  /** Labels written into the note's tags, set once it's in the vault. */
+  tags?: string[]
   /** Set once it's in the vault. */
   imported?: { path: string; media: string[]; hash: string }
 }
@@ -139,6 +142,7 @@ async function freeFile(dir: string, name: string) {
 const BY_EXT: Record<string, FileType> = {
   '.docx': 'docx',
   '.doc': 'doc',
+  '.pdf': 'pdf',
   '.html': 'html',
   '.htm': 'html',
   '.xhtml': 'html',
@@ -157,6 +161,8 @@ export function detectType(name: string, head: Buffer): FileType {
   const byExt = BY_EXT[path.extname(name).toLowerCase()] ?? 'other'
   const sniffed = sniff(head)
   if (!sniffed || sniffed === byExt) return byExt
+  // A PDF is a PDF whatever it's called.
+  if (sniffed === 'pdf') return 'pdf'
   // Binary formats can't be text, whatever the name says. An .rtf saved as .doc is common.
   const loose = byExt === 'other' || byExt === 'text' || byExt === 'markdown'
   if (sniffed === 'docx') return loose || byExt === 'doc' ? 'docx' : byExt
@@ -176,6 +182,8 @@ function sniff(head: Buffer): FileType | null {
     .replace(/^﻿|^\xEF\xBB\xBF/, '')
     .trimStart()
   if (start.startsWith('{\\rtf')) return 'rtf'
+  // The header may come after a little junk, within the first kilobyte.
+  if (/(^|[\r\n])%PDF-\d/.test(head.subarray(0, 1024).toString('latin1'))) return 'pdf'
   if (/^<(!doctype html|html[\s>])/i.test(start)) return 'html'
   return null
 }
@@ -217,6 +225,8 @@ async function convertFile(abs: string, name: string, type: FileType, work: stri
         }
         return { ...(await docxToMarkdown(buf, abs, { pandoc: null, work, prefix })), converter: 'built-in' }
       }
+      case 'pdf':
+        return { ...(await pdfToMarkdown(buf)), converter: 'built-in' }
       case 'html':
         return { ...htmlToMarkdown(decodeText(buf).text, { article: true, prefix }), converter: 'built-in' }
       case 'text': {
@@ -461,22 +471,30 @@ export async function convert(batch: string, id: string): Promise<ImportItem> {
 }
 
 /** The note a row would become, front matter and all, as Markdown. */
-export async function preview(batch: string, id: string, platform?: string): Promise<string> {
+export async function preview(batch: string, id: string, platform?: string, tags?: string[]): Promise<string> {
   const m = await readManifest(batch)
   const item = m.items.find((i) => i.id === id)
   if (!item) throw new HttpError(404, 'No such file in this import')
   if (item.status === 'failed' || item.status === 'pending') return ''
   const md = await fs.readFile(path.join(inside(batchDir(batch), 'items', item.id), 'out.md'), 'utf8').catch(() => '')
-  return buildNote(md, noteMeta(item, platform ?? item.platform))
+  return buildNote(md, noteMeta(item, platform ?? item.platform, cleanLabels(tags)))
 }
 
-const noteMeta = (item: ImportItem, platform: string | undefined) => ({ title: item.title, created: item.created, imported: ymd(new Date()), source: item.name, platform: platform || undefined })
+const noteMeta = (item: ImportItem, platform: string | undefined, tags: string[]) => ({
+  title: item.title,
+  created: item.created,
+  imported: ymd(new Date()),
+  source: item.name,
+  platform: platform || undefined,
+  tags,
+})
 
 /** Write a row into the vault as a note. Returns the row, with where its note is. */
-export async function commit(batch: string, id: string, choice: { platform?: string; folder?: string }): Promise<ImportItem> {
+export async function commit(batch: string, id: string, choice: { platform?: string; folder?: string; tags?: unknown }): Promise<ImportItem> {
   const kinds = (await loadSettings()).kinds
   const platform = choice.platform && kinds.some((k) => k.id === choice.platform) ? choice.platform : undefined
   const folder = cleanFolder(choice.folder ?? DEFAULT_FOLDER)
+  const tags = cleanLabels(choice.tags)
   return serial(async () => {
     const m = await readManifest(batch)
     const item = m.items.find((i) => i.id === id)
@@ -506,11 +524,12 @@ export async function commit(batch: string, id: string, choice: { platform?: str
         md = md.split(MEDIA_PREFIX + name).join(link)
       }
     }
-    const note = buildNote(md, noteMeta(item, platform))
+    const note = buildNote(md, noteMeta(item, platform, tags))
     await writeDoc(rel, note, { reason: 'import' })
     item.imported = { path: rel, media, hash: hashOf(note) }
     item.platform = platform
     item.folder = folder
+    item.tags = tags.length ? tags : undefined
     // A file from the inbox leaves it now, and only now (its copy stays in originals/).
     if (item.inbox) {
       const abs = resolveInVault(item.inbox)
@@ -567,6 +586,7 @@ export async function undo(batch: string): Promise<Undone> {
       }
       if (ledger[item.sha]?.batch === batch && ledger[item.sha]?.id === item.id) delete ledger[item.sha]
       item.imported = undefined
+      item.tags = undefined
     }
     await writeLedger(ledger)
     await writeManifest(m)

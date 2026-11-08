@@ -5,6 +5,7 @@ import MarkdownIt from 'markdown-it'
 import { api, type ImportItem } from '../lib/api.ts'
 import { kinds } from '../lib/kinds.ts'
 import { splitFrontMatter } from '../lib/frontmatter.ts'
+import { cleanTag, type TagCount } from '../lib/tags.ts'
 
 /** Over this, the writer is asked before a file is sent. */
 const BIG = 50 * 1024 * 1024
@@ -27,6 +28,8 @@ interface Choice {
   checked: boolean
   platform: string
   folder: string
+  /** Labels for the note's tags. */
+  tags: string[]
   /** Still being converted: its kind and folder aren't known yet. */
   waiting: boolean
 }
@@ -41,7 +44,7 @@ md.renderer.rules.image = (tokens, i) => {
     : `<img src="${md.utils.escapeHtml(src)}" alt="${md.utils.escapeHtml(t.content)}">`
 }
 
-const TYPE_LABEL: Record<ImportItem['type'], string> = { docx: 'DOCX', doc: 'DOC', html: 'HTML', text: 'TXT', markdown: 'MD', rtf: 'RTF', csv: 'CSV', other: 'FILE' }
+const TYPE_LABEL: Record<ImportItem['type'], string> = { docx: 'DOCX', doc: 'DOC', pdf: 'PDF', html: 'HTML', text: 'TXT', markdown: 'MD', rtf: 'RTF', csv: 'CSV', other: 'FILE' }
 const STATUS_LABEL: Record<ImportItem['status'], string> = {
   pending: 'Converting…',
   converted: 'Converted',
@@ -69,6 +72,11 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
+  // Labels for every file: shown only when the writer asks for them.
+  const [labelsOpen, setLabelsOpen] = useState(false)
+  const [batchTags, setBatchTags] = useState<string[]>([])
+  const batchTagsRef = useRef<string[]>([])
+  const [vaultTags, setVaultTags] = useState<TagCount[]>([])
   const input = useRef<HTMLInputElement>(null)
   const sheet = useRef<HTMLDivElement>(null)
   // Work on files happens one at a time, in the order they came.
@@ -88,11 +96,14 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
     setItems((list) => (list.some((o) => o.id === it.id) ? list.map((o) => (o.id === it.id ? it : o)) : [...list, it]))
     setChoices((c) => {
       const prev = c[it.id]
-      if (it.imported) return { ...c, [it.id]: { ...(prev ?? { platform: it.platform ?? '', folder: it.folder, waiting: false }), checked: false } }
+      if (it.imported) return { ...c, [it.id]: { ...(prev ?? { platform: it.platform ?? '', folder: it.folder, tags: it.tags ?? [], waiting: false }), checked: false } }
       // The writer's choices stand; a row that has only now been converted takes its own defaults.
       if (prev && !prev.waiting) return c
       const waiting = it.status === 'pending'
-      return { ...c, [it.id]: { checked: !waiting && it.status !== 'failed' && it.status !== 'duplicate', platform: it.platform ?? '', folder: it.folder, waiting } }
+      return {
+        ...c,
+        [it.id]: { checked: !waiting && it.status !== 'failed' && it.status !== 'duplicate', platform: it.platform ?? '', folder: it.folder, tags: prev?.tags ?? [...batchTagsRef.current], waiting },
+      }
     })
     setSelected((s) => s ?? it.id)
   }, [])
@@ -157,6 +168,7 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
     if (started.current) return
     started.current = true
     ensureBatch()
+    api.tags().then(setVaultTags, () => {})
     if (files?.length) add(files)
     if (pick) input.current?.click()
     sheet.current?.focus()
@@ -181,16 +193,36 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
   useEffect(() => {
     if (!batch || !sel || sel.status === 'pending' || sel.status === 'failed') return setPreview('')
     let live = true
-    api.importPreview(batch, sel.id, selChoice?.platform ?? '').then(
+    api.importPreview(batch, sel.id, selChoice?.platform ?? '', selChoice?.tags ?? []).then(
       (text) => live && setPreview(text),
       () => live && setPreview(''),
     )
     return () => {
       live = false
     }
-  }, [batch, sel?.id, sel?.status, selChoice?.platform])
+    // The labels as text, so a new array with the same labels doesn't ask again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batch, sel?.id, sel?.status, selChoice?.platform, selChoice?.tags.join('\n')])
 
   const choose = (id: string, patch: Partial<Choice>) => setChoices((c) => ({ ...c, [id]: { ...c[id], ...patch } }))
+  /** Labels for every file: what's added joins each file not yet imported, what's removed leaves them. */
+  const changeBatchTags = (next: string[]) => {
+    const prev = batchTagsRef.current
+    const lower = (l: string[]) => new Set(l.map((t) => t.toLowerCase()))
+    const added = next.filter((t) => !lower(prev).has(t.toLowerCase()))
+    const gone = lower(prev.filter((t) => !lower(next).has(t.toLowerCase())))
+    batchTagsRef.current = next
+    setBatchTags(next)
+    setChoices((c) =>
+      Object.fromEntries(
+        Object.entries(c).map(([id, ch]) => {
+          if (items.find((it) => it.id === id)?.imported) return [id, ch]
+          const kept = ch.tags.filter((t) => !gone.has(t.toLowerCase()))
+          return [id, { ...ch, tags: [...kept, ...added.filter((t) => !lower(kept).has(t.toLowerCase()))] }]
+        }),
+      ),
+    )
+  }
   const setKind = (id: string, platform: string) => {
     const c = choices[id]
     // The folder follows the kind, unless the writer typed one of their own.
@@ -211,7 +243,7 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
         progress(`Importing ${n + 1}/${list.length}…`)
         const c = choices[it.id]
         try {
-          const next = await api.importCommit(batch, it.id, c.platform, c.folder)
+          const next = await api.importCommit(batch, it.id, c.platform, c.folder, c.tags)
           upsert(next)
           if (next.imported) done.push(next.imported.path)
         } catch (e) {
@@ -326,8 +358,8 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
           <div className="import-empty">
             <p>{batch ? 'Choose files to bring into your vault, or drop them here.' : 'Looking in _inbox…'}</p>
             <p className="muted">
-              Word (.docx), web pages (.html), text, rich text (.rtf), CSV and Markdown files become notes you can review first. Anything you put in the vault’s <code>_inbox</code> folder shows up
-              here too.
+              Word (.docx), PDFs with text, web pages (.html), text, rich text (.rtf), CSV and Markdown files become notes you can review first. Anything you put in the vault’s <code>_inbox</code>{' '}
+              folder shows up here too.
               {!pandoc && batch ? ' Installing Pandoc gives the best Word conversions.' : ''}
             </p>
           </div>
@@ -344,7 +376,27 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
                 <span>
                   {toImport.length} of {shown.length} selected
                 </span>
+                {!labelsOpen && (
+                  <button
+                    className="link-btn import-labels-open"
+                    onClick={(e) => {
+                      e.preventDefault() // not the tick box this sits beside
+                      setLabelsOpen(true)
+                    }}
+                  >
+                    {batchTags.length ? `Labels: ${batchTags.join(', ')}` : 'Add labels…'}
+                  </button>
+                )}
               </label>
+              {labelsOpen && (
+                <div className="import-labels is-batch">
+                  <span className="import-labels-name">Labels for every file</span>
+                  <LabelField label="Labels for every file" values={batchTags} onChange={changeBatchTags} autoFocus />
+                  <button className="link-btn" onClick={() => setLabelsOpen(false)}>
+                    Done
+                  </button>
+                </div>
+              )}
               {shown.map((it) => {
                 const c = choices[it.id]
                 return (
@@ -423,6 +475,11 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
                   </div>
                 </div>
               ))}
+              <datalist id="import-tags">
+                {vaultTags.map((t) => (
+                  <option key={t.tag} value={t.tag} />
+                ))}
+              </datalist>
               <datalist id="import-folders">
                 {allFolders.map((f) => (
                   <option key={f} value={f} />
@@ -446,6 +503,12 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
                         <li key={n}>{n}</li>
                       ))}
                     </ul>
+                  )}
+                  {!sel.imported && selChoice && (
+                    <div className="import-labels">
+                      <span className="import-labels-name">Labels</span>
+                      <LabelField label={`Labels for ${sel.name}`} values={selChoice.tags} onChange={(tags) => choose(sel.id, { tags })} />
+                    </div>
                   )}
                   <dl className="import-meta">
                     {Object.entries(fm.meta).map(([k, v]) => (
@@ -481,5 +544,52 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
         </footer>
       </div>
     </div>
+  )
+}
+
+/** Labels as chips. Return or a comma adds one; Backspace in an empty field takes the last off. The vault's tags are suggested. */
+function LabelField({ label, values, onChange, autoFocus }: { label: string; values: string[]; onChange: (v: string[]) => void; autoFocus?: boolean }) {
+  const [text, setText] = useState('')
+  const add = (raw: string) => {
+    const next = [...values]
+    for (const t of raw.split(',').map(cleanTag).filter(Boolean)) if (!next.some((x) => x.toLowerCase() === t.toLowerCase())) next.push(t)
+    setText('')
+    if (next.length !== values.length) onChange(next)
+  }
+  return (
+    <span className="prop-chips">
+      {values.map((v) => (
+        <span key={v} className="prop-chip">
+          #{v}
+          <button className="prop-chip-x" aria-label={`Remove #${v}`} title={`Remove #${v}`} onClick={() => onChange(values.filter((x) => x !== v))}>
+            ×
+          </button>
+        </span>
+      ))}
+      <span className="prop-chips-field">
+        <input
+          className="prop-chips-input"
+          aria-label={label}
+          autoFocus={autoFocus}
+          placeholder={values.length ? '' : 'Add a label…'}
+          list="import-tags"
+          value={text}
+          onChange={(e) => (e.target.value.includes(',') ? add(e.target.value) : setText(e.target.value))}
+          onBlur={() => text.trim() && add(text)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              if (text.trim()) add(text)
+            } else if (e.key === 'Backspace' && !text && values.length) onChange(values.slice(0, -1))
+            else if (e.key === 'Escape' && text) {
+              // Escape clears what's typed; a second one closes the sheet.
+              e.stopPropagation()
+              e.nativeEvent.stopImmediatePropagation()
+              setText('')
+            }
+          }}
+        />
+      </span>
+    </span>
   )
 }

@@ -4758,6 +4758,34 @@ p.row-warn {
 .import-meta div {
   display: contents;
 }
+.import-labels-open {
+  margin-left: auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-labels {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 10px;
+  font-size: 12px;
+}
+.import-labels.is-batch {
+  margin: 0 8px 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--chrome);
+}
+.import-labels-name {
+  flex: none;
+  color: var(--ink-3);
+}
+.import-labels .prop-chips {
+  flex: 1;
+  margin-left: 0;
+}
 .import-meta dd {
   margin: 0;
   color: var(--ink-2);
