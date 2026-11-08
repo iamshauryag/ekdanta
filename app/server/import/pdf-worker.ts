@@ -3,7 +3,7 @@
 // (through unpdf's build, which needs no canvas and no native code). pdf.js never runs a PDF's own
 // scripts; it's given the bytes, never a URL, and fetch is switched off here in case anything asks.
 import { parentPort, workerData } from 'node:worker_threads'
-import { cleanTitle, isoDate, layoutPages, pdfDate, type PdfItem, type PdfPage } from './pdf-layout.ts'
+import { cleanTitle, isoDate, layoutPages, pdfDate, type PdfItem, type PdfPage, type Removed } from './pdf-layout.ts'
 
 export interface PdfJob {
   data: Uint8Array
@@ -29,10 +29,23 @@ export type PdfResult =
       chars: number
       sideways: number
       links: number
+      /** Filled-in form fields, and comments or text boxes added on top of the page: none are in the text. */
+      fields: number
+      comments: number
+      removed: Removed
+      rejoined: string[]
       pictures: boolean
       outOfTime: boolean
     }
   | { ok: false; error: 'password' | 'damaged' | 'other'; message?: string }
+
+interface Annotation {
+  subtype?: string
+  url?: string
+  fieldType?: string
+  fieldValue?: unknown
+  contentsObj?: { str?: string }
+}
 
 globalThis.fetch = () => Promise.reject(new Error('No network while reading a PDF'))
 
@@ -48,11 +61,11 @@ parentPort!.postMessage(
 async function read({ data, maxPages, softMs }: PdfJob): Promise<PdfResult> {
   const started = Date.now()
   // Pictures are streams of their own, so their dictionaries are never hidden in compressed object streams.
-  const pictures =
-    Buffer.from(data.buffer, data.byteOffset, data.byteLength).indexOf('/Subtype/Image') >= 0 || Buffer.from(data.buffer, data.byteOffset, data.byteLength).indexOf('/Subtype /Image') >= 0
+  const bytes = Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+  const pictures = bytes.indexOf('/Subtype/Image') >= 0 || bytes.indexOf('/Subtype /Image') >= 0
   const { getResolvedPDFJS } = await import('unpdf')
   const pdfjs = await getResolvedPDFJS()
-  const task = pdfjs.getDocument({ data, useSystemFonts: false, disableFontFace: true, enableXfa: false, stopAtErrors: false, verbosity: 0 })
+  const task = pdfjs.getDocument({ data, useSystemFonts: false, disableFontFace: true, enableXfa: false, stopAtErrors: false, verbosity: 0, disableAutoFetch: true, disableStream: true })
   const doc = await task.promise
   try {
     const meta = await doc.getMetadata().catch(() => null)
@@ -65,6 +78,8 @@ async function read({ data, maxPages, softMs }: PdfJob): Promise<PdfResult> {
     const empty: number[] = []
     let sideways = 0
     let links = 0
+    let fields = 0
+    let comments = 0
     let outOfTime = false
     const read = Math.min(doc.numPages, maxPages)
     for (let n = 1; n <= read; n++) {
@@ -79,15 +94,21 @@ async function read({ data, maxPages, softMs }: PdfJob): Promise<PdfResult> {
       for (const it of content.items) {
         if (!('str' in it) || !it.str) continue
         const t = pdfjs.Util.transform(vp.transform, it.transform)
-        // Upright text only; sideways text (a margin note, a stamp) is counted and left out.
-        if (Math.abs(t[1]) > 0.01 * Math.abs(t[0]) || Math.abs(t[2]) > 0.01 * Math.abs(t[3]) || t[0] <= 0) {
+        // Upright text only. Sideways text (a margin note, a stamp) is counted and left out; mirrored or
+        // upside-down text is a drawing effect, not something to read, and is left out quietly.
+        if (Math.abs(t[1]) > 0.01 * Math.abs(t[0]) || Math.abs(t[2]) > 0.01 * Math.abs(t[3])) {
           sideways += it.str.trim().length
           continue
         }
+        if (t[0] <= 0 || t[3] >= 0) continue
         items.push({ str: it.str, x: t[4], y: t[5], w: it.width, size: Math.hypot(t[2], t[3]) })
       }
       if (!items.some((it) => it.str.trim())) empty.push(n)
-      links += (await page.getAnnotations().catch(() => [])).filter((a: { subtype?: string; url?: string }) => a.subtype === 'Link' && a.url).length
+      for (const a of (await page.getAnnotations().catch(() => [])) as Annotation[]) {
+        if (a.subtype === 'Link' && a.url) links++
+        else if (a.subtype === 'Widget' && (a.fieldType === 'Tx' || a.fieldType === 'Ch') && [a.fieldValue].flat().some((v) => typeof v === 'string' && v.trim())) fields++
+        else if ((a.subtype === 'FreeText' || a.subtype === 'Text') && (a.contentsObj?.str ?? '').trim()) comments++
+      }
       pages.push({ width: vp.width, height: vp.height, items })
       page.cleanup()
     }
@@ -111,7 +132,7 @@ async function read({ data, maxPages, softMs }: PdfJob): Promise<PdfResult> {
     }
 
     const layout = layoutPages(pages)
-    return { ok: true, ...layout, title, created, pages: doc.numPages, read: pages.length, emptyDrawn, emptyBlank, sideways, links, pictures, outOfTime }
+    return { ok: true, ...layout, title, created, pages: doc.numPages, read: pages.length, emptyDrawn, emptyBlank, sideways, links, fields, comments, pictures, outOfTime }
   } finally {
     await task.destroy()
   }

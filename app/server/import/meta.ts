@@ -1,7 +1,7 @@
 // The front matter every imported note gets: a title, when it was written, when it was imported,
 // where it came from, and a kind only when the text makes one plain. No DOM, no file system.
-import { applyPatch, joinFrontMatter, splitFrontMatter } from '../../src/lib/frontmatter.ts'
-import { cleanTag, metaTags } from '../../src/lib/tags.ts'
+import { applyPatch, joinFrontMatter, splitFrontMatter, splitWords } from '../../src/lib/frontmatter.ts'
+import { cleanTag } from '../../src/lib/tags.ts'
 
 /** A date as YYYY-MM-DD in local time. */
 export const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -110,8 +110,13 @@ export function buildNote(markdown: string, m: NoteMeta): string {
   }
   if (meta.platform || m.platform) patch.platform = meta.platform || m.platform || null
   patch.status = meta.status || 'imported'
-  // Labels join the tags the source already had.
-  const tags = m.tags?.length ? cleanLabels([...metaTags(fm), ...m.tags]) : null
+  // Labels join the tags the source already had, which stay exactly as written (only a plain
+  // `tags: a b` becomes a list); a label it already has, in any case, isn't added twice.
+  const own = fm.lists.tags ?? (meta.tags ? splitWords(meta.tags) : [])
+  // Compared as typed and as a label would be cleaned, so "V1.0" matches an existing "v1.0".
+  const have = new Set([...own.map((t) => t.replace(/^#+/, '')), ...cleanLabels(own)].map((t) => t.toLowerCase()))
+  const fresh = cleanLabels(m.tags).filter((t) => !have.has(t.toLowerCase()))
+  const tags = fresh.length ? [...own, ...fresh] : null
   if (tags) patch.tags = tags.join(', ')
   // Ekdanta's keys first, in a fixed order, then whatever else the source had.
   const ordered = { ...patch } as Record<string, string>

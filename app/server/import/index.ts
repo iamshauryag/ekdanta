@@ -182,8 +182,7 @@ function sniff(head: Buffer): FileType | null {
     .replace(/^﻿|^\xEF\xBB\xBF/, '')
     .trimStart()
   if (start.startsWith('{\\rtf')) return 'rtf'
-  // The header may come after a little junk, within the first kilobyte.
-  if (/(^|[\r\n])%PDF-\d/.test(head.subarray(0, 1024).toString('latin1'))) return 'pdf'
+  if (head.subarray(0, 5).toString('latin1') === '%PDF-') return 'pdf'
   if (/^<(!doctype html|html[\s>])/i.test(start)) return 'html'
   return null
 }

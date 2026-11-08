@@ -9,7 +9,7 @@ import path from 'node:path'
 const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ekdanta-pdf-'))
 process.env.EKDANTA_VAULT = root
 const imp = await import('./index.ts')
-const { pdfToMarkdown } = await import('./pdf.ts')
+const { pdfToMarkdown, nodeProblem } = await import('./pdf.ts')
 const { ImportError } = await import('./docx.ts')
 const { join, escapeMd, cleanTitle, pdfDate, layoutPages } = await import('./pdf-layout.ts')
 const { buildNote, cleanLabels } = await import('./meta.ts')
@@ -23,6 +23,10 @@ interface PageSpec {
   text?: [number, number, number, string][]
   /** Draw a picture across the page (a "scan"). */
   picture?: boolean
+  /** Raw content-stream operators, for text drawn turned or mirrored. */
+  ops?: string[]
+  /** Annotation dictionaries (form fields, comments) on the page. */
+  annots?: string[]
 }
 
 function pdf(pages: PageSpec[], opts: { info?: string; encrypt?: boolean } = {}): Buffer {
@@ -36,9 +40,16 @@ function pdf(pages: PageSpec[], opts: { info?: string; encrypt?: boolean } = {})
   const kids: number[] = []
   const esc = (s: string) => s.replace(/[\\()]/g, '\\$&')
   for (const p of pages) {
-    const ops = [...(p.picture ? ['q 512 0 0 692 50 50 cm /Im1 Do Q'] : []), ...(p.text ?? []).map(([x, y, size, s]) => `BT /F1 ${size} Tf ${x} ${y} Td (${esc(s)}) Tj ET`)].join('\n')
+    const ops = [...(p.picture ? ['q 512 0 0 692 50 50 cm /Im1 Do Q'] : []), ...(p.text ?? []).map(([x, y, size, s]) => `BT /F1 ${size} Tf ${x} ${y} Td (${esc(s)}) Tj ET`), ...(p.ops ?? [])].join(
+      '\n',
+    )
     const content = add(`<< /Length ${Buffer.byteLength(ops, 'latin1')} >>\nstream\n${ops}\nendstream`)
-    kids.push(add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >>${image ? ` /XObject << /Im1 ${image} 0 R >>` : ''} >> /Contents ${content} 0 R >>`))
+    const annots = (p.annots ?? []).map((a) => add(a))
+    kids.push(
+      add(
+        `<< /Type /Page /Parent 2 0 R${annots.length ? ` /Annots [${annots.map((a) => `${a} 0 R`).join(' ')}]` : ''} /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >>${image ? ` /XObject << /Im1 ${image} 0 R >>` : ''} >> /Contents ${content} 0 R >>`,
+      ),
+    )
   }
   objs[0] = '<< /Type /Catalog /Pages 2 0 R >>'
   objs[1] = `<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`
@@ -69,6 +80,11 @@ function bookPage(n: number, body: [number, number, number, string][]): PageSpec
 // ---- Layout rules -------------------------------------------------------------------------------
 
 test('join mends words broken at a line end, unless the text spells them with a hyphen', () => {
+  const joined: string[] = []
+  assert.equal(join('the state-of-the-', 'art method', new Set(), joined), 'the state-of-the-art method')
+  assert.equal(join('in pre-', 'and post-war years', new Set(), joined), 'in pre- and post-war years')
+  assert.equal(join('a well-', 'known fact', new Set(), joined), 'a wellknown fact') // no dictionary: joined, and counted
+  assert.deepEqual(joined, ['wellknown'])
   assert.equal(join('a long-', 'winded thing'), 'a longwinded thing')
   assert.equal(join('the self-', 'esteem of', new Set(['self-esteem'])), 'the self-esteem of')
   assert.equal(join('North-', 'East'), 'North- East') // a capital after the hyphen: not a broken word
@@ -81,6 +97,15 @@ test('escapeMd keeps PDF text from turning into Markdown', () => {
   assert.equal(escapeMd('a *b* _c_ [d] `e` <div> 3 < 4'), 'a \\*b\\* \\_c\\_ \\[d\\] \\`e\\` \\<div> 3 < 4')
   const out = layoutPages([{ width: 612, height: 792, items: [{ str: '# not a heading', x: 72, y: 100, w: 80, size: 11 }] }])
   assert.equal(out.markdown, '\\# not a heading\n')
+  // Rules and fences on their own, or opening a paragraph, are escaped too, so a note can't start with front matter.
+  const para = (t: string) => layoutPages([{ width: 612, height: 792, items: [{ str: t, x: 72, y: 100, w: 80, size: 11 }] }]).markdown
+  assert.equal(para('---'), '\\---\n')
+  assert.equal(para('~~~'), '\\~~~\n')
+  assert.equal(para('***'), '\\*\\*\\*\n')
+  assert.equal(para('___'), '\\_\\_\\_\n')
+  assert.equal(para('---title: x---'), '\\---title: x---\n')
+  const note = buildNote(para('---'), { title: 'T', created: '2020-01-01', imported: '2026-01-01', source: 'a.pdf' })
+  assert.match(note, /\n\\---\n$/)
 })
 
 test('PDF titles and dates: program-made titles are ignored; dates are read as written', () => {
@@ -102,6 +127,12 @@ test('cleanLabels makes tags of what was typed; buildNote adds them to the sourc
   assert.match(note, /^tags: \[old, new\]$/m)
   assert.match(buildNote('Body\n', { ...meta, tags: ['one', 'two'] }), /^tags:\n {2}- one\n {2}- two$/m)
   assert.doesNotMatch(buildNote('Body\n', meta), /tags/)
+  // The source's own tags stay as written and uncapped; only the writer's new labels are cleaned.
+  const many = Array.from({ length: 35 }, (_, i) => `t${i}`)
+  const kept = buildNote(`---\ntags: [v1.0, c++, Craft, ${many.join(', ')}]\n---\n\nBody\n`, { ...meta, tags: ['craft', 'new one'] })
+  assert.match(kept, new RegExp(`^tags: \\[v1\\.0, c\\+\\+, Craft, ${many.join(', ')}, new-one\\]$`, 'm'))
+  // A label the note already has leaves the front matter alone.
+  assert.equal(buildNote('---\ntags: [v1.0]\n---\n\nBody\n', { ...meta, tags: ['V1.0'] }), buildNote('---\ntags: [v1.0]\n---\n\nBody\n', meta))
 })
 
 // ---- Real PDFs through the worker ---------------------------------------------------------------
@@ -119,7 +150,10 @@ test('paragraphs, broken words, headings, running headers and page numbers, meta
   const out = await pdfToMarkdown(pdf([p1, p2, p3], { info: '<< /Title (Slow Writing) /CreationDate (D:20210304050607Z) >>' }))
   assert.equal(out.title, 'Slow Writing')
   assert.equal(out.created, '2021-03-04')
-  assert.deepEqual(out.notes, [])
+  assert.deepEqual(out.notes, [
+    'Left out running headers and footers: “The Quiet Draft - Notes on Writing” (3 pages), page numbers (3)',
+    '1 word broken across lines was joined (happens); check any that should keep a hyphen',
+  ])
   assert.equal(
     out.markdown,
     [
@@ -152,6 +186,17 @@ test('lists keep their items, and a numbered line mid-sentence stays in the sent
   )
   assert.match(out.markdown, /^Things to bring:\n\n- A pencil\n- Paper that is good enough to write a long item on, with a second line\n1\. First step\n2\. Second step$/m)
   assert.match(out.markdown, /described in chapter 3\. It works well\./)
+})
+
+test('lettered items and dialogue dashes stay as text', () => {
+  const page = (texts: string[]) => layoutPages([{ width: 612, height: 792, items: texts.map((t, i) => ({ str: t, x: 72, y: 100 + i * 30, w: 200, size: 11 })) }]).markdown
+  const lettered = page(['a) the first choice', '(b) the second choice'])
+  assert.match(lettered, /^a\) the first choice/)
+  assert.match(lettered, /\(b\) the second choice/)
+  const dialogue = page(['— Who goes there?', '– Only me.'])
+  assert.match(dialogue, /^— Who goes there\?/)
+  assert.match(dialogue, /– Only me\./)
+  for (const md of [lettered, dialogue]) assert.doesNotMatch(md, /^- /m)
 })
 
 test('two columns are read left then right, and the writer is told to check', async () => {
@@ -200,14 +245,68 @@ test('limits: a page cap leaves the rest out with a note; the time limit stops t
   await assert.rejects(pdfToMarkdown(pdf(pages), { hardMs: 1 }), /took too long/)
 })
 
+test('margin lines that are real text stay: a refrain on two pages, "Mix", "iv", a lone "4/4"', async () => {
+  const refrain = await pdfToMarkdown(
+    pdf([
+      { text: [[72, 760, 11, 'Nevermore.'], ...lines(72, 700, 11, ['Once upon a midnight dreary, while I pondered.'])] },
+      { text: [[72, 760, 11, 'Nevermore.'], ...lines(72, 700, 11, ['Ah, distinctly I remember it was bleak.'])] },
+    ]),
+  )
+  assert.equal((refrain.markdown.match(/Nevermore\./g) ?? []).length, 2)
+  assert.deepEqual(refrain.notes, [])
+  const odd = await pdfToMarkdown(pdf([{ text: [[72, 760, 11, 'Mix'], ...lines(72, 700, 11, ['A body line.']), [72, 50, 11, 'iv'], [300, 36, 11, '4/4']] }]))
+  for (const word of ['Mix', 'iv', '4/4']) assert.match(odd.markdown, new RegExp(`^${word}$`, 'm'))
+  assert.deepEqual(odd.notes, [])
+})
+
+test('page numbers that count with the pages go, and the writer is told', async () => {
+  const pages = [1, 2, 3].map((n) => ({ text: [...lines(72, 700, 11, [`Page ${n} says something.`]), [300, 36, 9, `${n}/3`] as [number, number, number, string]] }))
+  const out = await pdfToMarkdown(pdf(pages))
+  assert.doesNotMatch(out.markdown, /\d\/3/)
+  assert.ok(out.notes.includes('Left out running headers and footers: page numbers (3)'), out.notes.join(' | '))
+  // Roman numerals counting up in the front matter go too; a total that doesn't hold stays.
+  const front = await pdfToMarkdown(pdf(['i', 'ii', 'iii'].map((r) => ({ text: [...lines(72, 700, 11, ['Preface text.']), [300, 36, 9, r] as [number, number, number, string]] }))))
+  assert.doesNotMatch(front.markdown, /^i+$/m)
+  const wrong = await pdfToMarkdown(pdf([{ text: [...lines(72, 700, 11, ['Text.']), [300, 36, 9, '5/3']] }, { text: [...lines(72, 700, 11, ['More.']), [300, 36, 9, '6/3']] }]))
+  assert.match(wrong.markdown, /5\/3/)
+})
+
+test('form fields, comments and sideways text are noted; mirrored text is not called sideways', async () => {
+  const out = await pdfToMarkdown(
+    pdf([
+      {
+        text: lines(72, 700, 11, ['A form with a body line.']),
+        ops: ['BT /F1 10 Tf 0 1 -1 0 560 300 Tm (Draft) Tj ET', 'BT /F1 10 Tf -1 0 0 1 300 400 Tm (mirror) Tj ET'],
+        annots: [
+          '<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V (Asha Rao) /Rect [72 600 300 620] >>',
+          '<< /Type /Annot /Subtype /FreeText /Contents (Cut this paragraph) /Rect [72 500 300 540] /DA (/Helv 10 Tf 0 g) >>',
+        ],
+      },
+    ]),
+  )
+  assert.ok(out.notes.includes('A filled-in form field was left out'), out.notes.join(' | '))
+  assert.ok(out.notes.includes('A comment or text box added on top of the pages was left out'), out.notes.join(' | '))
+  assert.ok(out.notes.includes('Sideways text (a margin note or a stamp) was left out'))
+  assert.doesNotMatch(out.markdown, /Draft|mirror|Asha/)
+})
+
+test('limits before reading: the Node version and the file size', async () => {
+  assert.match(nodeProblem('22.11.0')!, /^PDF import needs Node 24 or newer\. You have 22\.11\.0\. Update Node, or save the PDF as a Word document first$/)
+  assert.equal(nodeProblem('24.0.0'), null)
+  assert.equal(nodeProblem('26.12.1'), null)
+  await assert.rejects(pdfToMarkdown(pdf([{ text: [[72, 700, 11, 'Hi']] }]), { maxBytes: 100 }), (e: Error) => e instanceof ImportError && /can’t be imported/.test(e.message))
+})
+
 // ---- Through an import batch, with labels ----------------------------------------------------------
 
 test('a PDF imports as a note: detected by its bytes, metadata and labels in the front matter', async () => {
-  const buf = pdf([bookPage(1, lines(72, 700, 11, ['A short essay about drafts.'])), bookPage(2, lines(72, 700, 11, ['And its second page.']))], {
+  const buf = pdf([{ text: lines(72, 700, 11, ['A short essay about drafts.']) }, { text: lines(72, 700, 11, ['And its second page.']) }], {
     info: '<< /Title (Drafts) /CreationDate (D:20180607000000Z) >>',
   })
   assert.equal(imp.detectType('drafts.pdf', buf), 'pdf')
   assert.equal(imp.detectType('misnamed.docx', buf), 'pdf')
+  // Only a file that starts as a PDF is one: text that mentions the header further in is still text.
+  assert.equal(imp.detectType('notes.md', Buffer.from('Some notes\n%PDF-1.4 is the header')), 'markdown')
   const b = await imp.openBatch()
   const item = await imp.addUpload(b.batch, 'drafts.pdf', Date.UTC(2020, 0, 2), [buf])
   assert.equal(item.type, 'pdf')

@@ -30,6 +30,15 @@ export interface Layout {
   garbled: number
   /** All characters kept. */
   chars: number
+  /** Running headers and footers left out (as first seen, with how many pages had them), and page numbers. */
+  removed: Removed
+  /** Words broken at a line end that were joined into one ("long-" + "winded" → "longwinded"). */
+  rejoined: string[]
+}
+
+export interface Removed {
+  running: { text: string; pages: number }[]
+  pageNumbers: number
 }
 
 export interface Line {
@@ -48,10 +57,11 @@ export interface Line {
 }
 
 // Bullets as drawn, including the private-use code points Word's Symbol and Wingdings bullets come out as.
-const BULLET = /^([•◦▪▫●○■□►▸▹‣⁃∙➢➤✓✔❖\uF0A7\uF0B7\uF076\uF0D8\uF0FC\uF0A8\uF06E\uF0E0]\s*|[-–—*·]\s+)(?=\S)/u
-const NUMBERED = /^(\d{1,3}[.)]|\(?[a-z]\)|\(\d{1,3}\))\s+(?=\S)/
+// Dashes other than '-' open dialogue far more often than lists, so they're text.
+const BULLET = /^([•◦▪▫●○■□►▸▹‣⁃∙➢➤✓✔❖\uF0A7\uF0B7\uF076\uF0D8\uF0FC\uF0A8\uF06E\uF0E0]\s*|[-*·]\s+)(?=\S)/u
+// Numbered items only; "a)" and "(a)" stay as written, since Markdown has no lettered lists.
+const NUMBERED = /^(\d{1,3}[.)]|\(\d{1,3}\))\s+(?=\S)/
 const ENDS_SENTENCE = /[.!?:;…"”’)\]]$/
-const PAGE_NUMBER = /^(page\s+)?#(\s*(of|\/)\s*#)?$|^[-–—]\s*#\s*[-–—]$|^[ivxlcdm]{1,6}$/i
 
 /** The pages' text as Markdown. */
 export function layoutPages(pages: PdfPage[]): Layout {
@@ -62,13 +72,14 @@ export function layoutPages(pages: PdfPage[]): Layout {
     if (gutter !== null) twoColumns++
     lines.push(...pageLines)
   })
-  const body = dropRunningLines(lines, pages)
+  const { lines: body, removed } = dropRunningLines(lines, pages)
   const words = wordSet(body)
-  const { markdown, tables } = toMarkdown(body, words)
+  const rejoined: string[] = []
+  const { markdown, tables } = toMarkdown(body, words, rejoined)
   const text = body.map((l) => l.text).join('')
   // Private-use glyphs at the start of a line are bullets, read as such below; anywhere else they're letters lost.
   const garbled = (text.match(/[\uE000-\uF8FF\uFFFD]/g) ?? []).length - body.filter((l) => /^[\uE000-\uF8FF]/.test(l.text)).length
-  return { markdown, twoColumns, tables, garbled: Math.max(0, garbled), chars: text.replace(/\s/g, '').length }
+  return { markdown, twoColumns, tables, garbled: Math.max(0, garbled), chars: text.replace(/\s/g, '').length, removed, rejoined }
 }
 
 // ---- Lines and columns ----------------------------------------------------------------------------
@@ -193,10 +204,12 @@ const tidyCells = (cells: { text: string; x: number }[]) => cells.map((c) => ({ 
 // ---- Running headers, footers and page numbers -------------------------------------------------------
 
 /**
- * Lines without the running headers and footers: a line in the top or bottom tenth of the page that
- * repeats (numbers aside) on enough pages, and page numbers on their own.
+ * Lines without the running headers and footers, and what was taken out. A running line sits in the
+ * top or bottom tenth of the page and repeats (numbers aside) on at least three pages and a good
+ * share of them; a short document keeps everything that doesn't. A page number is a number on its
+ * own in the margin that counts up with the pages ("12", "Page 12", "12 of 40", "- 12 -", "xii").
  */
-export function dropRunningLines(lines: Line[], pages: PdfPage[]): Line[] {
+export function dropRunningLines(lines: Line[], pages: PdfPage[]): { lines: Line[]; removed: Removed } {
   const key = (l: Line) => l.text.toLowerCase().replace(/\d+/g, '#').replace(/\s+/g, ' ').trim()
   const edge = new Set<Line>()
   const byPage = new Map<number, Line[]>()
@@ -207,11 +220,48 @@ export function dropRunningLines(lines: Line[], pages: PdfPage[]): Line[] {
     // The first and last two lines of a page, if they sit in its margins.
     for (const l of [...on.slice(0, 2), ...on.slice(-2)]) if (l.y < h * 0.1 || l.y > h * 0.9) edge.add(l)
   }
+
+  const numbers = pageNumbers([...edge])
   const pagesWith = new Map<string, Set<number>>()
-  for (const l of edge) pagesWith.set(key(l), (pagesWith.get(key(l)) ?? new Set()).add(l.page))
+  for (const l of edge) if (!numbers.has(l)) pagesWith.set(key(l), (pagesWith.get(key(l)) ?? new Set()).add(l.page))
   // Odd and even pages often carry different headers, so a little under half the pages is enough.
-  const enough = Math.max(2, Math.floor(pages.length * 0.4))
-  return lines.filter((l) => !edge.has(l) || (!PAGE_NUMBER.test(key(l)) && (pagesWith.get(key(l))?.size ?? 0) < enough))
+  const enough = Math.max(3, Math.ceil(pages.length * 0.4))
+  const running = new Set([...pagesWith].filter(([, on]) => on.size >= enough).map(([k]) => k))
+  const removed: Removed = { running: [], pageNumbers: numbers.size }
+  for (const k of running) removed.running.push({ text: [...edge].find((l) => key(l) === k)!.text, pages: pagesWith.get(k)!.size })
+  return { lines: lines.filter((l) => !numbers.has(l) && !(edge.has(l) && running.has(key(l)))), removed }
+}
+
+const ROMAN: Record<string, number> = { i: 1, v: 5, x: 10 }
+/** "iv" → 4, for the small numerals front matter is numbered in. */
+function roman(s: string): number {
+  let n = 0
+  for (let i = 0; i < s.length; i++) {
+    const v = ROMAN[s[i]]
+    n += v < (ROMAN[s[i + 1]] ?? 0) ? -v : v
+  }
+  return n
+}
+
+/**
+ * Margin lines that are page numbers. Each candidate's number, less its page's place, is its offset;
+ * candidates sharing an offset with another (or numbered exactly as their page) count, so a lone "4/4"
+ * or "iv" on a one-page note stays as text. "n of m" and "n/m" also need the same m throughout.
+ */
+function pageNumbers(edge: Line[]): Set<Line> {
+  const found: { line: Line; offset: number; group: string }[] = []
+  for (const l of edge) {
+    const t = l.text.trim().toLowerCase()
+    let m: RegExpMatchArray | null
+    if ((m = t.match(/^(?:page\s+)?(\d{1,4})(?:\s*(?:of|\/)\s*(\d{1,4}))?$/)) || (m = t.match(/^[-–—]\s*(\d{1,4})\s*[-–—]$/))) {
+      const n = Number(m[1])
+      if (m[2] && Number(m[2]) < n) continue
+      found.push({ line: l, offset: n - (l.page + 1), group: m[2] ? `of ${m[2]}` : 'arabic' })
+    } else if (/^[ivx]{1,4}$/.test(t)) found.push({ line: l, offset: roman(t) - (l.page + 1), group: 'roman' })
+  }
+  const counts = new Map<string, number>()
+  for (const f of found) counts.set(`${f.group}:${f.offset}`, (counts.get(`${f.group}:${f.offset}`) ?? 0) + 1)
+  return new Set(found.filter((f) => (counts.get(`${f.group}:${f.offset}`) ?? 0) >= 2 || (f.offset === 0 && f.group !== 'roman')).map((f) => f.line))
 }
 
 // ---- Blocks ---------------------------------------------------------------------------------------
@@ -235,7 +285,7 @@ const median = (values: number[]) => {
 
 type Block = { kind: 'p'; text: string } | { kind: 'h'; level: number; text: string } | { kind: 'li'; ordered: string | null; text: string; x: number } | { kind: 'table'; rows: string[][] }
 
-function toMarkdown(lines: Line[], words: Set<string>): { markdown: string; tables: number } {
+function toMarkdown(lines: Line[], words: Set<string>, rejoined: string[]): { markdown: string; tables: number } {
   if (!lines.length) return { markdown: '', tables: 0 }
   // The body size: the size most of the text is set in.
   const weight = new Map<number, number>()
@@ -315,7 +365,7 @@ function toMarkdown(lines: Line[], words: Set<string>): { markdown: string; tabl
     if (listStart) {
       const m = (bullet ?? numbered)!
       blocks.push({ kind: 'li', ordered: bullet ? null : m[1].replace(/[().]/g, ''), text: l.text.slice(m[0].length), x: l.x })
-    } else if (continues) open!.text = join(open!.text, l.text, words)
+    } else if (continues) open!.text = join(open!.text, l.text, words, rejoined)
     else blocks.push({ kind: 'p', text: l.text })
     prev = l
   }
@@ -365,15 +415,23 @@ function continuesFrom(prev: Line, l: Line, block: Block, col: { left: number; r
   return true
 }
 
-/** Two lines of a paragraph as one: a word broken at the line end is mended, the way the text spells it elsewhere. */
-export function join(a: string, b: string, words: Set<string> = new Set()): string {
+// Short words that follow a hyphen left hanging on purpose: "pre- and post-war".
+const HANGING = new Set(['and', 'or', 'nor', 'to', 'but', 'as', 'than', 'und', 'oder', 'et', 'ou', 'y', 'o'])
+
+/**
+ * Two lines of a paragraph as one. A word broken at the line end is mended: kept hyphenated when it
+ * already has a hyphen inside ("state-of-the-" + "art") or the text spells it so elsewhere, the hyphen
+ * left hanging before "and"/"or", and otherwise joined, with the joined word recorded for the writer.
+ */
+export function join(a: string, b: string, words: Set<string> = new Set(), rejoined: string[] = []): string {
   if (a.endsWith('\u00ad')) return a.slice(0, -1) + b
-  const m = a.match(/(\p{L}+)[-\u2010]$/u)
+  const m = a.match(/([\p{L}-]*?)(\p{L}+)[-\u2010]$/u)
   if (m && /^\p{Ll}/u.test(b)) {
     const rest = b.match(/^\p{L}+/u)![0]
-    const hyphenated = `${m[1]}-${rest}`.toLowerCase()
-    // "self-" + "esteem" stays hyphenated when the text writes "self-esteem" elsewhere and never "selfesteem".
-    if (words.has(hyphenated) && !words.has(hyphenated.replace('-', ''))) return a.slice(0, -1) + '-' + b
+    if (HANGING.has(rest.toLowerCase()) && b.length > rest.length) return a + ' ' + b
+    const hyphenated = `${m[2]}-${rest}`.toLowerCase()
+    if (m[1].endsWith('-') || (words.has(hyphenated) && !words.has(hyphenated.replace('-', '')))) return a.slice(0, -1) + '-' + b
+    rejoined.push(m[2] + rest)
     return a.slice(0, -1) + b
   }
   if (/[—/]$/.test(a)) return a + b
@@ -388,7 +446,9 @@ export function escapeMd(s: string): string {
 }
 
 /** A paragraph that would start a heading, quote, list or rule, escaped at its start. */
-const escapeStart = (s: string) => s.replace(/^(#{1,6}(\s|$)|>|[-+](\s|$)|=+\s*$)/, '\\$1').replace(/^(\d+)([.)])(\s|$)/, '$1\\$2$3')
+// A rule or fence of its own ("---", "~~~", "==="), or one opening a paragraph, would be read as markup
+// (or, first in a note, as front matter). '*' and '_' are already escaped everywhere.
+const escapeStart = (s: string) => s.replace(/^(#{1,6}(\s|$)|>|[-+](\s|$)|-{2,}|~{3,}|=+)/, '\\$1').replace(/^(\d+)([.)])(\s|$)/, '$1\\$2$3')
 
 function render(blocks: Block[]): string {
   let out = ''

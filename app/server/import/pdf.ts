@@ -16,9 +16,28 @@ export interface PdfLimits {
   hardMs?: number
   /** The worker's heap, in MB. */
   memoryMb?: number
+  /** The largest PDF read, in bytes. The file's own bytes sit outside the heap cap, so they're capped here. */
+  maxBytes?: number
 }
 
-const LIMITS = { maxPages: 2000, softMs: 90_000, hardMs: 150_000, memoryMb: 768 }
+const LIMITS = { maxPages: 2000, softMs: 90_000, hardMs: 150_000, memoryMb: 768, maxBytes: 150 * 1024 * 1024 }
+
+/** pdf.js needs Node 24's built-ins, and the worker is TypeScript Node runs as it is from 22.18 and 23.6. */
+const MIN_NODE = 24
+
+/** Why PDFs can't be read on this Node, or null. */
+export function nodeProblem(version = process.versions.node): string | null {
+  const major = Number(version.split('.')[0])
+  return major >= MIN_NODE ? null : needNode(version)
+}
+const needNode = (version: string) => `PDF import needs Node ${MIN_NODE} or newer. You have ${version}. Update Node, or save the PDF as a Word document first`
+
+/** An error's first line without file paths or URLs, which say nothing to the writer and needn't leave the machine. */
+const plainError = (message: string) =>
+  message
+    .split('\n')[0]
+    .replace(/(file:\/\/|[A-Za-z]:\\|\/)[^\s'"`]*/g, '…')
+    .slice(0, 160)
 
 // Two PDFs at a time at most, whatever the number of requests: each worker can use a lot of memory.
 let running = 0
@@ -37,11 +56,15 @@ async function slot<T>(fn: () => Promise<T>): Promise<T> {
 /** A PDF as Markdown, with notes on anything that didn't come across. Throws ImportError when it can't be read. */
 export async function pdfToMarkdown(buf: Buffer, limits: PdfLimits = {}): Promise<Converted> {
   const lim = { ...LIMITS, ...limits }
+  const old = nodeProblem()
+  if (old) throw new ImportError(old)
+  if (buf.length > lim.maxBytes)
+    throw new ImportError(`The PDF is ${Math.round(buf.length / 1024 / 1024)} MB; PDFs over ${Math.round(lim.maxBytes / 1024 / 1024)} MB can’t be imported. Split it into smaller files first`)
   const r = await slot(() => runWorker(buf, lim))
   if (!r.ok) {
     if (r.error === 'password') throw new ImportError('The PDF is password-protected. Open it, save a copy without the password, then import that')
     if (r.error === 'damaged') throw new ImportError('The file is damaged or isn’t a PDF')
-    throw new ImportError(`Couldn’t read the PDF: ${(r.message ?? '').split('\n')[0].slice(0, 160)}`)
+    throw new ImportError(`Couldn’t read the PDF: ${plainError(r.message ?? '')}`)
   }
   if (!r.chars) {
     if (r.read && r.emptyBlank.length === r.read) throw new ImportError('Every page of the PDF is blank')
@@ -61,9 +84,23 @@ export function pdfNotes(r: Extract<PdfResult, { ok: true }>): string[] {
   if (r.twoColumns) notes.push(`Two columns detected${r.read > 1 ? ` on ${n(r.twoColumns, 'page')}` : ''}; check the reading order`)
   if (r.tables) notes.push(`${r.tables === 1 ? 'A table was' : `${r.tables} tables were`} rebuilt from the layout, and tables may not have come across cleanly; check against the PDF`)
   if (r.garbled > Math.max(5, r.chars * 0.02)) notes.push('Some text came out garbled: the PDF’s fonts don’t say which letters they draw')
-  if (r.sideways > 20) notes.push('Sideways text (a margin note or a stamp) was left out')
+  if (r.sideways) notes.push('Sideways text (a margin note or a stamp) was left out')
   if (r.pictures) notes.push('Pictures in the PDF were left out')
   if (r.links) notes.push(`${r.links === 1 ? 'A link was' : `${r.links} links were`} left out; the linked text is still there`)
+  if (r.fields) notes.push(`${r.fields === 1 ? 'A filled-in form field was' : `${r.fields} filled-in form fields were`} left out`)
+  if (r.comments) notes.push(`${r.comments === 1 ? 'A comment or text box' : `${r.comments} comments or text boxes`} added on top of the pages ${r.comments === 1 ? 'was' : 'were'} left out`)
+  const left = [
+    ...r.removed.running.slice(0, 3).map((h) => `“${h.text.length > 60 ? h.text.slice(0, 59) + '…' : h.text}” (${n(h.pages, 'page')})`),
+    ...(r.removed.running.length > 3 ? [`${r.removed.running.length - 3} more`] : []),
+    ...(r.removed.pageNumbers ? [`page numbers (${r.removed.pageNumbers})`] : []),
+  ]
+  if (left.length) notes.push(`Left out running headers and footers: ${left.join(', ')}`)
+  if (r.rejoined.length) {
+    const sample = [...new Set(r.rejoined)].slice(0, 3).join(', ')
+    notes.push(
+      `${n(r.rejoined.length, 'word')} broken across lines ${r.rejoined.length === 1 ? 'was' : 'were'} joined (${sample}${r.rejoined.length > 3 ? ', …' : ''}); check any that should keep a hyphen`,
+    )
+  }
   return notes
 }
 
@@ -83,7 +120,9 @@ function runWorker(buf: Buffer, lim: typeof LIMITS): Promise<PdfResult> {
     const worker = new Worker(new URL('./pdf-worker.ts', import.meta.url), {
       workerData: job,
       transferList: [data.buffer as ArrayBuffer],
-      resourceLimits: { maxOldGenerationSizeMb: lim.memoryMb, maxYoungGenerationSizeMb: 64 },
+      resourceLimits: { maxOldGenerationSizeMb: lim.memoryMb, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 },
+      // None of the server's environment (API keys among it) goes into the thread reading the file.
+      env: {},
     })
     let done = false
     const finish = (fn: () => void) => {
@@ -98,7 +137,12 @@ function runWorker(buf: Buffer, lim: typeof LIMITS): Promise<PdfResult> {
     worker.once('error', (e: Error & { code?: string }) =>
       finish(() =>
         reject(
-          e.code === 'ERR_WORKER_OUT_OF_MEMORY' ? new ImportError('The PDF is too big or too complex to read') : new ImportError(`Couldn’t read the PDF: ${e.message.split('\n')[0].slice(0, 160)}`),
+          e.code === 'ERR_WORKER_OUT_OF_MEMORY'
+            ? new ImportError('The PDF is too big or too complex to read')
+            : // A Node that can't run the TypeScript worker says so this way.
+              e.code === 'ERR_UNKNOWN_FILE_EXTENSION'
+              ? new ImportError(needNode(process.versions.node))
+              : new ImportError(`Couldn’t read the PDF: ${plainError(e.message)}`),
         ),
       ),
     )
