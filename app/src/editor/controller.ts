@@ -43,6 +43,7 @@ import {
   type Help,
   type HelpMeta,
   type Level,
+  type PageProposal,
   type RecallResult,
 } from './help.ts'
 import { EDGE_NAMES, openingEdit, sentencesOf, titleHelp, type EdgeCandidate, type EdgeSlot } from '../lib/edge.ts'
@@ -135,6 +136,8 @@ export class HelpController {
   private slowTimer: number | undefined
   private dotTimer: number | undefined
   private dotPara = -1
+  /** Told how the latest change proposed from the Assistant tab was decided. */
+  private onProposal: PageProposal['onDone'] | undefined
 
   constructor(
     private view: EditorView,
@@ -158,6 +161,7 @@ export class HelpController {
       stepHunk: (d) => this.stepHunk(d),
       focusEditor: () => this.view.focus(),
       current: () => this.help,
+      propose: (p) => this.propose(p),
       recallAtDot: () => {
         const pos = dotOf(this.view.state)
         if (pos !== null) this.view.dispatch(this.view.state.tr.setSelection(TextSelection.create(this.view.state.doc, pos)))
@@ -957,6 +961,46 @@ export class HelpController {
     this.set({ ...h, hunks, focus: next })
   }
 
+  /**
+   * A change from the Assistant tab, shown with the same word diff as a rewrite: Tab, ↵ and ⌫ decide each
+   * change, ⌘↵ takes them all. Accepted from the tab itself, it is applied at once, as one undoable step.
+   */
+  propose(p: PageProposal): boolean {
+    const size = this.doc.content.size
+    if (p.from < 0 || p.to > size || p.from > p.to) return false
+    const original = textOf(this.doc, p.from, p.to)
+    const hunks = computeHunks(original, p.text)
+    if (!hunks.some((x) => x.kind === 'chg')) return false
+    this.seq++
+    this.onProposal = p.onDone
+    const at = blockEnd(this.view.state, p.to)
+    const help: Extract<Help, { kind: 'diff' }> = {
+      kind: 'diff',
+      level: p.level,
+      from: p.from,
+      to: p.to,
+      at,
+      original,
+      hunks,
+      focus: -1,
+      instruction: p.instruction,
+      bar: false,
+      sideBySide: changedRatio(original, hunks) > 0.6,
+      source: 'assistant',
+    }
+    if (p.accept) {
+      this.commit(help, 'accepted')
+      return true
+    }
+    this.set(help)
+    this.view.focus()
+    requestAnimationFrame(() => {
+      const start = this.view.domAtPos(p.from).node
+      ;(start.nodeType === 3 ? start.parentElement : (start as HTMLElement))?.scrollIntoView({ block: 'center' })
+    })
+    return true
+  }
+
   finishDiff(pending: 'accepted' | 'rejected') {
     const h = this.help
     if (h?.kind !== 'diff') return
@@ -990,7 +1034,18 @@ export class HelpController {
     for (const e of edits.reverse()) insertPlain(tr, e.from, e.to, e.text)
     this.view.dispatch(tr)
     const outcome = accepted === 0 ? 'rejected' : accepted === total ? 'accepted' : 'partly accepted'
-    this.record({ level: h.level, from: h.from, outcome, instruction: h.instruction || undefined, detail: `${accepted} of ${total} change${total === 1 ? '' : 's'}` })
+    this.record({
+      level: h.level,
+      from: h.from,
+      outcome,
+      instruction: h.instruction || undefined,
+      detail: `${h.source === 'assistant' ? 'Assistant · ' : ''}${accepted} of ${total} change${total === 1 ? '' : 's'}`,
+    })
+    if (h.source === 'assistant') {
+      const done = this.onProposal
+      this.onProposal = undefined
+      done?.(outcome)
+    }
     this.view.focus()
   }
 

@@ -1,0 +1,261 @@
+/* The Assistant tab (AssistantTab.tsx). Colours and type come from styles.css's tokens. */
+.as-host[hidden] {
+  display: none;
+}
+.as {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100% - 4px);
+}
+.as-new {
+  margin-left: auto;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.as-log {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 12px;
+}
+.as-empty .empty {
+  margin-bottom: 12px;
+}
+.as-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+.as-example {
+  text-align: left;
+  font: 14px/1.35 var(--serif);
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.as-example:hover {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+.as-hint {
+  font-size: 11.5px;
+  margin-top: 10px;
+}
+.as-writer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.as-bubble {
+  max-width: 92%;
+  background: var(--accent-soft);
+  color: var(--ink);
+  border-radius: 10px 10px 3px 10px;
+  padding: 7px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.as-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.as-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.as-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  font-size: 11.5px;
+}
+.as-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 500 11.5px var(--sans);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 8px;
+  max-width: 100%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.as-chip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.as-chip button {
+  flex: none;
+}
+.as-writer .as-chip {
+  max-width: 92%;
+}
+.as-chip.is-quiet {
+  color: var(--ink-2);
+  background: var(--chrome-2);
+}
+.as-chip button {
+  color: inherit;
+  padding: 0 0 0 2px;
+  font-size: 13px;
+  line-height: 1;
+}
+.as-card {
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  padding: 9px 11px;
+}
+.as-card.is-done {
+  opacity: 0.7;
+}
+.as-diff {
+  font: 14.5px/1.45 var(--serif);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+.as-why {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.as-actions {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+.as-state {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.as-state.is-accepted {
+  color: var(--accent);
+}
+.as-all,
+.as-once {
+  font-size: 12.5px;
+  display: flex;
+  gap: 6px;
+  align-self: flex-start;
+}
+.as-more {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.as-more ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+.as-meta {
+  font-size: 11.5px;
+}
+.as-busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+}
+.as-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.as-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ink-4);
+  animation: as-dot 1.2s infinite ease-in-out;
+}
+.as-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.as-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes as-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .as-dots i {
+    animation: none;
+  }
+}
+.as-notice {
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 9px;
+  padding: 9px 11px;
+  margin-bottom: 12px;
+  line-height: 1.45;
+}
+.as-notice p {
+  margin: 0 0 4px;
+}
+.as-notice.is-error {
+  border-color: var(--del-bg);
+  color: var(--del-ink);
+}
+.as-ask {
+  position: sticky;
+  bottom: -18px;
+  margin: 0 -16px -18px;
+  padding: 10px 16px 14px;
+  background: var(--chrome);
+  border-top: 1px solid var(--line);
+}
+.as-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.as-ask textarea {
+  width: 100%;
+  resize: none;
+  padding: 7px 10px;
+  font: 14.5px/1.4 var(--sans);
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+}
+.as-ask textarea:focus {
+  outline: none;
+  border-color: var(--accent-line);
+}
+.as-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 11.5px;
+}

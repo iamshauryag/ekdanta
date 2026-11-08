@@ -70,7 +70,14 @@ export interface GenerateOptions {
   temperature?: number
   /** 'fast' for short, latency-sensitive requests (⌥3); 'strong' for the rest. */
   tier?: 'fast' | 'strong'
+  /** Stops the request when the writer stops it (Ollama and the API; a Claude CLI turn finishes in the background). */
+  signal?: AbortSignal
+  /** Longest answer, in tokens, where the provider takes a limit (the API). */
+  maxTokens?: number
 }
+
+/** The request's own time limit, and the writer's Stop if there is one. */
+const until = (signal?: AbortSignal) => (signal ? AbortSignal.any([AbortSignal.timeout(90_000), signal]) : AbortSignal.timeout(90_000))
 
 export async function generate(provider: Provider, opts: GenerateOptions): Promise<string> {
   if (provider === 'ollama') return ollamaChat(opts)
@@ -78,7 +85,7 @@ export async function generate(provider: Provider, opts: GenerateOptions): Promi
   return anthropicApi(opts)
 }
 
-async function ollamaChat({ system, prompt, json, temperature = 0.5 }: GenerateOptions) {
+async function ollamaChat({ system, prompt, json, temperature = 0.5, signal }: GenerateOptions) {
   const r = await fetch(`${OLLAMA}/api/chat`, {
     method: 'POST',
     body: JSON.stringify({
@@ -92,7 +99,7 @@ async function ollamaChat({ system, prompt, json, temperature = 0.5 }: GenerateO
         { role: 'user', content: prompt },
       ],
     }),
-    signal: AbortSignal.timeout(90_000),
+    signal: until(signal),
   })
   if (!r.ok) throw new Error(`Ollama returned ${r.status}`)
   return ((await r.json()) as { message: { content: string } }).message.content
@@ -105,7 +112,7 @@ function claudeCli({ system, prompt, json, tier }: GenerateOptions): Promise<str
   return askClaude(model, effort, system + (json ? '\n\nRespond with JSON only, no prose and no code fences.' : ''), prompt)
 }
 
-async function anthropicApi({ system, prompt, temperature = 0.5 }: GenerateOptions) {
+async function anthropicApi({ system, prompt, temperature = 0.5, signal, maxTokens = 1024 }: GenerateOptions) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -115,16 +122,19 @@ async function anthropicApi({ system, prompt, temperature = 0.5 }: GenerateOptio
     },
     body: JSON.stringify({
       model: API_MODEL,
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       temperature,
       system,
       messages: [{ role: 'user', content: prompt }],
     }),
-    signal: AbortSignal.timeout(90_000),
+    signal: until(signal),
   })
   if (!r.ok) throw new Error(r.status === 401 ? 'Your API key was rejected' : `Anthropic API returned ${r.status}`)
   const data = (await r.json()) as { content: { type: string; text?: string }[] }
-  return data.content.filter((c) => c.type === 'text').map((c) => c.text).join('')
+  return data.content
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text)
+    .join('')
 }
 
 /** nomic-embed-text expects task prefixes on every input. */

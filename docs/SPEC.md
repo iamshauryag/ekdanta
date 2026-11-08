@@ -36,6 +36,7 @@ The writer sets a default ceiling (for example "never above level 3 unless I ask
 | Coding style | A voice profile, learned per kind of writing (essay, LinkedIn post, email, or any kind the writer adds) |
 | Tab completion | Short continuation — **only on request** (level 4) |
 | Cmd+K inline edit | Select → instruct → word-level diff → accept or reject |
+| Chat panel | The Assistant tab in the right panel (Ctrl+Alt+5): a chat about the open piece whose edits come back as proposals |
 | Agent | Bounded tasks across files: "turn this essay into a LinkedIn post", "find every place I've used this idea" |
 | @-mentions | @book, @note, @quote, @web to pull in sources deliberately |
 | Linter | Optional checks: unsupported claims, repeated ideas, misquotes, tone drift for the platform |
@@ -78,7 +79,20 @@ No model training in v1.
   3. **A local model through Ollama**, for fully offline use.
 
   A fast tier (a small model such as Claude Haiku) serves Word; a strong tier (such as Claude Sonnet) serves Nudge, Sentence and Passage.
-- **Embeddings:** Recall uses a small embedding model that runs inside the app (bge-small, about 33 MB, downloaded once). There is nothing to install, and nothing leaves the machine for Recall.
+- **Embeddings:** Recall uses a small embedding model that runs inside the app (bge-small, about 33 MB, downloaded once). There is nothing to install, and Recall itself runs entirely on this machine. When the writer asks the Assistant something, the few notes Recall found for that ask go to the model along with the draft, as part of the ask.
+
+## The Assistant
+
+A permanent **Assistant** tab in the right panel (Ctrl+Alt+5, or *Panel: Assistant* in the command palette) for talking about the piece that's open, the way Cursor's chat sits beside the code. It is the help ladder in conversation form, under the same rules.
+
+- **What it knows.** The draft as it is on the page, unsaved edits included; the selection, shown as a chip the writer can remove before asking; the title, kind, pinned brief and the voice profile for that kind. Recall finds up to three of the writer's own notes for each ask (never highlights from the Brain); the notes the model says it drew on come back as chips that open them.
+- **It never edits.** A change to the text comes back as a proposal: the exact words it replaces and what they become, shown as a word diff in the chat. *Accept* applies it as one step that Cmd+Z takes back; *Review on page* shows it with the help ladder's own diff (Tab, ↵, ⌫ for each change, Cmd+↵ for all). Several proposals can be accepted or reviewed together. Every decision goes into the help log. A proposal only ever replaces text that is in the draft, at one place: the server checks each one against the draft before the writer sees it, and drops a phrase that occurs more than once unless it is inside the selection. The page finds a proposal again only at the same spot (the text around it still matching), or says it has changed.
+- **The help ceiling holds, on the server too.** 0: off. 1: Recall only, the writer's own notes and no model. 2: questions and directions, no wording and no proposals. 3: a word or short phrase per change. 4: one sentence per change, within one line, counting what it takes out as well as what it puts in. 5: passages. Sizes are counted by words in every script (Chinese, Japanese and Thai included), with character caps beside them, and checked on the draft's own text, not on what the model quoted. Proposals past the ceiling are dropped and counted. *Allow once*, offered under an answer that left changes out for the ceiling, asks that answer's question again at level 5 with the selection it had, as pressing a help key twice does; the server allows it once per answer and records it in the chat. Changes that together would replace most of the piece are dropped unless the writer asked for a rewrite of the whole piece in so many words (an ask that limits or negates it, such as "keep everything else", doesn't count). Allow once needs the ceiling at 2 or more.
+- **What can't be enforced.** At level 2 (and in the reply text at 3 and 4) the limit on wording is held by the instructions to the model, not by a check in code: proposals are dropped, but a reply could still quote a rewrite. The help log and the dropped-change count make that visible; it can't be made impossible.
+- **Its language.** It answers in plain words, in the language the writer asks in, briefly. Options the writer asked for (hooks, titles, angles) come as a list in the reply, not as edits.
+- **Conversations.** One per document, kept in `.ekdanta/assistant/` under the document's key, so it follows the document through rename, move, trash and restore. *New chat* clears it. A chat file holds at most 200 turns and 2 MB, oldest turns going first, and is checked when read.
+- **While it works.** No streaming: a progress line and Stop. An answer that arrives after Stop is never saved. With no model available, the tab says so and how to set one up.
+- **Safety.** Its routes answer only this computer, bodies are capped (1 MB; a 4,000-character ask; a 200,000-character draft), and the model runs with no tools.
 
 ## Weighting the writer's past work
 
