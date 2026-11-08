@@ -32,6 +32,8 @@ export interface FileEntry {
   fmTags?: string[]
   /** The idea from ideas.md this piece was started from (front matter `from-idea`). */
   fromIdea?: string
+  /** The piece this post was broken down from: front matter `from`, a wiki link such as `[[the-essay]]`. */
+  from?: string
 }
 
 /** Resolve a vault-relative path, refusing anything that escapes the vault. */
@@ -55,6 +57,7 @@ const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
     tags: docTags(fm),
     ...fmTagsOf(fm),
     ...(meta['from-idea']?.trim() ? { fromIdea: meta['from-idea'] } : {}),
+    ...(meta.from?.trim().startsWith('[[') ? { from: meta.from.trim() } : {}),
     ...aliasesOf(raw),
   }
 })

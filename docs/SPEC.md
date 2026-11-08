@@ -37,7 +37,7 @@ The writer sets a default ceiling (for example "never above level 3 unless I ask
 | Tab completion | Short continuation — **only on request** (level 4) |
 | Cmd+K inline edit | Select → instruct → word-level diff → accept or reject |
 | Chat panel | The Assistant tab in the right panel (Ctrl+Alt+5): a chat about the open piece whose edits come back as proposals |
-| Agent | Bounded tasks across files: "turn this essay into a LinkedIn post", "find every place I've used this idea" |
+| Agent | Bounded tasks across files: *Break it down* turns an essay into posts for other platforms (below); "find every place I've used this idea" |
 | @-mentions | @book, @note, @quote, @web to pull in sources deliberately |
 | Linter | Optional checks: unsupported claims, repeated ideas, misquotes, tone drift for the platform |
 | Tests | No ground truth; the writer's own accept/reject history stands in as the signal of their taste, and claims are checked against sources |
@@ -93,6 +93,16 @@ A permanent **Assistant** tab in the right panel (Ctrl+Alt+5, or *Panel: Assista
 - **Conversations.** One per document, kept in `.ekdanta/assistant/` under the document's key, so it follows the document through rename, move, trash and restore. *New chat* clears it. A chat file holds at most 200 turns and 2 MB, oldest turns going first, and is checked when read.
 - **While it works.** No streaming: a progress line and Stop. An answer that arrives after Stop is never saved. With no model available, the tab says so and how to set one up.
 - **Safety.** Its routes answer only this computer, bodies are capped (1 MB; a 4,000-character ask; a 200,000-character draft), and the model runs with no tools.
+
+## Break it down
+
+From a long piece (an essay, a newsletter issue, a script), shorter posts for other platforms: *Break it down into posts…* in the Piece panel or the command palette.
+
+- **What to make.** The writer picks platforms and how many of each: LinkedIn posts, X posts, an X thread, short video scripts, and any of their own kinds. Each shows its limit (LinkedIn 3,000 characters; X 280, a link counting 23 and Chinese, Japanese or emoji 2; a thread at most 25 parts; a short video about 150 words, a minute spoken), how long the writer's own past posts of that kind run, whether there's a voice profile for it, and the folder its posts go in. A kind the writer doesn't have yet (an X post, say) is added when they create one.
+- **A plan first.** For each post, the passages of the piece it draws on, highlighted in the piece beside the plan, its angle (a direction, never a line to paste) and its length against the limit. The writer drops or adds passages (select words in the piece, then *Add to post*), changes a post's platform, adds or removes posts, then creates them. Every passage the model gives is checked against the piece word for word; one that isn't there is left out and counted. A plan makes at most 12 posts.
+- **The help ceiling, on the server.** 0: off. 1: no model; the plan follows the piece's own sections (and, at any level, when no model is available). 2 and 3: the model picks passages and angles. 4: it may also suggest one opening line per post, one sentence that fits, used only if the writer ticks it. 5: the writer may let it adapt the wording of a post's passages for the platform: cut, reorder and join them, adding no ideas; the result must keep within the limit, be no more than about a fifth longer than the passages, and be mostly their words (checked in code, one retry), or the post starts as the passages. A higher "whole drafts" level, when settings have one, lets it add the lines that join the passages into a finished post, under the same limits. Below that level, a draft is only the writer's own passages, each found in the piece as it is when the posts are made, arranged for the format (a thread's long passages cut at sentence ends into parts that fit).
+- **Linked drafts.** Each post is an ordinary note in its kind's folder (a taken name gets -2, -3), with front matter `from: "[[piece]]"` (a path when two notes share the name), `platform`, `status: draft`, its `angle`, a `target` so the status bar shows the platform's limit, and `wording`: yours, yours with a suggested opening line, or adapted by the model. A thread's parts are separated by `%% part %%` lines, which Obsidian hides in reading view. The piece's Piece panel lists the posts drawn from it, and a post shows the piece it came from. Wiki links find their note by name, so moving the piece keeps them working, and renaming it in Ekdanta or Obsidian rewrites them.
+- **The piece is never changed.** It's saved first and only read. Pictures, footnotes, tables and template prompts stay in the piece: a post is text. A piece under 100 words, or a single paragraph, is short enough to post as it is, and the sheet says so.
 
 ## Weighting the writer's past work
 

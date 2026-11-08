@@ -14,6 +14,8 @@ import { BriefCard } from './BriefCard.tsx'
 import { EDGE_LIMITS, EDGE_NAMES, showSuggestLink, type EdgeSlot } from '../lib/edge.ts'
 import { ReaderList, type Reading } from './ReaderList.tsx'
 import { AssistantTab } from './AssistantTab.tsx'
+import { DerivedPosts } from './DerivedPosts.tsx'
+import type { FileEntry } from '../lib/api.ts'
 
 export type PanelTab = 'material' | 'outline' | 'history' | 'piece' | 'assistant'
 /** The History tab's two halves: the document's versions, and the log of help asked for. */
@@ -92,6 +94,9 @@ interface Props {
   readerFocus: number
   reading: Reading | null
   onReading: (r: Reading | null) => void
+  /** The vault's notes, for the posts broken down from this piece; and the way in to Break it down. */
+  files?: FileEntry[]
+  onBreakDown?: () => void
 }
 
 export function Panel(p: Props) {
@@ -479,6 +484,7 @@ function Piece(p: Props) {
       {p.ceiling >= 2 && p.path && !p.source && (
         <ReaderList editor={p.editor} doc={p.path} platform={p.platform} open={p.readerOpen} onOpen={p.onReaderOpen} focusTick={p.readerFocus} reading={p.reading} onReading={p.onReading} />
       )}
+      {p.path && !p.source && p.files && p.onBreakDown && <DerivedPosts path={p.path} files={p.files} ceiling={p.ceiling} onOpenDoc={p.onOpenDoc} onBreakDown={p.onBreakDown} />}
       <div className="panel-head">
         {p.source ? 'Source' : 'Piece'} <em>· facts</em>
       </div>

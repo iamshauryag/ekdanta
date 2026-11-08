@@ -181,3 +181,45 @@ export const pagesFromWords = (words: number, paper: 'letter' | 'a4') => (words 
 
 /** How many pages a column of text this tall fills, given the height of a page's text block. */
 export const pagesFromHeight = (height: number, perPage: number) => (perPage > 0 ? Math.max(1, Math.ceil((height - 1) / perPage)) : 1)
+
+// ---- Platform limits -------------------------------------------------------------------------
+// The hard limits a post meets when it's pasted into a platform. Counts are close to the platforms' own:
+// LinkedIn counts characters as the reader sees them; X counts a link as 23 and wide scripts (CJK) and emoji as 2.
+
+export const LINKEDIN_POST_LIMIT = 3000
+export const X_POST_LIMIT = 280
+/** X has no hard cap on a thread; past this many parts readers drop off, so a plan keeps within it. */
+export const X_THREAD_MAX_PARTS = 25
+/** X counts every link as this many characters, however long it is. */
+export const X_URL_LENGTH = 23
+/** About a minute spoken, at a conversational pace (2.5 words a second). */
+export const SHORT_VIDEO_WORDS = 150
+
+const graphemeSegmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null
+const graphemeList = (text: string): string[] => (graphemeSegmenter ? Array.from(graphemeSegmenter.segment(text), (s) => s.segment) : Array.from(text))
+
+const X_LINK = /\bhttps?:\/\/[^\s<>()]+[^\s<>().,;:!?'"’”)]/gi
+
+/** X's weight for one character: 1 for Latin through Arabic and common punctuation, 2 for wide scripts and emoji. */
+function xWeight(g: string): number {
+  const cp = g.codePointAt(0)!
+  if (/\p{Extended_Pictographic}/u.test(g) || /\p{Regional_Indicator}/u.test(g)) return 2
+  if (cp <= 0x10ff || (cp >= 0x2000 && cp <= 0x200d) || (cp >= 0x2010 && cp <= 0x201f) || (cp >= 0x2032 && cp <= 0x2037)) return 1
+  return 2
+}
+
+/** A post's length as X counts it. */
+export function xLength(text: string): number {
+  const s = text.trim().normalize('NFC')
+  let n = 0
+  let last = 0
+  const plain = (t: string) => graphemeList(t).reduce((sum, g) => sum + xWeight(g), 0)
+  for (const m of s.matchAll(X_LINK)) {
+    n += plain(s.slice(last, m.index)) + X_URL_LENGTH
+    last = m.index! + m[0].length
+  }
+  return n + plain(s.slice(last))
+}
+
+/** A post's length as LinkedIn counts it: the characters a reader sees, leading and trailing space left out. */
+export const linkedinLength = (text: string) => graphemeList(text.trim()).length

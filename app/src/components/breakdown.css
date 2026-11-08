@@ -1,0 +1,281 @@
+/* Break it down: the sheet, and the Piece panel's list of posts from a piece. Tokens from styles.css. */
+.sheet.bd-sheet {
+  width: min(620px, 100%);
+  height: min(680px, 86vh);
+}
+.sheet.bd-sheet.is-wide {
+  width: min(1040px, 100%);
+}
+.bd-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.bd-head .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bd-formats {
+  display: flex;
+  flex-direction: column;
+}
+.bd-format {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.bd-format label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bd-format b {
+  font-weight: 500;
+}
+.bd-format small {
+  grid-column: 1 / -1;
+  padding-left: 24px;
+}
+.bd-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.bd-count span {
+  min-width: 1.2em;
+  text-align: center;
+}
+.bd-more {
+  margin-top: 12px;
+}
+.bd-more summary {
+  cursor: pointer;
+  color: var(--ink-3);
+}
+.bd-level,
+.bd-note {
+  color: var(--ink-3);
+  font-size: 13px;
+  margin: 12px 0 0;
+}
+.bd-message {
+  margin: 8px 0 0;
+}
+.bd-error {
+  color: var(--del-ink);
+  margin: 10px 0 0;
+}
+.bd-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+.bd-plan {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+.bd-posts,
+.bd-source {
+  overflow-y: auto;
+  padding: 6px 20px 20px 24px;
+}
+.bd-source {
+  position: relative;
+  border-left: 1px solid var(--line);
+  background: var(--page);
+  padding: 14px 24px 20px;
+}
+.bd-foot {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 24px;
+  border-top: 1px solid var(--line);
+}
+.bd-foot .bd-error {
+  margin: 0 auto 0 0;
+}
+.bd-post {
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+}
+.bd-post.is-active {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.bd-post-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bd-post-head select {
+  font: inherit;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+}
+.bd-num {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.bd-len {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.bd-over {
+  color: var(--del-ink);
+}
+.bd-angle {
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.bd-passages {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.bd-passages li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+}
+.bd-passages blockquote {
+  flex: 1;
+  margin: 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--hl);
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.45;
+}
+.bd-hint {
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+.bd-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+.bd-check input {
+  margin-top: 3px;
+}
+.bd-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.bd-add select {
+  font: inherit;
+}
+.bd-piece {
+  font-family: var(--serif);
+  font-size: 16px;
+  line-height: 1.55;
+}
+.bd-piece h4 {
+  font: 600 13px/1.3 var(--sans);
+  color: var(--ink-3);
+  margin: 18px 0 4px;
+}
+.bd-piece p {
+  margin: 0 0 12px;
+}
+/* Every planned passage is underlined; the post being worked on is highlighted. */
+.bd-piece mark {
+  background: transparent;
+  color: inherit;
+  box-shadow: inset 0 -2px 0 var(--hl);
+}
+.bd-piece mark.is-on {
+  background: var(--hl);
+  box-shadow: none;
+  border-radius: 2px;
+}
+.bd-pick {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
+.bd-done {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+.bd-done li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.bd-path {
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  .bd-plan {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+  .bd-source {
+    border-left: none;
+    border-top: 1px solid var(--line);
+  }
+}
+
+/* The Piece panel: posts drawn from this piece, and where a post came from. */
+.bd-derived {
+  margin: 0 0 18px;
+}
+.bd-derived ul {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 8px;
+}
+.bd-derived li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+}
+.bd-derived li .link {
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bd-derived .muted {
+  flex-shrink: 0;
+  font-size: 12px;
+}
