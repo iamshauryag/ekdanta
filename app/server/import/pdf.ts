@@ -1,6 +1,6 @@
 // PDFs. The file is read in a worker thread (pdf-worker.ts) with a memory cap and a time limit, so a
 // huge or hostile PDF fails on its own instead of taking the server with it. What comes back is said
-// plainly: pages that came out empty, two columns, tables, pictures and links left out, garbled text.
+// plainly: pages that came out empty, two columns, tables, pictures and stray links left out, garbled text.
 // A PDF with no text at all (a scan) fails with a message; Ekdanta doesn't read scans (no OCR).
 import { Worker } from 'node:worker_threads'
 import { ImportError } from './docx.ts'
