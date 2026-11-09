@@ -3452,6 +3452,18 @@ button.keymap-key:hover {
   margin-top: 3px;
   font-size: 11px;
 }
+/* A proposed formatting change, drawn as it will look: blocks (a heading, a list) on their own lines. */
+.pm .cm-fmt.is-block {
+  display: block;
+  padding: 0 6px;
+  margin: 4px 0;
+}
+.pm .cm-fmt.is-block > :first-child {
+  margin-top: 0;
+}
+.pm .cm-fmt.is-block > :last-child {
+  margin-bottom: 0;
+}
 /* Tiptap sets widgets (contenteditable=false) to white-space: normal; a proposed break must still show. */
 .pm .cm-ins.has-break {
   white-space: pre-wrap;

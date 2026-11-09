@@ -8,10 +8,14 @@
 import type { Editor as TiptapEditor } from '@tiptap/core'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Status } from '../lib/api.ts'
-import { DRAFT_LEVEL, LEVEL_NAMES, MESSAGE_MAX, SELECTION_MAX, applyAll, relocate, type Proposal, type Turn } from '../lib/assistant.ts'
+import { DRAFT_LEVEL, LEVEL_NAMES, MESSAGE_MAX, SELECTION_MAX, applyAll, formatProblem, rebase, relocate, type Proposal, type Turn } from '../lib/assistant.ts'
 import { kindName, kinds } from '../lib/kinds.ts'
 import { binding, formatKey } from '../lib/keys.ts'
 import { computeHunks, helpOf, proposeOnPage, textMap } from '../editor/help.ts'
+import { formatApplies } from '../editor/format.ts'
+import MarkdownIt from 'markdown-it'
+import { formats, plainOf, safeMarkdown } from '../lib/rich.ts'
+import { readAsk } from '../lib/scope.ts'
 import './assistant.css'
 
 interface Props {
@@ -93,6 +97,7 @@ export function AssistantTab(p: Props) {
   const [selection, setSelection] = useState<{ text: string; start: number } | null>(null)
   const [detached, setDetached] = useState<string | null>(null) // the selection the writer took off
   const [stale, setStale] = useState<Set<string>>(new Set())
+  const [refused, setRefused] = useState<Set<string>>(new Set()) // formatting the page found it can't apply as proposed
   const [showing, setShowing] = useState<string | null>(null) // proposals on the page now
   const [empty, setEmpty] = useState(true) // the page has no text: "Draft it for me" can show
   const abort = useRef<AbortController | null>(null)
@@ -134,6 +139,27 @@ export function AssistantTab(p: Props) {
       ed.off('transaction', shown)
     }
   }, [p.editor])
+
+  // A card never offers formatting the page would refuse: each one is tried on a copy of the page as it is.
+  useEffect(() => {
+    const ed = p.editor
+    if (!ed || ed.isDestroyed) return
+    const page = pageText(ed)
+    const bad: string[] = []
+    for (const t of turns) {
+      if (t.drafted) continue
+      for (const x of t.proposals ?? []) {
+        const key = `${t.id}:${x.id}`
+        if (x.state || refused.has(key) || !formats(x.find, x.replace)) continue
+        const at = relocate(page.text, x)
+        if (!at) continue
+        const from = page.startOf(at.start)
+        const to = at.end > at.start ? page.endOf(at.end) : page.startOf(at.end)
+        if (!formatApplies(ed.state.tr, from, to, safeMarkdown(x.find, x.replace))) bad.push(key)
+      }
+    }
+    if (bad.length) setRefused((s) => new Set([...s, ...bad]))
+  }, [turns, p.editor, refused])
 
   // The shortcut puts the caret in the ask box.
   useEffect(() => {
@@ -190,6 +216,7 @@ export function AssistantTab(p: Props) {
     setTurns([])
     setProblem(null)
     setStale(new Set())
+    setRefused(new Set())
     box.current?.focus()
   }
 
@@ -203,11 +230,14 @@ export function AssistantTab(p: Props) {
   const apply = (turn: Turn, list: Proposal[], accept: boolean, narrow = false) => {
     const ed = p.editor
     if (!ed || !list.length) return
+    let refusedCount = 0
+    const refusedAll = (n: number) => refusedCount === n
     const page = pageText(ed)
     if (turn.drafted && p.ceiling < DRAFT_LEVEL) return p.notify('Whole drafts are off at your help ceiling now')
     // A draft replaces the whole page, so it only goes in while the page is as it was when it was written.
     const found = list.map((x) => ({
-      x: narrow && x.narrow !== undefined ? { ...x, replace: x.narrow } : x,
+      // Only what was asked is plain text, never formatting.
+      x: narrow && x.narrow !== undefined ? { ...x, replace: x.narrow, format: false } : x,
       at: turn.drafted ? (page.text === x.find ? { start: 0, end: x.find.length } : null) : relocate(page.text, x),
     }))
     const gone = found.filter((f) => !f.at).map((f) => f.x.id)
@@ -220,22 +250,48 @@ export function AssistantTab(p: Props) {
       found.map((f) => ({ start: f.at!.start, end: f.at!.end, replace: f.x.replace })),
     )
     if (!span) return p.notify('These changes overlap · review them one by one')
-    const ask = [...turns].reverse().find((t) => t.role === 'writer' && t.at <= turn.at)?.text ?? ''
+    const ask = askOf(turn)
     const ids = list.map((x) => x.id)
+    const before = page.text
     const ok = proposeOnPage({
       from: page.startOf(span.start),
       to: span.end > span.start ? page.endOf(span.end) : page.startOf(span.end),
       text: span.result,
+      original: span.original,
+      // Each change as itself, so the page applies exactly what was proposed, formatting as formatting.
+      parts: found.map((f, index) => ({ start: f.at!.start - span.start, end: f.at!.end - span.start, replace: f.x.replace, format: !!f.x.format, index })),
+      onRefused: (indexes) => {
+        refusedCount = indexes.length
+        setRefused(
+          (s) =>
+            new Set([
+              ...s,
+              ...indexes
+                .map((i) => found[i]?.x.id)
+                .filter((id): id is string => !!id)
+                .map((id) => `${turn.id}:${id}`),
+            ]),
+        )
+        p.notify(indexes.length === found.length ? 'That formatting can’t go in exactly as proposed · ask again' : 'Some formatting can’t go in exactly as proposed, so it was left out')
+      },
       level: Math.max(3, Math.min(5, turn.level ?? 5)) as 3 | 4 | 5,
       instruction: `${turn.drafted ? 'Assistant draft' : 'Assistant'}: ${short(ask, 120)}`,
       accept,
       drafted: turn.drafted,
-      onDone: (outcome) => decided(turn, ids, narrow && outcome === 'accepted' ? 'partly accepted' : outcome),
+      onDone: (outcome) => {
+        decided(turn, ids, narrow && outcome === 'accepted' ? 'partly accepted' : outcome)
+        // The proposals still waiting move with the text, so the next one is found where it now is.
+        const now = pageText(ed).text
+        if (now !== before) setTurns((all) => all.map((t) => (t.proposals?.some((x) => !x.state) ? { ...t, proposals: rebase(before, now, t.proposals) } : t)))
+      },
     })
-    if (!ok) return p.notify('Nothing to change there any more')
+    if (!ok) return refusedAll(found.length) ? undefined : p.notify('Nothing to change there any more')
     if (accept) p.notify(turn.drafted ? 'Draft added' : list.length === 1 ? 'Change made' : `${list.length} changes made`, () => ed.chain().focus().undo().run())
     else setShowing(turn.id + ids.join())
   }
+
+  /** What the writer asked, for an answer: their message before it. */
+  const askOf = (turn: Turn) => [...turns].reverse().find((t) => t.role === 'writer' && t.at <= turn.at)?.text ?? ''
 
   const kind = kindName(kinds(), p.platform)
   const examples = [`Tighten this ${kind}`, 'Give me 3 hooks', 'What would a reader ask here?', 'Where does this drag?']
@@ -311,7 +367,7 @@ export function AssistantTab(p: Props) {
           ) : (
             <AssistantTurn
               key={t.id}
-              turn={t}
+              turn={recheck(t, askOf(t), refused)}
               last={i === turns.length - 1}
               ceiling={p.ceiling}
               kind={kind}
@@ -439,7 +495,7 @@ function AssistantTurn(p: {
 }) {
   const t = p.turn
   const [all, setAll] = useState(false)
-  const open = (t.proposals ?? []).filter((x) => !x.state && !p.stale.has(x.id))
+  const open = (t.proposals ?? []).filter((x: Shown) => !x.state && !x.refused && !p.stale.has(x.id))
   // Changes that go beyond the ask wait for the writer to decide on each.
   const clean = open.filter((x) => !x.beyond)
   const overCeiling = (t.dropped ?? []).filter((d) => d.reason === 'over the help ceiling').length
@@ -540,26 +596,79 @@ const around = (s: string | undefined, side: 'before' | 'after') => {
   return side === 'before' ? w.slice(-3).join('') : w.slice(0, 3).join('')
 }
 
-function ProposalCard(p: { p: Proposal; drafted: boolean; off: boolean; stale: boolean; showing: boolean; onAccept: (narrow?: boolean) => void; onShow: () => void; onReject: () => void }) {
-  const hunks = computeHunks(p.p.find, p.p.replace)
-  const state = p.stale ? 'text changed since' : p.p.state
-  const small = !p.drafted && p.p.find.length + p.p.replace.length < 160
+/** A proposal as the tab shows it: why it can't go in as formatting, when it can't. */
+type Shown = Proposal & { refused?: string }
+
+/**
+ * An answer's proposals checked again on the page, not taken from the chat file as saved: whether each
+ * formats (only what the model added counts), whether that formatting is allowed at the level it was asked
+ * at and by what was asked, and whether it goes beyond the ask.
+ */
+function recheck(turn: Turn, ask: string, refused: Set<string>): Turn & { proposals?: Shown[] } {
+  if (!turn.proposals?.length || turn.drafted) return turn
+  const read = readAsk(ask)
+  return {
+    ...turn,
+    proposals: turn.proposals.map((x): Shown => {
+      const format = formats(x.find, x.replace)
+      const { format: _saved, ...rest } = x
+      if (!format) return rest
+      const problem = formatProblem(x.find, x.replace, turn.level ?? 5, read)
+      const note = 'Changes the formatting too, which you didn’t ask for.'
+      const beyond = !read.formatting && !x.beyond?.includes(note) ? [x.beyond, note].filter(Boolean).join(' ') : x.beyond
+      return {
+        ...rest,
+        format: true,
+        ...(beyond ? { beyond } : {}),
+        ...(problem
+          ? { refused: problem === 'over the help ceiling' ? 'over your help ceiling' : 'formatting the assistant can’t add' }
+          : refused.has(`${turn.id}:${x.id}`)
+            ? { refused: 'can’t go in exactly as proposed' }
+            : {}),
+      }
+    }),
+  }
+}
+
+let previewer: MarkdownIt | null = null
+/** A formatting change as it will look: bold as bold, a list as a list. No raw HTML, no images, and links that go nowhere. */
+function preview(md: string) {
+  if (!previewer) {
+    previewer = new MarkdownIt('commonmark', { html: false, linkify: false }).enable(['strikethrough'])
+    previewer.renderer.rules.image = () => ''
+    previewer.renderer.rules.link_open = () => '<a>'
+  }
+  return previewer.render(md)
+}
+
+function ProposalCard(p: { p: Shown; drafted: boolean; off: boolean; stale: boolean; showing: boolean; onAccept: (narrow?: boolean) => void; onShow: () => void; onReject: () => void }) {
+  const fmt = !!p.p.format
+  // The writer's own text stays text: only what the model added is read as Markdown.
+  const md = fmt ? safeMarkdown(p.p.find, p.p.replace) : ''
+  const hunks = computeHunks(p.p.find, fmt ? plainOf(md) : p.p.replace)
+  const state = p.stale ? 'text changed since' : (p.p.state ?? (p.p.refused ? `can’t apply: ${p.p.refused}` : undefined))
+  const small = !p.drafted && !fmt && p.p.find.length + p.p.replace.length < 160
+  // A formatting change that keeps the words shows only how it will look.
+  const words = !fmt || hunks.some((h) => h.kind === 'chg' && h.del.replace(/\s+/g, ' ').trim() !== h.ins.replace(/\s+/g, ' ').trim())
   return (
     <div className={`as-card${state ? ' is-done' : ''}${p.p.beyond && !state ? ' is-beyond' : ''}${p.drafted ? ' is-draft' : ''}`}>
-      <div className="as-diff">
-        {small && <span className="as-ctx">{around(p.p.before, 'before')}</span>}
-        {hunks.map((h, i) =>
-          h.kind === 'eq' ? (
-            <span key={i}>{h.text}</span>
-          ) : (
-            <span key={i}>
-              {h.del && <span className="vd-drop">{h.del}</span>}
-              {h.ins && <span className="vd-add">{h.ins}</span>}
-            </span>
-          ),
-        )}
-        {small && <span className="as-ctx">{around(p.p.after, 'after')}</span>}
-      </div>
+      {fmt && <div className="as-rich" title="How it will look on the page" dangerouslySetInnerHTML={{ __html: preview(md) }} />}
+      {words && (
+        <div className="as-diff">
+          {small && <span className="as-ctx">{around(p.p.before, 'before')}</span>}
+          {hunks.map((h, i) =>
+            h.kind === 'eq' ? (
+              <span key={i}>{h.text}</span>
+            ) : (
+              <span key={i}>
+                {h.del && <span className="vd-drop">{h.del}</span>}
+                {h.ins && <span className="vd-add">{h.ins}</span>}
+              </span>
+            ),
+          )}
+          {small && <span className="as-ctx">{around(p.p.after, 'after')}</span>}
+        </div>
+      )}
       {p.p.why && <div className="as-why">{p.p.why}</div>}
       {p.p.beyond && !state && <div className="as-beyond">{p.p.beyond}</div>}
       <div className="as-actions">

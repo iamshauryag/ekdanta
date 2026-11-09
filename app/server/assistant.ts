@@ -20,6 +20,9 @@
 // with the asked-for part on its own, and left out of Accept all. What was held back, and why, is said
 // in plain words under the answer (notices), never dropped silently.
 // The page shows each change with the help ladder's word diff and applies it only when accepted.
+// Formatting: the model sees the draft as plain text, as the page shows it, and writes asked-for formatting in
+// Markdown. Changes that format are kept whole per paragraph and marked `format` (src/lib/rich.ts), and the
+// page applies them as bold, headings and lists, never as stars.
 //
 // Context: the draft as the page has it now (unsaved edits included), the selection if the writer
 // kept it attached, the title, kind, pinned brief and voice profile, and a few of the writer's own
@@ -137,6 +140,7 @@ export function cleanTurn(v: unknown): Turn | null {
           ...(typeof q.state === 'string' && STATES.has(q.state) ? { state: q.state as Proposal['state'] } : {}),
           ...(typeof q.beyond === 'string' ? { beyond: q.beyond.slice(0, 400) } : {}),
           ...(typeof q.narrow === 'string' ? { narrow: q.narrow.slice(0, CHANGE_MAX) } : {}),
+          ...(q.format === true ? { format: true } : {}),
         },
       ]
     })
@@ -276,7 +280,8 @@ Return JSON only: {"reply": "...", "changes": [{"find": "...", "replace": "...",
 "reply" is what you say to the writer: plain text, short "- " lists are fine.${
     writes
       ? `
-Put changes in "changes" only when the writer asks you to change, fix, tighten, cut or rewrite their text; otherwise leave it empty. In each change, "find" is text copied exactly, character for character, from the draft between <draft> tags (long enough to be unique, never paraphrased) and "replace" is what it becomes. To add new text, put the sentence it follows in "find" and repeat that sentence at the start of "replace". Keep changes small and separate: one per sentence or paragraph touched. Do exactly what the writer asked and nothing else: every word, space, line break and punctuation mark you weren't asked to change stays exactly as written, even ones you'd write differently. When the ask covers the whole piece ("remove the emojis", "make it British English"), find every place it applies, from the first line to the last, and make one small change for each. Keep the writer's voice. Don't repeat the changes in "reply"; say in a line what you changed and why. When the writer has selected text, keep changes inside it unless they ask otherwise. Options they asked to choose from (hooks, titles, angles) go in "reply", not in "changes", unless they asked you to put one into the draft.`
+Put changes in "changes" only when the writer asks you to change, fix, tighten, cut or rewrite their text; otherwise leave it empty. In each change, "find" is text copied exactly, character for character, from the draft between <draft> tags (long enough to be unique, never paraphrased) and "replace" is what it becomes. To add new text, put the sentence it follows in "find" and repeat that sentence at the start of "replace". Keep changes small and separate: one per sentence or paragraph touched. Do exactly what the writer asked and nothing else: every word, space, line break and punctuation mark you weren't asked to change stays exactly as written, even ones you'd write differently. When the ask covers the whole piece ("remove the emojis", "make it British English"), find every place it applies, from the first line to the last, and make one small change for each. Keep the writer's voice. Don't repeat the changes in "reply"; say in a line what you changed and why. When the writer has selected text, keep changes inside it unless they ask otherwise. Options they asked to choose from (hooks, titles, angles) go in "reply", not in "changes", unless they asked you to put one into the draft.
+The draft is shown as plain text: its existing bold, italics, headings and lists aren't marked in it. Only when the writer asks for formatting, write it in "replace" as Markdown: **bold**, *italic*, a heading line starting "## ", list lines starting "- " or "1. ", [link text](https://…). Formatting keeps the words exactly as they are. Never escape characters with backslashes, and never add Markdown symbols they didn't ask for.`
       : ''
   }
 "notes_used" lists the numbers of the writer's notes you actually drew on (empty if none). Quote a note only if it helps, and say which one.
@@ -612,6 +617,11 @@ export function noticesFor(t: Turn, kind = 'piece'): string[] {
     )
   else if (t.needs && t.needs <= 5) out.push(`That needs ${LEVEL_NAMES[t.needs]} help, above your help ceiling (${level}). Allow once to have it done, or raise the ceiling in the Piece panel.`)
   if (t.needs === DRAFT_LEVEL && !over) out.push(`Writing a whole ${kind} is off: set the help ceiling to 6 (Whole drafts) to turn it on.`)
+  const unformatted = count('formatting it can’t add')
+  if (unformatted)
+    out.push(
+      `${unformatted} ${s(unformatted, 'change was', 'changes were')} left out for ${s(unformatted, 'its', 'their')} formatting: the assistant adds bold, italics and links, and headings or lists only when you ask for them; never images, rules, tables or raw HTML.`,
+    )
   const many = count('too many')
   if (many) out.push(`There were more changes than fit in one answer, so here are the first ${MAX_PROPOSALS}. Accept or dismiss these, then ask again for the rest.`)
   const beyond = (t.proposals ?? []).filter((p) => p.beyond).length
