@@ -149,12 +149,16 @@
 .as-rich > :last-child {
   margin-bottom: 4px;
 }
+/* As on the page: more space above a heading than below it, and a heading never touching its text. */
 .as-rich :is(h1, h2, h3, h4, h5, h6) {
   font-size: 1.05em;
-  margin: 6px 0 2px;
+  margin: 12px 0 3px;
 }
-.as-rich :is(p, ul, ol, blockquote) {
-  margin: 4px 0;
+.as-rich :is(p, ul, ol, blockquote, pre) {
+  margin: 6px 0;
+}
+.as-rich :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: 0;
 }
 .as-rich :is(ul, ol) {
   padding-left: 20px;

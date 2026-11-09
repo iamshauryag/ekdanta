@@ -212,7 +212,9 @@
   color: var(--ink);
   min-height: 0;
 }
-.dm.is-on .pm > * + * {
+.dm.is-on .pm > * + *,
+.dm.is-on .pm blockquote > * + *,
+.dm.is-on .pm blockquote > p + p {
   margin-top: var(--dm-gap);
 }
 .dm.is-on .pm p {
