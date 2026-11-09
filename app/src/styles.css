@@ -877,12 +877,6 @@ kbd {
   caret-color: var(--accent);
   min-height: 40vh;
 }
-.pm > * + * {
-  margin-top: 0.85em;
-}
-.pm p {
-  margin: 0;
-}
 .pm ::selection {
   background: var(--accent-soft);
 }
@@ -895,13 +889,7 @@ kbd {
   font-family: var(--serif);
   font-weight: 600;
   letter-spacing: -0.005em;
-  margin: 1.2em 0 0;
   line-height: 1.3;
-}
-.pm > h1:first-child,
-.pm > h2:first-child,
-.pm > h3:first-child {
-  margin-top: 0;
 }
 .pm h1 {
   font-size: 1.6em;
@@ -916,6 +904,77 @@ kbd {
 .pm h5,
 .pm h6 {
   font-size: 1em;
+}
+
+/* Space between blocks, set like a finished piece. No block brings margins of its own; the rules below
+   give each top-level block only the space above it, so gaps never add up or collapse unseen.
+   - A paragraph after a paragraph: the writer's Paragraph spacing (--para-gap). A line break inside a
+     paragraph is just the next line.
+   - A list, quote, code block, table or rule: the same, but never less than about two thirds of a line.
+   - A heading: the paragraph gap plus more above it, and a small gap below it, both growing with its level.
+   Every length is measured in the page's own text size, not the heading's or the code's, so a heading
+   that's 1.6 times larger doesn't get 1.6 times the space. That's what the two registered properties
+   are for: declared on the page, they turn em into a fixed length there, and every block inherits it. */
+@property --flow-em {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+@property --flow-para {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+.pm,
+.pm .cm-fmt.is-block {
+  --flow-em: 1em;
+  --flow-para: var(--para-gap, 0px);
+  --flow-block: max(var(--flow-para), calc(var(--flow-em) * 0.65));
+}
+.pm :where(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, hr, table) {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+/* A formatting proposal (.cm-fmt) is drawn as the page will have it, so it follows the same rules. */
+:is(.pm, .cm-fmt.is-block) > * + * {
+  margin-top: var(--flow-block);
+}
+:is(.pm, .cm-fmt.is-block) > p + p {
+  margin-top: var(--flow-para);
+}
+:is(.pm, .cm-fmt.is-block) > hr,
+:is(.pm, .cm-fmt.is-block) > hr + * {
+  margin-top: calc(var(--flow-block) + var(--flow-em) * 0.5);
+}
+:is(.pm, .cm-fmt.is-block) > h1 {
+  margin-top: calc(var(--flow-para) + var(--flow-em) * 1.4);
+}
+:is(.pm, .cm-fmt.is-block) > h2 {
+  margin-top: calc(var(--flow-para) + var(--flow-em) * 1.1);
+}
+:is(.pm, .cm-fmt.is-block) > h3 {
+  margin-top: calc(var(--flow-para) + var(--flow-em) * 0.9);
+}
+:is(.pm, .cm-fmt.is-block) > :is(h4, h5, h6) {
+  margin-top: calc(var(--flow-para) + var(--flow-em) * 0.75);
+}
+/* Below a heading: close enough that it belongs to its text, never touching. A heading straight after
+   another (a title, then its first section) sits at the same small distance. */
+:is(.pm, .cm-fmt.is-block) > h1 + * {
+  margin-top: calc(var(--flow-em) * 0.6);
+}
+:is(.pm, .cm-fmt.is-block) > h2 + * {
+  margin-top: calc(var(--flow-em) * 0.5);
+}
+:is(.pm, .cm-fmt.is-block) > h3 + * {
+  margin-top: calc(var(--flow-em) * 0.4);
+}
+:is(.pm, .cm-fmt.is-block) > :is(h4, h5, h6) + * {
+  margin-top: calc(var(--flow-em) * 0.3);
+}
+/* The first block starts at the top, whatever it is. */
+:is(.pm, .cm-fmt.is-block) > :first-child {
+  margin-top: 0;
 }
 .pm strong {
   font-weight: 650;
@@ -967,6 +1026,10 @@ kbd {
 .pm blockquote > * + * {
   margin-top: 0.5em;
 }
+/* Paragraphs in a quote keep the page's paragraph spacing. */
+.pm blockquote > p + p {
+  margin-top: var(--flow-para);
+}
 .pm ul,
 .pm ol {
   margin-bottom: 0;
@@ -977,9 +1040,6 @@ kbd {
 }
 .pm li + li {
   margin-top: 0.15em;
-}
-.pm li p {
-  margin: 0;
 }
 .pm ul li::marker,
 .pm ol li::marker {
@@ -1019,7 +1079,6 @@ kbd {
 .pm hr {
   border: 0;
   border-top: 1px solid var(--line-2);
-  margin: 1.4em 0;
 }
 .pm hr.ProseMirror-selectednode {
   border-top-color: var(--accent);
@@ -4073,10 +4132,7 @@ button.keymap-key:hover {
 .doc-title {
   font-size: calc(var(--page-size) * 1.5);
 }
-/* A paragraph break gets this gap; a line break inside a paragraph is just the next line. */
-.pm > p + p {
-  margin-top: var(--para-gap);
-}
+/* The gaps between blocks, --para-gap among them, are set with the editor's styles: "Space between blocks". */
 /* The Markdown view keeps its monospace, scaled with the page. */
 .source-editor .cm-scroller {
   font-size: calc(var(--page-size) * 0.81);
@@ -4810,13 +4866,32 @@ p.row-warn {
   font-size: 15px;
   line-height: 1.55;
   overflow-wrap: anywhere;
+  /* Gaps in the preview's own text size, whatever the block's (see "Space between blocks"). */
+  --flow-em: 1em;
+}
+/* Spaced like the page: blocks set only the space above them; a heading gets more above than below. */
+.import-md > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+.import-md > * + * {
+  margin-top: calc(var(--flow-em) * 0.75);
+}
+.import-md > hr,
+.import-md > hr + * {
+  margin-top: calc(var(--flow-em) * 1.1);
 }
 .import-md h1,
 .import-md h2,
 .import-md h3 {
   font-weight: 600;
   line-height: 1.25;
-  margin: 1.1em 0 0.4em;
+}
+.import-md > * + :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: calc(var(--flow-em) * 1.4);
+}
+.import-md > :is(h1, h2, h3, h4, h5, h6) + * {
+  margin-top: calc(var(--flow-em) * 0.4);
 }
 .import-md h1 {
   font-size: 21px;

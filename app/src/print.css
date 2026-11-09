@@ -93,10 +93,24 @@
   .print-root h1,
   .print-root h2,
   .print-root h3,
-  .print-root h4 {
+  .print-root h4,
+  .print-root h5,
+  .print-root h6 {
     line-height: 1.25;
     margin: 16pt 0 6pt;
     break-after: avoid;
+  }
+  /* A heading sits closer to its own text than paragraphs sit to each other; a heading straight after
+     another keeps a small gap of its own. The title isn't a section heading: the byline sits under it,
+     and without one the piece starts a clear gap below it. */
+  .print-root :is(h1, h2, h3, h4, h5, h6):not(.title) + * {
+    margin-top: 0;
+  }
+  .print-root :is(h1, h2, h3, h4, h5, h6):not(.title) + :is(h1, h2, h3, h4, h5, h6) {
+    margin-top: 10pt;
+  }
+  .print-root .title + :not(.byline) {
+    margin-top: 18pt;
   }
   .print-root p,
   .print-root li {
