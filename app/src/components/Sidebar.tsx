@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { findKind, kindDisplayName, kindName, kindOfFolder, kinds, pieceName, plural } from '../lib/kinds.ts'
+import { findKind, kindDisplayName, kindId, kindName, kindOfFolder, kinds, notesMove, pieceName, plural, UNFILED_NAME } from '../lib/kinds.ts'
+import './sidebar-kinds.css'
 import type { FileEntry, Trashed, VoiceSummary } from '../lib/api.ts'
 import { cleanTag, countsTags, hasTag, type TagCount } from '../lib/tags.ts'
 import { Chips } from './Properties.tsx'
@@ -47,7 +48,10 @@ interface Props {
 /** What a page's ⋯ menu can do to it. */
 export interface FileActions {
   rename: (path: string, title: string) => void
+  /** Move a page to a folder, which makes it that folder's kind ('' is the top of the vault: Unfiled). */
   move: (path: string, folder: string) => void
+  /** Rename a folder; a kind's folder takes its kind along, settings and all. */
+  renameFolder: (folder: string, name: string) => void
   duplicate: (path: string) => void
   remove: (path: string) => void
   /** Open the page's Document layout: page view, style, header, target. */
@@ -93,7 +97,9 @@ export function Sidebar(p: Props) {
 function Vault({ files: all, current, onOpen, onCreate, onStar, canStar, brainFolder, actions, trash, onRestore, tags, onImport, ideasOpen, ideaCount, onIdeas, onCaptureIdea }: Props) {
   // ideas.md has its own row at the top, so it isn't listed again among the pages.
   const files = all.filter((f) => !isSpecialFile(f.path))
-  const allFolders = [...new Set(files.map((f) => f.folder))].sort()
+  // Every kind's folder shows, even an empty one (an empty folder is still a kind), and the notes at
+  // the top of the vault show as Unfiled, first.
+  const allFolders = [...new Set([...files.map((f) => f.folder), ...kinds().map((k) => k.folder)])].sort((a, b) => (a ? (b ? a.localeCompare(b) : 1) : -1))
   const [showTrash, setShowTrash] = useState(false)
   const [showTags, setShowTags] = useState(() => readPref('tagsOpen'))
   const [picked, setPicked] = useState<string | null>(null)
@@ -140,15 +146,7 @@ function Vault({ files: all, current, onOpen, onCreate, onStar, canStar, brainFo
       )}
       {folders.map((folder) => (
         <div key={folder} className="folder">
-          <div className="folder-name">
-            <span>{folderLabel(folder, brainFolder)}</span>
-            {/* Sources are added on the Brain page, with their details; a blank draft there would be neither. */}
-            {!inBrain(folder, brainFolder) && (
-              <button className="icon-btn small" title={`New draft in ${folderLabel(folder)}`} onClick={() => onCreate(folder)}>
-                <Icon name="plus" />
-              </button>
-            )}
-          </div>
+          <FolderHead folder={folder} brainFolder={brainFolder} onCreate={onCreate} actions={actions} count={countIn(all, folder)} />
           {shown
             .filter((f) => f.folder === folder)
             .map((f) => (
@@ -257,8 +255,9 @@ function VaultMenu({ onImport }: { onImport: () => void }) {
 
 function Exemplars({ files, current, onOpen, onStar, canStar, actions, tags }: Props) {
   const folders = [...new Set(files.map((f) => f.folder))].sort()
-  const platformOf = (f: FileEntry) => (f.platform ?? 'essay').toLowerCase()
-  // The usual platforms first, then anything else the vault uses (notes, say).
+  // A note's kind is its folder's ('' is Unfiled), as listed by the server.
+  const platformOf = (f: FileEntry) => (f.platform ?? '').toLowerCase()
+  // The writer's kinds first, then anything else the vault uses (Unfiled, say).
   const ids = kinds().map((k) => k.id)
   const used = [...new Set([...ids, ...files.map(platformOf)])].filter((pl) => files.some((f) => platformOf(f) === pl))
   return (
@@ -358,7 +357,16 @@ function FileRow({
   }
 
   return (
-    <div ref={box} className={`file-row${f.path === current ? ' is-current' : ''}${menu ? ' has-menu' : ''}`}>
+    <div
+      ref={box}
+      className={`file-row${f.path === current ? ' is-current' : ''}${menu ? ' has-menu' : ''}`}
+      // Dragged onto a folder's name, it moves there (and becomes that folder's kind).
+      draggable={!renaming}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_TYPE, f.path)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+    >
       {renaming ? (
         <input
           className="file rename"
@@ -434,15 +442,15 @@ function FileRow({
           <button className="menu-back" onClick={() => setMenu('main')}>
             ‹ Move to
           </button>
-          {folders.map((folder) => (
+          {[...new Set(['', ...folders])].map((folder) => (
             <button key={folder} role="menuitem" disabled={folder === f.folder} onClick={act(() => actions.move(f.path, folder))}>
               {folderLabel(folder, brainFolder)}
               {folder === f.folder && <span className="muted">here</span>}
             </button>
           ))}
           <hr />
-          <button role="menuitem" onClick={() => setMenu('new-folder')}>
-            New folder…
+          <button role="menuitem" title="A new folder at the top of the vault is a new kind" onClick={() => setMenu('new-folder')}>
+            New folder (a new kind)…
           </button>
         </div>
       )}
@@ -497,19 +505,128 @@ function TagsMenu({ f, vaultTags, onBack, onChange }: { f: FileEntry; vaultTags:
 }
 
 // Grouped by kind, pieces read as a plural: "LinkedIn posts", "YT scripts".
-const platformLabel = (p: string) => (findKind(kinds(), p) ? plural(kindDisplayName(kindName(kinds(), p))) : p === 'note' ? 'Notes' : kindName(kinds(), p))
+const platformLabel = (p: string) => (findKind(kinds(), p) ? plural(kindDisplayName(kindName(kinds(), p))) : kindName(kinds(), p))
 
-/** A kind's own folder takes the kind's name; any other keeps its own. */
+/** What a dragged page carries: its path. */
+const DRAG_TYPE = 'application/x-ekdanta-path'
+
 const inBrain = (folder: string, brain?: string) => !!brain && isBrainPath(folder + '/x', brain)
+const capital = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s)
 
-function folderLabel(folder: string, brain?: string) {
-  if (!folder) return 'Vault'
-  const last = folder.split('/').pop()!
+/**
+ * A folder's name in the sidebar. The top of the vault is Unfiled. A kind's folder takes the kind's
+ * name ("LinkedIn posts"), and a folder inside it says so: essays/2024 reads "Essays · 2024", since it's
+ * still Essays. The Brain's shelves read "Brain · Books"; any other folder keeps its own name.
+ */
+export function folderLabel(folder: string, brain?: string) {
+  if (!folder) return UNFILED_NAME
+  const parts = folder.split('/')
+  const last = parts[parts.length - 1]
   // brain/books reads "Brain · Books", so the Brain's shelves aren't mistaken for the writer's own groups.
-  if (inBrain(folder, brain)) return folder.toLowerCase() === brain!.toLowerCase() ? 'Brain' : `Brain · ${last[0].toUpperCase() + last.slice(1)}`
-  // The same match that files pieces: a kind's folder, or a folder named exactly as its id.
+  if (inBrain(folder, brain)) return folder.toLowerCase() === brain!.toLowerCase() ? 'Brain' : `Brain · ${capital(last)}`
+  // A folder named like an id (linkedin, yt-scripts) reads as its kind ("LinkedIn posts"); one the
+  // writer named in words ("Book chapters", "Correspondence") reads as they wrote it.
   const kind = kindOfFolder(kinds(), folder)
-  return kind ? plural(kindDisplayName(kind.name)) : last[0].toUpperCase() + last.slice(1)
+  const head = kind && parts[0] === kindId(parts[0]) ? plural(kindDisplayName(kind.name)) : capital(parts[0])
+  return [head, ...parts.slice(1).map(capital)].join(' · ')
+}
+
+/**
+ * A folder's name in the Vault list, with its + (a new draft there, which is its kind) and a way to
+ * rename it (double-click). Pages dropped on it move into it. The top of the vault (Unfiled) and the
+ * Brain can't be renamed here.
+ */
+function FolderHead({ folder, brainFolder, onCreate, actions, count }: { folder: string; brainFolder?: string; onCreate: (folder: string) => void; actions: FileActions; count: number }) {
+  const [over, setOver] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  // A rename waiting for the writer's yes: every note in the folder moves with it.
+  const [asking, setAsking] = useState<string | null>(null)
+  const label = folderLabel(folder, brainFolder)
+  const name = folder.split('/').pop() ?? ''
+  const canRename = !!folder && !inBrain(folder, brainFolder)
+  return (
+    <>
+      <div
+        className={`folder-name${over ? ' is-drop' : ''}`}
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes(DRAG_TYPE)) return
+          e.preventDefault()
+          e.stopPropagation()
+          e.dataTransfer.dropEffect = 'move'
+          setOver(true)
+        }}
+        onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node | null) && setOver(false)}
+        onDrop={(e) => {
+          setOver(false)
+          const rel = e.dataTransfer.getData(DRAG_TYPE)
+          if (!rel) return
+          e.preventDefault()
+          e.stopPropagation()
+          const from = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+          if (from !== folder) actions.move(rel, folder)
+        }}
+      >
+        {renaming ? (
+          <input
+            className="folder-rename"
+            defaultValue={name}
+            aria-label={`New name for ${folder}/`}
+            autoFocus
+            onFocus={(e) => e.target.select()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              else if (e.key === 'Escape') {
+                e.currentTarget.value = name
+                setRenaming(false)
+              }
+            }}
+            onBlur={(e) => {
+              setRenaming(false)
+              const next = e.target.value.trim()
+              if (next && next !== name) setAsking(next)
+            }}
+          />
+        ) : (
+          <span
+            title={folder ? `${folder}/${canRename ? ' · double-click to rename' : ''}` : 'Notes at the top of the vault: pick a kind to file one'}
+            onDoubleClick={() => canRename && setRenaming(true)}
+          >
+            {label}
+          </span>
+        )}
+        {/* Sources are added on the Brain page, with their details; a blank draft there would be neither. */}
+        {!inBrain(folder, brainFolder) && (
+          <button className="icon-btn small" title={`New draft in ${label}`} onClick={() => onCreate(folder)}>
+            <Icon name="plus" />
+          </button>
+        )}
+      </div>
+      {asking && (
+        <p className="sidebar-hint folder-rename-ask" role="alertdialog" aria-label={`Rename ${folder}/`}>
+          Rename the {label} folder to {asking}? {notesMove(count)}{' '}
+          <button
+            className="link-btn"
+            onClick={() => {
+              setAsking(null)
+              actions.renameFolder(folder, asking)
+            }}
+          >
+            Rename
+          </button>{' '}
+          ·{' '}
+          <button className="link-btn" onClick={() => setAsking(null)}>
+            Cancel
+          </button>
+        </p>
+      )}
+    </>
+  )
+}
+
+/** How many notes are in a folder, at any depth. */
+const countIn = (files: FileEntry[], folder: string) => {
+  const f = folder.normalize('NFC').toLowerCase() + '/'
+  return files.filter((x) => x.path.normalize('NFC').toLowerCase().startsWith(f)).length
 }
 
 function readPref(key: string) {

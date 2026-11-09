@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MarkdownIt from 'markdown-it'
 import { api, type ImportItem } from '../lib/api.ts'
-import { kinds } from '../lib/kinds.ts'
+import { kinds, suggestedKinds } from '../lib/kinds.ts'
 import { splitFrontMatter } from '../lib/frontmatter.ts'
 import { cleanTag, type TagCount } from '../lib/tags.ts'
 
@@ -55,8 +55,8 @@ const STATUS_LABEL: Record<ImportItem['status'], string> = {
 }
 const converterLabel = (c?: string) => (c === 'pandoc' ? 'via Pandoc' : c === 'textutil' ? 'via macOS' : c ? 'built-in' : '')
 const mb = (n: number) => `${(n / 1024 / 1024).toFixed(n > 10 * 1024 * 1024 ? 0 : 1)} MB`
-const DEFAULT_FOLDER = 'imported'
-const defaultFolder = (platform: string) => kinds().find((k) => k.id === platform)?.folder ?? DEFAULT_FOLDER
+// A note's kind is its folder: with no kind it goes to the top of the vault, Unfiled until one is picked.
+const defaultFolder = (platform: string) => kinds().find((k) => k.id === platform)?.folder ?? suggestedKinds(kinds()).find((k) => k.id === platform)?.folder ?? ''
 const importable = (it: ImportItem) => it.status !== 'failed' && it.status !== 'pending' && !it.imported
 
 export function ImportSheet({ files, pick, folders, onClose, onImported, onUndone, onProgress }: Props) {
@@ -223,12 +223,8 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
       ),
     )
   }
-  const setKind = (id: string, platform: string) => {
-    const c = choices[id]
-    // The folder follows the kind, unless the writer typed one of their own.
-    const auto = !c || c.folder === defaultFolder(c.platform) || c.folder === DEFAULT_FOLDER
-    choose(id, { platform, ...(auto ? { folder: defaultFolder(platform) } : {}) })
-  }
+  // One choice: the kind, which is the folder the note goes in.
+  const setKind = (id: string, platform: string) => choose(id, { platform, folder: defaultFolder(platform) })
 
   const shown = items.filter((it) => !skipped.has(it.id))
   const toImport = shown.filter((it) => choices[it.id]?.checked && importable(it))
@@ -243,7 +239,7 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
         progress(`Importing ${n + 1}/${list.length}…`)
         const c = choices[it.id]
         try {
-          const next = await api.importCommit(batch, it.id, c.platform, c.folder, c.tags)
+          const next = await api.importCommit(batch, it.id, c.platform, c.tags)
           upsert(next)
           if (next.imported) done.push(next.imported.path)
         } catch (e) {
@@ -280,7 +276,6 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
     })
   }
 
-  const allFolders = useMemo(() => [...new Set([DEFAULT_FOLDER, ...kinds().map((k) => k.folder), ...folders.filter((f) => f && !f.startsWith('_'))])].sort(), [folders])
   const fm = splitFrontMatter(preview)
   const checkable = shown.filter(importable)
   const allChecked = checkable.length > 0 && checkable.every((it) => choices[it.id]?.checked)
@@ -442,15 +437,29 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
                             </span>
                             {c && it.status !== 'pending' && (
                               <span className="import-dest" onClick={(e) => e.stopPropagation()}>
-                                <select aria-label={`Kind for ${it.name}`} value={c.platform} onChange={(e) => setKind(it.id, e.target.value)}>
-                                  <option value="">No kind</option>
+                                <select
+                                  aria-label={`Kind for ${it.name}`}
+                                  title={c.folder ? `Goes in ${c.folder}/` : 'Goes at the top of the vault, Unfiled until you pick a kind'}
+                                  value={c.platform}
+                                  onChange={(e) => setKind(it.id, e.target.value)}
+                                >
+                                  <option value="">Unfiled</option>
                                   {kinds().map((k) => (
                                     <option key={k.id} value={k.id}>
                                       {k.name}
                                     </option>
                                   ))}
+                                  {suggestedKinds(kinds()).length > 0 && (
+                                    <optgroup label="New kind (makes its folder)">
+                                      {suggestedKinds(kinds()).map((k) => (
+                                        <option key={k.id} value={k.id}>
+                                          {k.name}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  )}
                                 </select>
-                                <input aria-label={`Folder for ${it.name}`} list="import-folders" value={c.folder} onChange={(e) => choose(it.id, { folder: e.target.value })} />
+                                <span className="muted">{c.folder ? `${c.folder}/` : 'top of the vault'}</span>
                               </span>
                             )}
                           </>
@@ -478,11 +487,6 @@ export function ImportSheet({ files, pick, folders, onClose, onImported, onUndon
               <datalist id="import-tags">
                 {vaultTags.map((t) => (
                   <option key={t.tag} value={t.tag} />
-                ))}
-              </datalist>
-              <datalist id="import-folders">
-                {allFolders.map((f) => (
-                  <option key={f} value={f} />
                 ))}
               </datalist>
             </div>

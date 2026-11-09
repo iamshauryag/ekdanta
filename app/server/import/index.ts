@@ -8,7 +8,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { loadSettings } from '../settings.ts'
+import { kindFor, knownKind, vaultKinds } from '../kinds.ts'
 import { HttpError, runTool, which } from '../net.ts'
 import { deleteDoc, freePath, hashOf, META_DIR, readDoc, resolveInVault, slugify, trashDoc, writeDoc } from '../vault.ts'
 import { csvToMarkdown } from './csv.ts'
@@ -23,8 +23,8 @@ import { clippingsToMarkdown, decodeText, isKindleClippings, normalizeNewlines, 
 export const IMPORT_DIR = path.join(META_DIR, 'import')
 const LEDGER = path.join(IMPORT_DIR, 'ledger.json')
 export const INBOX = '_inbox'
-/** Where notes go when no kind is chosen. */
-export const DEFAULT_FOLDER = 'imported'
+/** Where notes go when no kind is chosen: the top of the vault, Unfiled until the writer picks a kind. */
+export const DEFAULT_FOLDER = ''
 /** The most one upload may be. The app asks before sending anything over 50 MB. */
 const MAX_BYTES = 1024 * 1024 * 1024
 
@@ -49,7 +49,7 @@ export interface ImportItem {
   words: number
   title: string
   created: string
-  /** The guessed kind. */
+  /** The kind: guessed at first, then what the writer chose. Its folder is `folder` ('' for Unfiled). */
   platform?: string
   folder: string
   /** Labels written into the note's tags, set once it's in the vault. */
@@ -421,7 +421,7 @@ export async function convert(batch: string, id: string): Promise<ImportItem> {
   const out = await convertFile(inside(path.join(dir, 'originals'), item.name), item.name, item.type, work)
   for (const media of out.media) await fs.writeFile(inside(path.join(work, 'media'), safeName(media.name)), media.data)
   await fs.writeFile(path.join(work, 'out.md'), out.markdown)
-  const kinds = (await loadSettings()).kinds
+  const kinds = await vaultKinds()
   const platform =
     out.status === 'failed'
       ? undefined
@@ -488,11 +488,14 @@ const noteMeta = (item: ImportItem, platform: string | undefined, tags: string[]
   tags,
 })
 
-/** Write a row into the vault as a note. Returns the row, with where its note is. */
-export async function commit(batch: string, id: string, choice: { platform?: string; folder?: string; tags?: unknown }): Promise<ImportItem> {
-  const kinds = (await loadSettings()).kinds
-  const platform = choice.platform && kinds.some((k) => k.id === choice.platform) ? choice.platform : undefined
-  const folder = cleanFolder(choice.folder ?? DEFAULT_FOLDER)
+/**
+ * Write a row into the vault as a note. Returns the row, with where its note is. The one choice is its
+ * kind, which is its folder: a kind's folder (made now for a suggestion such as Essay), or with no
+ * kind the top of the vault, where it is Unfiled until the writer picks one.
+ */
+export async function commit(batch: string, id: string, choice: { platform?: string; tags?: unknown }): Promise<ImportItem> {
+  const wanted = typeof choice.platform === 'string' ? choice.platform : ''
+  if (wanted && !(await knownKind(wanted))) throw new HttpError(400, 'Unknown kind of writing')
   const tags = cleanLabels(choice.tags)
   return serial(async () => {
     const m = await readManifest(batch)
@@ -502,45 +505,62 @@ export async function commit(batch: string, id: string, choice: { platform?: str
     if (item.status === 'failed' || item.status === 'pending') throw new HttpError(409, item.reason ?? 'It hasn’t been converted')
     const work = inside(batchDir(batch), 'items', item.id)
     let md = await fs.readFile(path.join(work, 'out.md'), 'utf8')
-    const rel = await freePath(folder, slugify(item.title))
-    const stem = path.posix.basename(rel, '.md')
-    // Pictures go to attachments/<note>/, a folder of the note's own.
-    const media: string[] = []
-    const names = (await fs.readdir(path.join(work, 'media')).catch(() => [] as string[])).filter((n) => md.includes(MEDIA_PREFIX + n))
-    if (names.length) {
-      let dir = `attachments/${stem}`
-      for (let n = 2; await exists(resolveInVault(dir)); n++) dir = `attachments/${stem}-${n}`
-      await fs.mkdir(resolveInVault(dir), { recursive: true })
-      for (const name of names) {
-        const target = `${dir}/${name}`
-        await fs.copyFile(inside(path.join(work, 'media'), name), resolveInVault(target))
-        media.push(target)
-        const link = path.posix
-          .relative(folder || '.', target)
-          .split('/')
-          .map(encodeURIComponent)
-          .join('/')
-        md = md.split(MEDIA_PREFIX + name).join(link)
-      }
+    // Only now, with the item checked, is a suggested kind's folder made; if writing the note fails
+    // after all, a folder made for it is taken away again (rmdir: only if still empty).
+    const fresh = wanted && !(await vaultKinds()).some((k) => k.id === wanted)
+    const kind = wanted ? await kindFor(wanted) : undefined
+    if (wanted && !kind) throw new HttpError(400, 'Unknown kind of writing')
+    const platform = kind?.id
+    const folder = cleanFolder(kind?.folder ?? DEFAULT_FOLDER)
+    try {
+      return await write(m, batch, item, work, md, folder, platform, tags)
+    } catch (e) {
+      if (fresh && folder) await fs.rmdir(resolveInVault(folder)).catch(() => {})
+      throw e
     }
-    const note = buildNote(md, noteMeta(item, platform, tags))
-    await writeDoc(rel, note, { reason: 'import' })
-    item.imported = { path: rel, media, hash: hashOf(note) }
-    item.platform = platform
-    item.folder = folder
-    item.tags = tags.length ? tags : undefined
-    // A file from the inbox leaves it now, and only now (its copy stays in originals/).
-    if (item.inbox) {
-      const abs = resolveInVault(item.inbox)
-      const now = await fs.readFile(abs).catch(() => null)
-      if (now && createHash('sha256').update(now).digest('hex') === item.sha) await fs.unlink(abs).catch(() => {})
-    }
-    const ledger = await readLedger()
-    ledger[item.sha] = { batch, id: item.id, path: rel }
-    await writeLedger(ledger)
-    await writeManifest(m)
-    return item
   })
+}
+
+/** commit, once the item and its kind are settled: pictures, the note, the ledger. */
+async function write(m: Awaited<ReturnType<typeof readManifest>>, batch: string, item: ImportItem, work: string, md: string, folder: string, platform: string | undefined, tags: string[]) {
+  const rel = await freePath(folder, slugify(item.title))
+  const stem = path.posix.basename(rel, '.md')
+  // Pictures go to attachments/<note>/, a folder of the note's own.
+  const media: string[] = []
+  const names = (await fs.readdir(path.join(work, 'media')).catch(() => [] as string[])).filter((n) => md.includes(MEDIA_PREFIX + n))
+  if (names.length) {
+    let dir = `attachments/${stem}`
+    for (let n = 2; await exists(resolveInVault(dir)); n++) dir = `attachments/${stem}-${n}`
+    await fs.mkdir(resolveInVault(dir), { recursive: true })
+    for (const name of names) {
+      const target = `${dir}/${name}`
+      await fs.copyFile(inside(path.join(work, 'media'), name), resolveInVault(target))
+      media.push(target)
+      const link = path.posix
+        .relative(folder || '.', target)
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/')
+      md = md.split(MEDIA_PREFIX + name).join(link)
+    }
+  }
+  const note = buildNote(md, noteMeta(item, platform, tags))
+  await writeDoc(rel, note, { reason: 'import' })
+  item.imported = { path: rel, media, hash: hashOf(note) }
+  item.platform = platform
+  item.folder = folder
+  item.tags = tags.length ? tags : undefined
+  // A file from the inbox leaves it now, and only now (its copy stays in originals/).
+  if (item.inbox) {
+    const abs = resolveInVault(item.inbox)
+    const now = await fs.readFile(abs).catch(() => null)
+    if (now && createHash('sha256').update(now).digest('hex') === item.sha) await fs.unlink(abs).catch(() => {})
+  }
+  const ledger = await readLedger()
+  ledger[item.sha] = { batch, id: item.id, path: rel }
+  await writeLedger(ledger)
+  await writeManifest(m)
+  return item
 }
 
 export interface Undone {

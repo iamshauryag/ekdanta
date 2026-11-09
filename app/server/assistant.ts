@@ -65,7 +65,8 @@ import {
 } from '../src/lib/assistant.ts'
 import { askRule, readAsk } from '../src/lib/scope.ts'
 import { DRAFT_FROM_MAX, EVIDENCE_CHARS, checkDraft, draftPrompt, hasTopic, parseDraft, platformHabits, type Evidence } from './draft.ts'
-import { kindName } from '../src/lib/kinds.ts'
+import { findKind, kindName } from '../src/lib/kinds.ts'
+import { vaultKinds } from './kinds.ts'
 
 /** Turns kept per document, and the most the file may hold; the oldest turns go first. */
 const KEEP_TURNS = 200
@@ -431,6 +432,7 @@ function allowance(history: Turn[], id: string): { offer: Turn; index: number; w
 export async function runAssistant(input: AssistRequest, deps: AssistDeps = {}): Promise<AssistReply> {
   let req = await checkRequest(input)
   const settings = await loadSettings()
+  const kinds = await vaultKinds()
   const ceiling = deps.ceiling ?? settings.ceiling
   if (levelFor(ceiling) === 0) return { kind: 'error', message: 'Help is off (help ceiling 0).', fix: 'Raise the help ceiling in the Piece panel to use the assistant.' }
 
@@ -460,7 +462,8 @@ export async function runAssistant(input: AssistRequest, deps: AssistDeps = {}):
     await appendTurns(req.doc, [writer, answer])
     return { kind: 'answer', turns: [writer, answer] }
   }
-  const kind = kindName(settings.kinds, req.platform ?? 'essay')
+  // "essay", "LinkedIn post": what the writer's pieces are called; an Unfiled note is just a piece of writing.
+  const kind = req.platform && findKind(kinds, req.platform) ? kindName(kinds, req.platform) : 'piece'
 
   // Whole drafts. Asked for by the button, in words, or by answering "what should it be about?".
   const last = history[history.length - 1]
@@ -521,8 +524,8 @@ export async function runAssistant(input: AssistRequest, deps: AssistDeps = {}):
         level,
         awaitingTopic: true,
       })
-    const evidence = await (deps.evidence ?? defaultEvidence)(req.platform ?? 'essay', req.doc).catch((): Evidence => ({ profile: null, pieces: [], habits: '', count: 0 }))
-    const { system, prompt } = draftPrompt({ message: req.message, text: req.text, title, brief, norms: describeKind(settings.kinds, req.platform), kind, evidence, notes, earlier })
+    const evidence = await (deps.evidence ?? defaultEvidence)(req.platform ?? '', req.doc).catch((): Evidence => ({ profile: null, pieces: [], habits: '', count: 0 }))
+    const { system, prompt } = draftPrompt({ message: req.message, text: req.text, title, brief, norms: describeKind(kinds, req.platform), kind, evidence, notes, earlier })
     let raw: string
     try {
       raw = await ask(system, prompt, deps.signal, { maxTokens: 8192, temperature: 0.7 })
@@ -537,7 +540,11 @@ export async function runAssistant(input: AssistRequest, deps: AssistDeps = {}):
     const material = [req.text, title, brief, req.message, earlier ?? '', ...notes.map((n) => n.text), ...evidence.pieces.map((p) => p.text)].join('\n')
     const notices: string[] = []
     if (!evidence.count)
-      notices.push(`I have none of your ${kind} pieces to learn your voice from, so this draft can’t sound like you yet. Write or import a few, star your best, then build a voice profile.`)
+      notices.push(
+        kind === 'piece'
+          ? 'This note is Unfiled, so I have no pieces of its kind to learn your voice from. Pick its kind for drafts that sound like you.'
+          : `I have none of your ${kind} pieces to learn your voice from, so this draft can’t sound like you yet. Write or import a few, star your best, then build a voice profile.`,
+      )
     else if (!evidence.profile) notices.push(`You have no ${kind} voice profile yet, so this draft leans on your past pieces alone. Build one for drafts that sound more like you.`)
     notices.push(...checkDraft(answer.draft, material))
     notices.push('Written by AI because you asked. If you accept it, this piece’s help log notes that it was an AI-written draft.')
@@ -568,7 +575,7 @@ export async function runAssistant(input: AssistRequest, deps: AssistDeps = {}):
     })
   }
 
-  const { system, prompt } = assistantPrompt(req, { level, history, notes, title, norms: describeKind(settings.kinds, req.platform), voice, brief })
+  const { system, prompt } = assistantPrompt(req, { level, history, notes, title, norms: describeKind(kinds, req.platform), voice, brief })
   let raw: string
   try {
     raw = await ask(system, prompt, deps.signal, { maxTokens: 8192 })

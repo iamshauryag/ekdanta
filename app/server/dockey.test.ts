@@ -88,9 +88,10 @@ test('each kind of file kept under the old key is found the first time it is use
   // Moving a document takes along what's still under its old key.
   await put(path.join(root, 'notes/mv_doc.md'), doc('Moving.'))
   await oldVersion('notes__mv_doc', doc('Before the move.'))
-  const moved = await vault.moveToFolder(DEFAULT_KINDS, 'notes/mv_doc.md', 'elsewhere')
+  const moved = (await vault.moveToFolder('notes/mv_doc.md', 'elsewhere')).path
   assert.equal(moved, 'elsewhere/mv_doc.md')
-  assert.deepEqual(await texts(moved), [doc('Before the move.')])
+  // The move then mirrors its new kind (elsewhere/) in front matter, which keeps the text before it as a version too.
+  assert.deepEqual((await texts(moved))[0], doc('Before the move.'))
 })
 
 test('an old key two documents shared is left where it is, and both start fresh', async () => {
@@ -184,7 +185,7 @@ test('a document moved onto a name whose keys hold old files of documents gone s
   await vault.writeDoc('m_n.md', doc('Saved.'))
   await oldVersion('dest__m_n', doc('Old file of a dest/m_n.md, gone.')) // the new name's old key
   await oldVersion('dest__m_-n', doc('Old file of a dest__m_-n.md, gone.')) // the new name's new key
-  const moved = await vault.moveToFolder(DEFAULT_KINDS, 'm_n.md', 'dest')
+  const moved = (await vault.moveToFolder('m_n.md', 'dest')).path
   assert.equal(moved, 'dest/m_n.md')
   assert.deepEqual(await texts(moved), [doc('Start.')])
   assert.ok(await exists(path.join(meta, 'versions', 'dest__m_n')))

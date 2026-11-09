@@ -15,7 +15,8 @@ import { material, readThinking, recallChips, suggestClusters, suggestLinks, wri
 import { buildProfile, readProfile, summaries, writeProfile } from './voice.ts'
 import { loadSettings, saveSettings, type Settings } from './settings.ts'
 import { runHelp, type HelpRequest } from './help.ts'
-import { doubledFolder } from '../src/lib/kinds.ts'
+import { doubledFolder, findKind, folderForName, kindDisplayName, nameTakenBy } from '../src/lib/kinds.ts'
+import { kindFor, removeKind, saveVisibleKinds, scopeOf, vaultKinds } from './kinds.ts'
 import { markBriefs, readBrief, writeBrief } from './brief.ts'
 import { runEdge, type EdgeRequest } from './edge.ts'
 import { captureIdea, dismissIdeaTitle, listIdeas, starIdea, startIdeaPiece } from './ideas.ts'
@@ -56,7 +57,7 @@ import {
   fileByKind,
   unfileDoc,
   renameDoc,
-  renameFolder,
+  renameKindFolder,
   duplicateDoc,
   editableFrontMatter,
   restoreDoc,
@@ -90,10 +91,15 @@ const body = <T>(req: IncomingMessage) => readJson<T>(req)
 
 const routes: Record<string, Handler> = {
   'GET /api/status': async () => ({ ...(await status()), vault: VAULT, embedder: embedder().id }),
-  'GET /api/settings': async () => loadSettings(),
+  // The kinds the app sees are the vault's folders (server/kinds.ts), not the settings saved for them.
+  'GET /api/settings': async () => ({ ...(await loadSettings()), kinds: await vaultKinds() }),
   'PUT /api/settings': async (req) => {
     const prev = { ...(await loadSettings()) }
-    const next = await saveSettings(await body<Partial<Settings>>(req))
+    const { kinds, ...patch } = await body<Partial<Settings>>(req)
+    // Kinds added or removed in Settings make or remove their folders: a refusal changes nothing else either.
+    if (kinds !== undefined) await saveVisibleKinds(kinds)
+    const saved = await saveSettings(patch)
+    const next = { ...saved, kinds: await vaultKinds() }
     if (next.embedder !== prev.embedder)
       warmEmbedder()
         .then(() => refresh())
@@ -136,8 +142,8 @@ const routes: Record<string, Handler> = {
     content: await preview(url.searchParams.get('batch') ?? '', url.searchParams.get('id') ?? '', url.searchParams.get('platform') ?? undefined, url.searchParams.getAll('tag')),
   })),
   'POST /api/import/commit': local(async (req) => {
-    const { batch, id, platform, folder, tags } = await body<{ batch: string; id: string; platform?: string; folder?: string; tags?: string[] }>(req)
-    const item = await commit(batch, id, { platform, folder, tags })
+    const { batch, id, platform, tags } = await body<{ batch: string; id: string; platform?: string; tags?: string[] }>(req)
+    const item = await commit(batch, id, { platform, tags })
     refresh().catch(() => {})
     return item
   }),
@@ -173,9 +179,14 @@ const routes: Record<string, Handler> = {
     const since = url.searchParams.get('since')
     return changesSince(since === null || since === '' ? undefined : Number(since))
   },
+  // The kinds of writing: one per top-level folder of the vault, with the settings saved for each.
+  'GET /api/kinds': async () => vaultKinds(),
+  // A new draft in `folder`, which says its kind; with `platform`, in that kind's folder (made if it's a suggestion).
   'POST /api/new': async (req) => {
     const { folder, platform } = await body<{ folder?: string; platform?: string }>(req)
-    return { path: await createDoc((await loadSettings()).kinds, folder ?? '', platform) }
+    const kind = typeof platform === 'string' && platform ? await kindFor(platform) : undefined
+    if (platform && !kind) throw new HttpError(400, 'Unknown kind of writing')
+    return { path: await createDoc(await vaultKinds(), typeof folder === 'string' ? folder : '', { kind: kind?.id }) }
   },
   // Routes that change documents answer with `touched`: every document they wrote or moved, and its
   // new mtime, so the app can take in a change to the open document without calling it a conflict.
@@ -185,15 +196,19 @@ const routes: Record<string, Handler> = {
     if (next !== path) refresh().catch(() => {})
     return { path: next, touched }
   },
-  // After a kind change: file the document in its kind's folder. `stay` says why it didn't move, when it
-  // didn't; `undo` is a token for putting it back, given only when the app says the kind it had (`was`).
+  // A kind change: the document moves into the kind's folder ('' for Unfiled: the top of the vault),
+  // made if the kind is a suggestion. `stay` says why it didn't move, when it didn't; `undo` is a token
+  // for putting it back, given only when the app says what its front matter said before (`was`).
   'POST /api/place': async (req) => {
-    const { path: asked, was } = await body<{ path: string; was?: string }>(req)
+    const { path: asked, kind: wanted, was } = await body<{ path: string; kind?: string; was?: string }>(req)
     const path = await existingDoc(asked)
+    if (typeof wanted !== 'string') throw new HttpError(400, 'No kind given')
+    const kind = wanted ? await kindFor(wanted) : undefined
+    if (wanted && !kind) throw new HttpError(400, 'Unknown kind of writing')
     await keepBefore(path, 'before move')
-    const { kinds, excludedFolders, brainFolder } = await loadSettings()
-    const opts = { excluded: excludedFolders, brain: brainFolder, was: typeof was === 'string' ? was : undefined }
-    const { result, touched } = await collectTouched(() => fileByKind(kinds, path, opts))
+    const opts = { ...scopeOf(await loadSettings()), was: typeof was === 'string' ? was : undefined }
+    const kinds = await vaultKinds()
+    const { result, touched } = await collectTouched(() => fileByKind(kinds, path, kind?.id ?? '', opts))
     if (result.path !== path) refresh().catch(() => {})
     return { ...result, touched }
   },
@@ -211,13 +226,43 @@ const routes: Record<string, Handler> = {
     refresh().catch(() => {})
     return { path: next, touched }
   },
+  // Moving a note to a folder makes it that folder's kind; `undo` puts it back (POST /api/place/undo).
   'POST /api/move': async (req) => {
-    const { path, folder } = await body<{ path: string; folder: string }>(req)
+    const { path: asked, folder } = await body<{ path: string; folder: string }>(req)
+    const path = await existingDoc(asked)
+    if (typeof folder !== 'string') throw new HttpError(400, 'No folder given')
     await keepBefore(path, 'before move')
-    const kinds = (await loadSettings()).kinds
-    const { result: next, touched } = await collectTouched(() => moveToFolder(kinds, path, folder))
+    const { result, touched } = await collectTouched(() => moveToFolder(path, folder))
     refresh().catch(() => {})
-    return { path: next, touched }
+    return { ...result, touched }
+  },
+  // Rename a folder from the sidebar. A kind's folder takes the kind with it, settings and all.
+  'POST /api/folders/rename': async (req) => {
+    const { from, to } = await body<{ from: string; to: string }>(req)
+    if (typeof from !== 'string' || typeof to !== 'string' || !to.trim() || to.includes('/')) throw new HttpError(400, 'Give the folder a name, without a slash')
+    const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/') + 1) : ''
+    const { result, touched } = await collectTouched(() => renameKindFolder(from, parent + to.trim()))
+    refresh().catch(() => {})
+    return { ...result, touched }
+  },
+  // Remove a kind in Settings: its folder goes, only when nothing is in it (else 409). Its settings are kept.
+  'POST /api/kinds/remove': async (req) => {
+    const { id } = await body<{ id: string }>(req)
+    return removeKind(typeof id === 'string' ? id : '')
+  },
+  // Rename a kind in Settings: its folder is renamed to match ("Short story" -> short-stories/), notes and all.
+  'POST /api/kinds/rename': async (req) => {
+    const { id, name } = await body<{ id: string; name: string }>(req)
+    const kinds = await vaultKinds()
+    const kind = typeof id === 'string' ? findKind(kinds, id) : undefined
+    if (!kind) throw new HttpError(404, 'No such kind')
+    const clean = typeof name === 'string' ? kindDisplayName(Array.from(name.trim().normalize('NFC')).slice(0, 40).join('').trim()) : ''
+    if (!clean) throw new HttpError(400, 'Give it a name')
+    const other = nameTakenBy(kinds, kind.id, clean)
+    if (other) throw new HttpError(409, `You already have ${other.name}`)
+    const { result, touched } = await collectTouched(() => renameKindFolder(kind.folder, folderForName(clean, kind.folder), clean))
+    refresh().catch(() => {})
+    return { ...result, touched }
   },
   'POST /api/duplicate': async (req) => {
     const { path } = await body<{ path: string }>(req)
@@ -278,19 +323,16 @@ const routes: Record<string, Handler> = {
     await clearHistory(url.searchParams.get('doc') ?? '')
     return { ok: true }
   },
-  // A kind whose folder doubled its plural (yt-scriptses/): move its pieces into the proper folder, then file there.
+  // A kind whose folder doubled its plural (yt-scriptses/): move its pieces into the proper folder.
   'POST /api/kinds/rename-folder': async (req) => {
     const { id } = await body<{ id: string }>(req)
-    const { kinds } = await loadSettings()
-    const kind = kinds.find((k) => k.id === id)
+    const kind = findKind(await vaultKinds(), typeof id === 'string' ? id : '')
     const to = kind && doubledFolder(kind)
-    if (!kind || !to) throw new Error('That kind’s folder needs no renaming')
-    const owner = kinds.find((k) => k !== kind && k.folder === to)
-    if (owner) throw new Error(`${to}/ is already the ${owner.name} folder`)
-    const { result: moved, touched } = await collectTouched(() => renameFolder(kind.folder, to))
-    const settings = await saveSettings({ kinds: kinds.map((k) => (k === kind ? { ...k, folder: to } : k)) })
+    if (!kind || !to) throw new HttpError(400, 'That kind’s folder needs no renaming')
+    const { result, touched } = await collectTouched(() => renameKindFolder(kind.folder, to, kind.name))
+    const settings = { ...(await loadSettings()), kinds: result.kinds }
     refresh().catch(() => {})
-    return { settings, moved, touched }
+    return { settings, moved: result.moved, touched }
   },
   // Front-matter changes to a document that isn't open in the editor (starring it from the Vault, say).
   'POST /api/meta': async (req) => {
@@ -411,7 +453,7 @@ const routes: Record<string, Handler> = {
     const { text, kind, idea } = await body<{ text?: string; kind: string; idea?: unknown }>(req)
     const { result, touched } = await collectTouched(async () => {
       const line = idea ? (await keepPartnerIdea(idea)).text : typeof text === 'string' ? text : ''
-      return startIdeaPiece((await loadSettings()).kinds, line, typeof kind === 'string' ? kind : '')
+      return startIdeaPiece(line, typeof kind === 'string' ? kind : '')
     })
     refresh().catch(() => {})
     return { ...result, touched }

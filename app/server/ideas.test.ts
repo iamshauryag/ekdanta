@@ -10,6 +10,7 @@ process.env.EKDANTA_VAULT = root
 const ideas = await import('./ideas.ts')
 const vault = await import('./vault.ts')
 const { DEFAULT_KINDS } = await import('../src/lib/kinds.ts')
+const { saveSettings } = await import('./settings.ts')
 const { isPromptParagraph, isSpecialPath, isSpecialFile } = await import('../src/lib/special.ts')
 const { splitFrontMatter } = await import('../src/lib/frontmatter.ts')
 
@@ -169,7 +170,7 @@ test('stars live in app state and never change ideas.md', async () => {
 
 test('starting a piece files it by kind with the idea as a prompt; deleting it un-starts the idea', async () => {
   const before = await fs.readFile(path.join(root, 'ideas.md'), 'utf8')
-  const rel = await ideas.startIdea(DEFAULT_KINDS, 'third', 'blog')
+  const rel = await ideas.startIdea('third', 'blog')
   assert.match(rel, /^blog\/untitled(-\d+)?\.md$/)
   const { meta, body } = splitFrontMatter(await fs.readFile(path.join(root, rel), 'utf8'))
   assert.equal(meta['from-idea'], 'third')
@@ -182,27 +183,31 @@ test('starting a piece files it by kind with the idea as a prompt; deleting it u
   await vault.trashDoc(rel)
   row = (await ideas.listIdeas()).ideas.find((r) => r.text === 'third')
   assert.equal(row?.started, undefined)
-  await assert.rejects(ideas.startIdea(DEFAULT_KINDS, 'x', 'no-such-kind'), /Unknown kind/)
-  await assert.rejects(ideas.startIdea(DEFAULT_KINDS, ' ', 'blog'), /No idea/)
+  await assert.rejects(ideas.startIdea('x', 'no-such-kind'), /Unknown kind/)
+  await assert.rejects(ideas.startIdea(' ', 'blog'), /No idea/)
+  // No kind: Unfiled, at the top of the vault, with no kind in its front matter.
+  const loose = await ideas.startIdea('fourth', '')
+  assert.match(loose, /^untitled(-\d+)?\.md$/)
+  assert.equal(splitFrontMatter(await fs.readFile(path.join(root, loose), 'utf8')).meta.platform, undefined)
 })
 
 test("a kind's template goes under the prompt", async () => {
   await fs.mkdir(path.join(root, 'templates'), { recursive: true })
   await fs.writeFile(path.join(root, 'templates/blog.md'), '---\ntemplate-for: blog\n---\n\n## Hook\n\n*Prompt: open strong*\n')
-  const kinds = DEFAULT_KINDS.map((k) => (k.id === 'blog' ? { ...k, template: 'templates/blog.md' } : k))
-  const rel = await ideas.startIdea(kinds, 'with a template', 'blog')
+  await saveSettings({ kinds: DEFAULT_KINDS.map((k) => (k.id === 'blog' ? { ...k, template: 'templates/blog.md' } : k)) })
+  const rel = await ideas.startIdea('with a template', 'blog')
   const { body } = splitFrontMatter(await fs.readFile(path.join(root, rel), 'utf8'))
   assert.equal(body, '*Prompt: with a template*\n\n## Hook\n\n*Prompt: open strong*\n')
   // A template that has gone missing just leaves the prompt.
-  const gone = DEFAULT_KINDS.map((k) => (k.id === 'blog' ? { ...k, template: 'templates/missing.md' } : k))
-  const rel2 = await ideas.startIdea(gone, 'no template', 'blog')
+  await saveSettings({ kinds: DEFAULT_KINDS.map((k) => (k.id === 'blog' ? { ...k, template: 'templates/missing.md' } : k)) })
+  const rel2 = await ideas.startIdea('no template', 'blog')
   assert.equal(splitFrontMatter(await fs.readFile(path.join(root, rel2), 'utf8')).body, '*Prompt: no template*\n')
 })
 
 test('an idea ending in a quote mark, or starting with #, still shows Started', async () => {
   for (const idea of ['Why I said "no"', "notes on my parents'", '# big headline idea', '3. reasons I quit coffee']) {
     await ideas.captureIdea(idea)
-    const rel = await ideas.startIdea(DEFAULT_KINDS, idea, 'blog')
+    const rel = await ideas.startIdea(idea, 'blog')
     const raw = await fs.readFile(path.join(root, rel), 'utf8')
     assert.equal(splitFrontMatter(raw).meta['from-idea'], idea)
     // Quoted in the file, so other YAML readers (Obsidian) see the same value.

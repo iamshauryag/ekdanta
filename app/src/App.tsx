@@ -3,7 +3,7 @@ import type { Editor as TiptapEditor } from '@tiptap/core'
 import { Editor, type EditorFormat, type Heading } from './editor/Editor.tsx'
 import type { PageRef } from './editor/menus.ts'
 import { SourceEditor } from './editor/Source.tsx'
-import { findKind, kindName, kinds, pieceName, setKinds } from './lib/kinds.ts'
+import { DEFAULT_KINDS, findKind, kindName, kindOfPath, kinds, pieceName, setKinds, suggestedKinds, UNFILED, type Kind, type KindScope } from './lib/kinds.ts'
 import { DocumentMode, DocumentPanel } from './components/DocumentMode.tsx'
 import { docOf, dueLabel, kindSwitchPatch, usesDocument } from './lib/docstyle.ts'
 import { countable, type Block } from './lib/targets.ts'
@@ -174,6 +174,12 @@ export function App() {
   const [voiceView, setVoiceView] = useState<string | null>(null) // a platform whose profile fills the page
   const [brainView, setBrainView] = useState(false) // the Brain fills the page
   const brainFolder = settings?.brainFolder ?? DEFAULT_BRAIN_FOLDER
+  // A note's kind is its top-level folder's ('' is Unfiled, at the top of the vault). Front matter's
+  // `platform` only mirrors it; it counts only in a set-apart folder (templates/, journal/, the Brain).
+  const kindScope: KindScope = { excluded: settings?.excludedFolders, brain: brainFolder }
+  const kindScopeRef = useRef(kindScope)
+  kindScopeRef.current = kindScope
+  const kindOfDoc = (d: { path: string; meta: { platform?: string } } | null | undefined) => (d ? kindOfPath(kinds(), d.path, kindScopeRef.current, d.meta.platform) : UNFILED)
   const refreshVoices = useCallback(() => api.voice().then(setVoices).catch(fail), [fail])
   // Ideas: the full-page list, the one-line capture box, and a counter that tells the list to re-read.
   const [ideasView, setIdeasView] = useState(false)
@@ -199,12 +205,15 @@ export function App() {
   const [trash, setTrash] = useState<Trashed[]>([])
   const refreshTrash = useCallback(() => api.trash().then(setTrash).catch(fail), [fail])
   const [toast, setToast] = useState<{ text: string; undo?: () => void; label?: string } | null>(null)
+  // A kind change under way: the open document and the kind chosen for it, shown until it's in its folder.
+  const [placing, setPlacing] = useState<{ doc: object; kind: string } | null>(null)
   const toastTimer = useRef<number | undefined>(undefined)
   /** A short message at the bottom; `undo` adds a button, named `label` (Undo unless said otherwise). */
   const notify = useCallback((text: string, undo?: () => void, label?: string) => {
     window.clearTimeout(toastTimer.current)
     setToast({ text, undo, label })
-    toastTimer.current = window.setTimeout(() => setToast(null), 6000)
+    // One with an Undo stays longer, so there's time to read where the note went and take it back.
+    toastTimer.current = window.setTimeout(() => setToast(null), undo ? 12000 : 6000)
   }, [])
   // The open document's Thinking Space, and which of its fragments the draft already uses.
   const [thinkingOpen, setThinkingOpen] = useState(false)
@@ -322,18 +331,31 @@ export function App() {
   // The vault's documents. Until the first listing arrives, neither the welcome card nor a page shows.
   const [filesLoaded, setFilesLoaded] = useState(false)
   const [vaultError, setVaultError] = useState<string | null>(null)
+  // The kinds are the vault's top-level folders, so they're read again with the files (and when the
+  // window comes back): a folder made or renamed here, in Finder or in Obsidian is a kind at once.
+  const takeKinds = useCallback((next: Kind[] | null) => {
+    if (next) setSettings((s) => (s && JSON.stringify(s.kinds) !== JSON.stringify(next) ? { ...s, kinds: next } : s))
+  }, [])
+  const refreshKinds = useCallback(() => {
+    api.kinds().then(takeKinds, () => {})
+  }, [takeKinds])
   const refreshFiles = useCallback(
     () =>
-      api
-        .files()
-        .then((list) => {
+      // Both in one go, so a note moved into a new folder never shows for a moment as Unfiled.
+      Promise.all([api.files(), api.kinds().catch(() => null)])
+        .then(([list, next]) => {
+          takeKinds(next)
           setFiles(list)
           setFilesLoaded(true)
           setVaultError(null)
         })
         .catch((e) => (e instanceof ApiError && e.code === 'VAULT_UNAVAILABLE' ? setVaultError(e.message) : fail(e))),
-    [fail],
+    [fail, takeKinds],
   )
+  useEffect(() => {
+    window.addEventListener('focus', refreshKinds)
+    return () => window.removeEventListener('focus', refreshKinds)
+  }, [refreshKinds])
   // The vault's templates. Re-read when the files change (a template may have been added or edited).
   const [templates, setTemplates] = useState<TemplateInfo[]>([])
   const templatesRef = useRef<TemplateInfo[]>([])
@@ -885,7 +907,7 @@ export function App() {
   const newDraft = useCallback(
     async (folder?: string) => {
       const currentFolder = files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
-      const target = folder ?? newNoteFolder(settings ?? APPEARANCE_DEFAULTS, { currentFolder, platform: docRef.current?.meta.platform?.toLowerCase(), kinds: kinds() })
+      const target = folder ?? newNoteFolder(settings ?? APPEARANCE_DEFAULTS, { currentFolder, platform: docRef.current ? kindOfDoc(docRef.current) : undefined, kinds: kinds() })
       const { path: rel } = await api.create(target)
       await refreshFiles()
       setFresh(rel)
@@ -935,11 +957,10 @@ export function App() {
     })()
   }, [settings, filesLoaded, files, pages, newDraft, setPath, fail])
 
-  /** From the welcome card: a first draft of the chosen kind, in that kind's folder. */
+  /** From the welcome card: a first draft of the chosen kind, in that kind's folder (made now for a suggestion). */
   const startWriting = async (kind: string) => {
-    const k = kinds().find((x) => x.id === kind)
     try {
-      const { path: rel } = await api.create(k?.folder ?? '', kind)
+      const { path: rel } = await api.create('', kind)
       await refreshFiles()
       setFresh(rel)
       await openDoc(rel)
@@ -1035,36 +1056,48 @@ export function App() {
     }).catch(failed('name the file'))
   }
 
-  /** A new kind files the piece in that kind's folder, with an Undo that puts back both the kind and the place. */
+  /**
+   * Choose the piece's kind, which is choosing its folder: it moves into that kind's folder ('' for
+   * Unfiled: the top of the vault), made now if the kind is a suggestion. Front matter mirrors it. An
+   * Undo puts back both the place and what front matter said.
+   */
   const setPlatform = async (platform: string) => {
     const d = docRef.current
     if (!d) return
     if (d.readonly) return notify(READONLY_META)
     const was = d.meta.platform ?? ''
-    if (platform === was) return
-    const patch: MetaPatch = { platform }
+    const before = kindOfDoc(d)
+    if (platform === before) return
+    const patch: MetaPatch = { platform: platform || null }
     // A new, empty piece takes its new kind's document defaults (and gives back the old kind's).
-    if (fresh === d.path && !d.body.trim()) Object.assign(patch, kindSwitchPatch(d.meta, findKind(kinds(), d.meta.platform ?? '')?.doc, findKind(kinds(), platform)?.doc))
+    const known = (id: string) => findKind(kinds(), id) ?? findKind(DEFAULT_KINDS, id)
+    if (fresh === d.path && !d.body.trim()) Object.assign(patch, kindSwitchPatch(d.meta, known(before)?.doc, known(platform)?.doc))
     Object.assign(d, patchFrontMatter(d, patch))
     syncText()
     setLoaded((l) => (l ? { ...l, meta: d.meta, lists: d.lists } : l))
     saver.edited()
     // A brand-new, empty draft is only being given its kind: its move needs no news.
     const quiet = fresh === d.path && !d.body.trim()
+    // The kind chosen shows at once, while the note is saved and moved to its folder.
+    setPlacing({ doc: d, kind: platform })
     await op(async () => {
       if (docRef.current !== d) return
       const prev = d.path
-      const { path: next, touched, stay, folder, undo } = await api.place(prev, was)
+      const { path: next, touched, stay, undo } = await api.place(prev, platform, was)
       follow(next)
       await absorb(touched)
-      refreshFiles()
+      await refreshFiles()
       refreshVoices()
       if (quiet) return
-      const name = pieceName(kinds(), platform, 1)
       const where = prev.includes('/') ? prev.slice(0, prev.lastIndexOf('/')) + '/' : 'the top of the vault'
-      if (next !== prev) notify(`Moved to ${next.slice(0, next.lastIndexOf('/'))}/`, undo ? () => void unplace(next, undo) : undefined)
-      else if (stay && stay !== 'unknown-kind') notify(`Now ${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name}. It stays in ${STAY_LABELS[stay](where, `${folder ?? ''}/`)}.`)
-    }).catch(failed('move it to its folder'))
+      if (next !== prev) notify(movedTo(next), undo ? () => void unplace(next, undo) : undefined)
+      else if (stay && stay !== 'unknown-kind') {
+        const name = platform ? pieceName(kinds(), platform, 1) : ''
+        notify(`${name ? `Now ${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name}` : 'Now Unfiled'}. It stays in ${STAY_LABELS[stay](where)}.`)
+      }
+    })
+      .catch(failed('move it to its folder'))
+      .finally(() => setPlacing(null))
   }
 
   /** Undo a kind change: the document goes back where it was, as the kind it was. */
@@ -1128,7 +1161,7 @@ export function App() {
     }
     // The same guard the server keeps: a piece with writing in it is never overwritten.
     if (docRef.current?.body.trim()) return notify('This piece already has writing in it. Use /template to add a template where the caret is.')
-    const kind = (doc.meta.platform ?? '').toLowerCase()
+    const kind = kindOfDoc(doc)
     const ctx = { title: doc.meta.title ?? '', kind: findKind(kinds(), kind) ? platformLabel(kind) : '', author: authorOf(settings), now: new Date() }
     const { text, cursor } = templateBody(raw, ctx)
     insertTemplate(ed, text, cursor)
@@ -1144,8 +1177,8 @@ export function App() {
     const kind = findKind(kinds(), t.kind)
     const here = files.find((f) => f.path === docRef.current?.path)?.folder ?? ''
     const folder = kind || isSpecialPath(here) ? '' : here
-    let { path: rel } = await api.create(folder, kind?.id)
-    if (kind) rel = (await api.place(rel)).path
+    // Made in the kind's folder, which makes it that kind.
+    const { path: rel } = await api.create(folder, kind?.id)
     let caret: number | null = null
     try {
       caret = (await api.applyTemplate(rel, t.path)).cursor
@@ -1170,7 +1203,7 @@ export function App() {
     } catch {
       return templateFailed(new Error('Template not found'))
     }
-    const kind = (d.meta.platform ?? 'essay').toLowerCase()
+    const kind = kindOfDoc(d)
     const { text, cursor } = templateBody(raw, { title: d.meta.title ?? '', kind: findKind(kinds(), kind) ? platformLabel(kind) : '', author: authorOf(settings), now: new Date() })
     insertTemplate(ed, text, cursor)
   }
@@ -1195,13 +1228,24 @@ export function App() {
       }).catch(failed('rename')),
     move: (rel, folder) =>
       op(async () => {
-        const { path: next, touched } = await api.move(rel, folder)
+        // The folder is the kind: a move to another kind's folder changes its kind, to the top makes it Unfiled.
+        const { path: next, touched, undo } = await api.move(rel, folder)
         if (docRef.current?.path === rel) follow(next)
         await absorb(touched)
         await refreshFiles()
         refreshVoices()
-        notify(`Moved to ${folder.split('/').pop()}`, () => fileActions.move(next, rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''))
+        if (next !== rel) notify(movedTo(next), undo ? () => void unplace(next, undo) : undefined)
       }).catch(failed('move')),
+    renameFolder: (folder, name) =>
+      op(async () => {
+        const { moved, kinds: next, touched } = await api.renameFolder(folder, name)
+        setSettings((s) => (s ? { ...s, kinds: next } : s))
+        const mine = moved.find((m) => m.from === docRef.current?.path)
+        if (mine) follow(mine.to)
+        await absorb(touched)
+        await refreshFiles()
+        refreshVoices()
+      }).catch(failed('rename the folder')),
     layout: async (rel) => {
       if (docRef.current?.path !== rel) await openDoc(rel)
       setLayoutFor(rel)
@@ -1335,6 +1379,30 @@ export function App() {
     setLayoutFor((f) => (f === prev ? next : f))
     setRecentDocs((r) => r.map((p) => (p === prev ? next : p)))
     setPath(next)
+  }
+
+  /** Settings → Kinds: rename a kind, and so its folder, following the open document if it moves. */
+  const renameKind = (id: string, name: string) =>
+    op(async () => {
+      const { moved, kinds: next, touched } = await api.renameKind(id, name)
+      setSettings((s) => (s ? { ...s, kinds: next } : s))
+      const mine = moved.find((m) => m.from === docRef.current?.path)
+      if (mine) follow(mine.to)
+      await absorb(touched)
+      await refreshFiles()
+      refreshVoices()
+    })
+
+  /** Settings → Kinds: remove a kind, and so its folder (only an empty one; the server refuses otherwise). */
+  const removeKind = async (id: string) => {
+    const next = await api.removeKind(id)
+    setSettings((s) => (s ? { ...s, kinds: next } : s))
+  }
+
+  /** How many notes a folder holds (at any depth), for saying what renaming it moves. */
+  const countIn = (folder: string) => {
+    const f = folder.normalize('NFC').toLowerCase() + '/'
+    return files.filter((x) => x.path.normalize('NFC').toLowerCase().startsWith(f)).length
   }
 
   /** Settings → Kinds: move a kind's pieces out of a doubled-plural folder, following the open document if it moves. */
@@ -1711,7 +1779,8 @@ export function App() {
   const current = files.find((f) => f.path === path)
   // A note in the Brain is a source (a book, a talk), not a piece of the writer's own: it's labelled as one.
   const sourceLabel = loaded && isBrainPath(loaded.path, brainFolder) ? TYPE_LABELS[typeOf(loaded.meta, loaded.path)] : null
-  const platform = (loaded?.meta.platform ?? current?.platform ?? 'essay').toLowerCase()
+  // A note's kind is its folder's; while a kind change is moving it, the kind chosen.
+  const platform = placing && loaded && placing.doc === docRef.current ? placing.kind : loaded ? kindOfDoc(loaded) : (current?.platform ?? UNFILED)
   const title = loaded ? (loaded.meta.title ?? current?.title ?? '') : ''
   const isNew = !!loaded && fresh === loaded.path
   // The one-time tip about help at the caret, until the writer dismisses it. It waits for a new draft
@@ -1913,7 +1982,7 @@ export function App() {
   const editorProps = useMemo(
     () => ({
       doc: () => docRef.current?.path ?? '',
-      platform: () => (docRef.current?.meta.platform ?? 'essay').toLowerCase(),
+      platform: () => kindOfDoc(docRef.current),
       title: () => docRef.current?.meta.title ?? '',
       provider: () => statusRef.current?.strong ?? null,
       ceiling: () => ceiling,
@@ -2090,12 +2159,23 @@ export function App() {
               ) : (
                 <>
                   <label className="platform">
-                    <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Kind of writing" disabled={loaded.readonly}>
-                      {(kinds().some((k) => k.id === platform) ? kinds().map((k) => k.id) : [...kinds().map((k) => k.id), platform]).map((p) => (
+                    {/* The kind is the folder: choosing one moves the piece there; Unfiled moves it to the top of the vault. */}
+                    <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Kind of writing" title="Kind of writing: the folder it's filed in" disabled={loaded.readonly}>
+                      <option value="">{platformLabel('')}</option>
+                      {(kinds().some((k) => k.id === platform) || !platform ? kinds().map((k) => k.id) : [...kinds().map((k) => k.id), platform]).map((p) => (
                         <option key={p} value={p}>
                           {platformLabel(p)}
                         </option>
                       ))}
+                      {suggestedKinds(kinds()).length > 0 && (
+                        <optgroup label="New kind (makes its folder)">
+                          {suggestedKinds(kinds()).map((k) => (
+                            <option key={k.id} value={k.id}>
+                              {k.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
                     <svg className="chevron" viewBox="0 0 12 12" aria-hidden="true">
                       <path d="M3.5 4.75 6 7.25l2.5-2.5" />
@@ -2296,7 +2376,7 @@ export function App() {
       {exporting && (
         <ExportSheet
           path={exporting}
-          kind={exportKind(files.find((f) => f.path === exporting)?.platform ?? (exporting === loaded?.path ? loaded.meta.platform : undefined))}
+          kind={exportKind(exporting === loaded?.path ? kindOfDoc(loaded) : files.find((f) => f.path === exporting)?.platform)}
           files={files}
           flush={flush}
           onSaved={refreshFiles}
@@ -2389,6 +2469,9 @@ export function App() {
           onChange={changeSettings}
           onClose={() => setSettingsOpen(false)}
           onRenameKindFolder={renameKindFolder}
+          onRenameKind={renameKind}
+          onRemoveKind={removeKind}
+          countIn={countIn}
           folders={folders}
           snippetNote={snippetNote}
         />
@@ -2452,15 +2535,15 @@ export function App() {
 
 const platformLabel = (p: string) => kindName(kinds(), p)
 
-/** Why a piece didn't move to its new kind's folder, after "It stays in": where it is, and the kind's folder. */
-const STAY_LABELS: Record<Exclude<PlaceStay, 'unknown-kind'>, (where: string, folder: string) => string> = {
+/** Why a piece didn't move to its new kind's folder, after "It stays in": where it is. */
+const STAY_LABELS: Record<Exclude<PlaceStay, 'unknown-kind'>, (where: string) => string> = {
   special: (where) => `${where}, which keeps its notes whatever their kind`,
   excluded: (where) => `${where}, a folder you've excluded`,
   brain: () => 'the Brain',
-  'target-special': (where, folder) => `${where}: its kind's folder, ${folder}, is one Ekdanta keeps apart`,
-  'target-excluded': (where, folder) => `${where}: its kind's folder, ${folder}, is excluded`,
-  'target-brain': (where, folder) => `${where}: its kind's folder, ${folder}, is the Brain's`,
 }
+
+/** What a move says: "Moved to essays/2024/", or for the top of the vault, that the note is Unfiled now. */
+const movedTo = (rel: string) => (rel.includes('/') ? `Moved to ${rel.slice(0, rel.lastIndexOf('/'))}/` : 'Moved to the top of the vault: it’s Unfiled now')
 
 const SAVE_LABEL: Record<SaveState, string> = { saved: 'Saved', saving: 'Saving…', unsaved: 'Edited', failed: 'Not saved', conflict: 'Not saved', gone: 'Not saved' }
 
@@ -2494,9 +2577,9 @@ function whenKept(at: number) {
 
 /** The kind an export starts from: a LinkedIn piece starts on Copy for LinkedIn. */
 function exportKind(platform: string | undefined) {
-  const id = (platform ?? 'essay').toLowerCase()
+  const id = (platform ?? '').toLowerCase()
   const k = findKind(kinds(), id)
-  return { id, name: k?.name ?? id }
+  return { id, name: k?.name ?? (id || 'Unfiled') }
 }
 
 /** The document title, edited in place. Return or ↓ moves on to the text. */
@@ -2570,14 +2653,19 @@ function focusText() {
   document.querySelector<HTMLElement>('.editor .pm, .editor .cm-content')?.focus()
 }
 
-/** On a new document: which kind it is. The folder's usual one is already chosen. Picking keeps the cursor where it was (the title). */
+/**
+ * On a new document: which kind it is, which is which folder it goes in. The folder it was made in has
+ * already chosen. With no kinds yet, the built-in ones are offered, and picking one makes its folder.
+ * Picking keeps the cursor where it was (the title).
+ */
 function PlatformPicker({ value, onPick }: { value: string; onPick: (p: string) => void }) {
+  const offered: Kind[] = kinds().length ? kinds() : suggestedKinds([])
   return (
     <div className="platform-picker" role="radiogroup" aria-label="Kind of writing">
       <span className="muted">For</span>
-      {kinds().map(({ id: p }) => (
+      {offered.map(({ id: p, name }) => (
         <button key={p} role="radio" aria-checked={p === value} tabIndex={-1} className={p === value ? 'is-on' : ''} onMouseDown={(e) => e.preventDefault()} onClick={() => onPick(p)}>
-          {platformLabel(p)}
+          {findKind(kinds(), p) ? platformLabel(p) : name}
         </button>
       ))}
     </div>

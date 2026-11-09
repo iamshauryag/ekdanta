@@ -185,6 +185,8 @@ test('below 5, creating never asks the model, and the drafts hold only the write
   assert.deepEqual(r.addedKinds, ['X post'])
   assert.ok(r.created[1].path.startsWith('x-posts/'))
   assert.equal(splitFrontMatter(await vault.readDoc(r.created[1].path)).meta.platform, 'x-post')
+  // The kind is its folder: the post is an X post because of where it is.
+  assert.equal((await vault.listFiles()).find((f) => f.path === r.created[1].path)?.platform, 'x-post')
   // The piece is untouched, to the byte and the mtime.
   assert.deepEqual(await sourceState(), before)
 })
@@ -259,7 +261,7 @@ test('the piece lists its posts, and they still find it after it is renamed or m
   files = await vault.listFiles()
   assert.equal(derivedFrom(files, renamed).length, derived.length)
   assert.ok(derivedFrom(files, renamed).every((f) => f.derivedFrom === '[[slow-writing]]'))
-  const moved = await vault.moveToFolder(DEFAULT_KINDS, renamed, 'archive')
+  const moved = (await vault.moveToFolder(renamed, 'archive')).path
   files = await vault.listFiles()
   assert.equal(derivedFrom(files, moved).length, derived.length)
 })

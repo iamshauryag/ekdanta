@@ -5,7 +5,7 @@
 //   -priya              not in documents that mention priya (works on any term or operator)
 //   /wr[io]te/          a regular expression
 //   path:essays         the file's path contains this
-//   kind:essay          the piece's kind (front-matter `platform`; a kind's name works too)
+//   kind:essay          the piece's kind, from its folder (a kind's name works too; kind:unfiled)
 //   tag:craft           a tag, in front matter or inline (#craft); tag:craft also finds craft/notes
 //   status:draft        front-matter `status` (a document without one is a draft)
 //
@@ -219,6 +219,8 @@ export interface MatchOptions {
   matchCase?: boolean
   /** The kind ids a kind: value stands for (a kind's name, say); the value itself if omitted. */
   kindIds?: (value: string) => string[]
+  /** A document's kind: its folder's (kindOfPath). Without it, front matter's `platform` is read. '' is Unfiled. */
+  kindOf?: (doc: SearchDoc) => string
 }
 
 export interface Matcher {
@@ -268,7 +270,7 @@ export function compile(q: Query, opts: MatchOptions = {}): Matcher {
       case 'path':
         return fold(doc.path).includes(v)
       case 'kind': {
-        const kind = fold(doc.meta.platform || 'essay')
+        const kind = fold(opts.kindOf ? opts.kindOf(doc) : doc.meta.platform || '')
         return kindIds(f.value).some((id) => fold(id) === kind)
       }
       case 'tag':

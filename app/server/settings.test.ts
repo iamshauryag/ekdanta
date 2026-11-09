@@ -1,4 +1,4 @@
-// Settings against a scratch vault: how a doubled-plural folder saved by an older version is settled.
+// Settings against a scratch vault: kinds saved by an older version, read back as they were.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
@@ -11,7 +11,7 @@ const { loadSettings } = await import('./settings.ts')
 
 test.after(() => fs.rm(root, { recursive: true, force: true }))
 
-test('doubled folders are put right only when that is safe', async () => {
+test('saved folders are kept as written: a kind is the folder on disk, so none is renamed behind the writer’s back', async () => {
   await fs.mkdir(path.join(root, '.ekdanta'), { recursive: true })
   await fs.writeFile(
     path.join(root, '.ekdanta/settings.json'),
@@ -27,14 +27,14 @@ test('doubled folders are put right only when that is safe', async () => {
   // yt-scriptses/ holds a piece, so nothing moves until the writer says so from Settings → Kinds.
   await fs.mkdir(path.join(root, 'yt-scriptses'), { recursive: true })
   await fs.writeFile(path.join(root, 'yt-scriptses/one.md'), '# one')
-  // captionses/ holds only a stray .DS_Store, so it is corrected without asking.
+  // captionses/ holds only a stray .DS_Store; it is still the folder there, so it stays the Captions kind’s.
   await fs.mkdir(path.join(root, 'captionses'), { recursive: true })
   await fs.writeFile(path.join(root, 'captionses/.DS_Store'), '')
-  // letterses/ would be corrected to letters/, but the Letter kind already files there.
+  // Settings → Kinds offers to rename a doubled folder (POST /api/kinds/rename-folder).
   const { kinds } = await loadSettings()
   assert.deepEqual(
     kinds.map((k) => `${k.id}:${k.folder}`),
-    ['yt-scripts:yt-scriptses', 'captions:captions', 'letter:letters', 'letters:letterses'],
+    ['yt-scripts:yt-scriptses', 'captions:captionses', 'letter:letters', 'letters:letterses'],
   )
   // Names read singular either way.
   assert.deepEqual(

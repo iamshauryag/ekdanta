@@ -108,7 +108,8 @@ export function buildNote(markdown: string, m: NoteMeta): string {
     imported: m.imported,
     source: m.source,
   }
-  if (meta.platform || m.platform) patch.platform = meta.platform || m.platform || null
+  // The kind chosen (its folder's) is what `platform` mirrors: a source's own value would only disagree with the folder.
+  if (meta.platform || m.platform) patch.platform = m.platform || null
   patch.status = meta.status || 'imported'
   // Labels join the tags the source already had, which stay exactly as written (only a plain
   // `tags: a b` becomes a list); a label it already has, in any case, isn't added twice.

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { api, type IndexState, type SparkCard, type SparkResult, type SparkSeed } from '../lib/api.ts'
-import { kindName, kinds } from '../lib/kinds.ts'
+import { kindName, offeredKinds } from '../lib/kinds.ts'
 
 interface Props {
   /**
@@ -197,8 +197,8 @@ export function SparksPage({ open, doc, docTitle, platform, ceiling, onOpenDoc, 
     })
   const moreLike = (card: SparkCard) => run({ kind: 'like', ids: card.sources.map((s) => s.id) }, card)
 
-  const allKinds = kinds()
-  const kindFor = (card: SparkCard) => startKind[card.key] ?? card.suits ?? (suits || (allKinds.some((k) => k.id === platform) ? platform : allKinds[0]?.id) || 'essay')
+  const allKinds = offeredKinds()
+  const kindFor = (card: SparkCard) => startKind[card.key] ?? card.suits ?? (suits || (allKinds.some((k) => k.id === platform) ? platform : allKinds[0]?.id) || '')
   const ready = !!seedNow()
   const tooFew = options !== null && options.docs < 2 && !running
   const spent = off && usedOnce

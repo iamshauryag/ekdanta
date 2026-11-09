@@ -754,7 +754,7 @@ test('a PDF imports as a note: detected by its bytes, metadata and labels in the
   assert.equal(item.title, 'Drafts')
   assert.equal(item.created, '2018-06-07')
   assert.match(await imp.preview(b.batch, item.id, undefined, ['essays', '#Drafts']), /^tags:\n {2}- essays\n {2}- Drafts$/m)
-  const done = await imp.commit(b.batch, item.id, { folder: 'imported', tags: ['essays', '#Drafts', 'essays'] })
+  const done = await imp.commit(b.batch, item.id, { tags: ['essays', '#Drafts', 'essays'] })
   assert.deepEqual(done.tags, ['essays', 'Drafts'])
   const text = await fs.readFile(path.join(root, done.imported!.path), 'utf8')
   assert.match(text, /^title: Drafts$/m)

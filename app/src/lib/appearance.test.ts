@@ -68,7 +68,12 @@ test('new notes go where the setting says', () => {
   const ctx = { currentFolder: 'notes', platform: 'linkedin', kinds: DEFAULT_KINDS }
   assert.equal(newNoteFolder({ newNotesIn: 'current', newNotesFolder: '' }, ctx), 'notes')
   assert.equal(newNoteFolder({ newNotesIn: 'kind', newNotesFolder: '' }, ctx), 'linkedin')
-  assert.equal(newNoteFolder({ newNotesIn: 'kind', newNotesFolder: '' }, { ...ctx, platform: 'unknown' }), 'essays')
+  // A kind the list doesn't have: where the writer is. An Unfiled piece's new note is Unfiled too (the top of the vault).
+  assert.equal(newNoteFolder({ newNotesIn: 'kind', newNotesFolder: '' }, { ...ctx, platform: 'unknown' }), 'notes')
+  assert.equal(newNoteFolder({ newNotesIn: 'kind', newNotesFolder: '' }, { ...ctx, platform: '' }), '')
+  // Nothing open: the first kind's folder, or the top of the vault in a vault with no kinds yet.
+  assert.equal(newNoteFolder({ newNotesIn: 'kind', newNotesFolder: '' }, { ...ctx, platform: undefined }), 'essays')
+  assert.equal(newNoteFolder({ newNotesIn: 'kind', newNotesFolder: '' }, { ...ctx, platform: undefined, kinds: [] }), '')
   assert.equal(newNoteFolder({ newNotesIn: 'fixed', newNotesFolder: 'drafts/' }, ctx), 'drafts')
   assert.equal(newNoteFolder({ newNotesIn: 'fixed', newNotesFolder: '' }, ctx), '')
 })

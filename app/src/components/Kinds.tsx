@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.ts'
-import { DEFAULT_KINDS, doubledFolder, kindTaken, nameTakenBy, newKind, type Kind, type KindDoc } from '../lib/kinds.ts'
-import { isSpecialPath } from '../lib/special.ts'
+import { doubledFolder, folderForName, kindTaken, nameTakenBy, newKind, notesMove, suggestedKinds, type Kind, type KindDoc } from '../lib/kinds.ts'
 import type { TemplateInfo } from '../lib/templates.ts'
 import { PAPER, STYLES, type DocStyle, type Paper } from '../lib/docstyle.ts'
 import { parseTarget } from '../lib/targets.ts'
@@ -19,10 +18,16 @@ interface Props {
   onChange: (kinds: Kind[]) => void
   /** Move a kind's pieces out of a doubled-plural folder (yt-scriptses/) into its proper one. */
   onRenameFolder?: (id: string) => Promise<void>
+  /** Rename a kind, and so its folder (its notes move with it). */
+  onRename?: (id: string, name: string) => Promise<void>
+  /** Remove a kind, and so its folder: refused unless the folder is empty. */
+  onRemove?: (id: string) => Promise<void>
+  /** How many notes a folder holds, for saying what a rename moves. */
+  countIn?: (folder: string) => number
 }
 
 /** Settings · Kinds: the kinds of writing, each with its folder, typical length and how it should read. */
-export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
+export function Kinds({ kinds, onChange, onRenameFolder, onRename, onRemove, countIn }: Props) {
   const [draft, setDraft] = useState('')
   // The singular the writer chose themselves, when the one worked out from the name isn't right.
   const [named, setNamed] = useState<string | null>(null)
@@ -30,7 +35,10 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [docFor, setDocFor] = useState<string | null>(null)
   // A rename that would collide with another kind: the old name stays, and this says why.
-  const [renameClash, setRenameClash] = useState<{ id: string; name: string } | null>(null)
+  const [renameClash, setRenameClash] = useState<{ id: string; name: string; error?: string } | null>(null)
+  // A rename waiting for the writer's yes: it moves the kind's folder, and every note in it.
+  const [asking, setAsking] = useState<{ kind: Kind; name: string; folder: string } | null>(null)
+  const [removeRefused, setRemoveRefused] = useState<{ id: string; message: string } | null>(null)
   const [templates, setTemplates] = useState<TemplateInfo[] | null>(null)
   const [seeded, setSeeded] = useState<string | null>(null)
   useEffect(() => {
@@ -45,7 +53,7 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
     setTemplates(await api.templates())
     window.dispatchEvent(new Event('ekdanta:templates'))
   }
-  const missing = DEFAULT_KINDS.filter((d) => !kinds.some((k) => k.id === d.id))
+  const missing = suggestedKinds(kinds)
 
   // What Add would make, or why it can't: the same rules as newKind, shown before the writer commits.
   const typed = draft.trim()
@@ -72,7 +80,18 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
       return
     }
     setRenameClash(null)
-    edit(kind.id, { name: next })
+    if (!onRename) return edit(kind.id, { name: next })
+    // A kind is its folder, so the folder is renamed too, notes and all: the box keeps the saved name, and the writer is asked first.
+    box.value = kind.name
+    const folder = folderForName(next, kind.folder)
+    if (folder === kind.folder) return void onRename(kind.id, next).catch((e: Error) => setRenameClash({ id: kind.id, name: '', error: e.message }))
+    setAsking({ kind, name: next, folder })
+  }
+  const confirmRename = () => {
+    if (!asking || !onRename) return
+    const { kind, name } = asking
+    setAsking(null)
+    onRename(kind.id, name).catch((e: Error) => setRenameClash({ id: kind.id, name: '', error: e.message }))
   }
   const type = (value: string) => {
     setDraft(value)
@@ -89,8 +108,16 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
     commit()
   }
   const remove = (kind: Kind) => {
-    setRemoved({ kind, at: kinds.indexOf(kind) })
-    onChange(kinds.filter((k) => k !== kind))
+    setRemoveRefused(null)
+    const at = kinds.indexOf(kind)
+    if (!onRemove) {
+      setRemoved({ kind, at })
+      return onChange(kinds.filter((k) => k !== kind))
+    }
+    onRemove(kind.id).then(
+      () => setRemoved({ kind, at }),
+      (e: Error) => setRemoveRefused({ id: kind.id, message: e.message }),
+    )
   }
   const undo = () => {
     if (!removed) return
@@ -149,15 +176,15 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
                     }}
                   />
                 )}{' '}
-                · new pieces go in <code>{made.folder}/</code>
+                · makes the folder <code>{made.folder}/</code>
               </>
             )
           )}
         </p>
       )}
-      {removed && (
+      {removed && !kinds.some((k) => k.id === removed.kind.id) && (
         <p className="sheet-note kind-removed">
-          Removed {removed.kind.name}. Its pieces keep their kind, and come back with it if you add it again.{' '}
+          Removed {removed.kind.name} and its empty folder, <code>{removed.kind.folder}/</code>. Its settings are kept, for if you add it again.{' '}
           <button className="link-btn" onClick={undo}>
             Undo
           </button>
@@ -208,14 +235,31 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
                 <button className="icon-btn small" title="Move down" aria-label={`Move ${k.name} down`} disabled={i === kinds.length - 1} onClick={() => move(i, 1)}>
                   ↓
                 </button>
-                <button className="icon-btn small" title="Remove" aria-label={`Remove ${k.name}`} disabled={kinds.length === 1} onClick={() => remove(k)}>
+                <button className="icon-btn small" title="Remove (only when its folder is empty)" aria-label={`Remove ${k.name}`} onClick={() => remove(k)}>
                   ✕
                 </button>
               </span>
             </div>
+            {asking?.kind.id === k.id && (
+              <p className="sheet-note kind-rename-ask" role="alertdialog" aria-label={`Rename ${k.name}`}>
+                Rename the <code>{k.folder}/</code> folder to <code>{asking.folder}/</code>? {notesMove(countIn?.(k.folder))}{' '}
+                <button className="link-btn" onClick={confirmRename}>
+                  Rename
+                </button>{' '}
+                ·{' '}
+                <button className="link-btn" onClick={() => setAsking(null)}>
+                  Keep {k.name}
+                </button>
+              </p>
+            )}
+            {removeRefused?.id === k.id && (
+              <p className="sheet-note kind-name-taken" role="status">
+                {removeRefused.message}
+              </p>
+            )}
             {renameClash?.id === k.id && (
               <p className="sheet-note kind-name-taken" id={`kind-taken-${k.id}`} role="status">
-                You already have {renameClash.name}, so this kept its name.
+                {renameClash.error ?? `You already have ${renameClash.name}, so this kept its name.`}
               </p>
             )}
             <textarea
@@ -228,8 +272,7 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
               onBlur={(e) => e.target.value.trim() !== k.guidance && edit(k.id, { guidance: e.target.value.trim() })}
             />
             <small className="kind-folder">
-              New pieces go in <code>{k.folder}/</code>
-              {isSpecialPath(k.folder) && <>, a folder Recall and voice leave out (pieces you star still shape your voice)</>}
+              Its folder: <code>{k.folder}/</code>
               {!!templates?.length && <TemplateSelect kind={k} templates={templates} onChange={(template) => edit(k.id, { template })} />}
             </small>
             {docFor === k.id ? (
@@ -255,9 +298,17 @@ export function Kinds({ kinds, onChange, onRenameFolder }: Props) {
         </button>
       )}
       {missing.length > 0 && (
-        <button className="link-btn" onClick={() => onChange([...kinds, ...missing])}>
-          Bring back {missing.map((m) => m.name).join(', ')}
-        </button>
+        <p className="sheet-note kind-suggestions">
+          Add:{' '}
+          {missing.map((m, i) => (
+            <span key={m.id}>
+              {i > 0 && ' · '}
+              <button className="link-btn" title={`Makes the folder ${m.folder}/`} onClick={() => onChange([...kinds, m])}>
+                {m.name}
+              </button>
+            </span>
+          ))}
+        </p>
       )}
 
       <h3>Templates</h3>

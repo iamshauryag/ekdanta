@@ -125,9 +125,9 @@ test('rename, trash and restore carry every registered sidecar, the write record
 
 test('special folders stay put when their kind changes', async () => {
   await vault.writeDoc('templates/post.md', '---\nplatform: linkedin\n---\n\n*Prompt: Hook*')
-  assert.equal(await vault.placeDoc(DEFAULT_KINDS, 'templates/post.md'), 'templates/post.md')
+  assert.equal(await vault.placeDoc(DEFAULT_KINDS, 'templates/post.md', 'linkedin'), 'templates/post.md')
   await vault.writeDoc('loose.md', '---\nplatform: linkedin\n---\n\nText')
-  assert.equal(await vault.placeDoc(DEFAULT_KINDS, 'loose.md'), 'linkedin/loose.md')
+  assert.equal(await vault.placeDoc(DEFAULT_KINDS, 'loose.md', 'linkedin'), 'linkedin/loose.md')
 })
 
 test('discarding an empty untitled draft takes its sidecars with it', async () => {
@@ -380,16 +380,16 @@ test('clearHistory empties the log, and a document without one is fine', async (
   await assert.rejects(vault.clearHistory('../x.md'), /outside/)
 })
 
-test('a page whose front matter cannot be rewritten is not renamed, copied or filed as a kind', async () => {
+test('a page whose front matter cannot be rewritten is not renamed or copied, and moves without it being touched', async () => {
   const content = '---\nmeta:\n  nested: true\ntitle: Odd\n---\n\nBody\n'
   await fs.mkdir(path.join(root, 'odd'), { recursive: true })
   await fs.writeFile(path.join(root, 'odd/odd.md'), content)
   await assert.rejects(vault.renameDoc('odd/odd.md', 'Even'), (e: Error & { status?: number }) => e.status === 409 && /Can't rename “Odd”/.test(e.message))
   await assert.rejects(vault.duplicateDoc('odd/odd.md'), /Can't duplicate/)
-  const kind = DEFAULT_KINDS[0]
-  await assert.rejects(vault.moveToFolder(DEFAULT_KINDS, 'odd/odd.md', kind.folder), /Can't move/)
-  assert.equal(await fs.readFile(path.join(root, 'odd/odd.md'), 'utf8'), content, 'the file is untouched')
-  // A folder that isn't a kind's needs no front-matter change, so the page can go there.
-  assert.equal(await vault.moveToFolder(DEFAULT_KINDS, 'odd/odd.md', 'elsewhere'), 'elsewhere/odd.md')
+  // Its kind is its folder, so it can still move: front matter, which only mirrors the kind, is left as it is.
+  assert.equal((await vault.moveToFolder('odd/odd.md', 'essays')).path, 'essays/odd.md')
+  assert.equal(await fs.readFile(path.join(root, 'essays/odd.md'), 'utf8'), content, 'the file is untouched')
+  assert.equal((await vault.listFiles()).find((f) => f.path === 'essays/odd.md')?.platform, 'essay')
+  assert.equal((await vault.moveToFolder('essays/odd.md', 'elsewhere')).path, 'elsewhere/odd.md')
   assert.equal(await fs.readFile(path.join(root, 'elsewhere/odd.md'), 'utf8'), content)
 })

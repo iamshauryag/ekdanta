@@ -100,7 +100,13 @@ test('filters: path, kind (with names), tag (with children), status (draft by de
   assert.ok(!run('path:essays', email))
   assert.ok(run('kind:essay', essay))
   assert.ok(!run('kind:essay', email))
-  assert.ok(run('kind:essay', bare)) // no platform reads as an essay, as the app shows it
+  assert.ok(!run('kind:essay', bare)) // no kind is never a pretend essay
+  // The kind is the folder's when the server says so: front matter that disagrees doesn't count.
+  const byFolder = (q: string, d: SearchDoc, kindIds?: (v: string) => string[]) => compile(parseQuery(q), { kindIds, kindOf: (x) => (x.path.startsWith('essays/') ? 'essay' : '') }).matches(d)
+  const stray = doc({ path: 'essays/odd.md', meta: { platform: 'email' } })
+  assert.ok(byFolder('kind:essay', stray))
+  assert.ok(!byFolder('kind:email', stray))
+  assert.ok(byFolder('kind:unfiled', bare, (v) => (v === 'unfiled' ? [''] : [v])))
   assert.ok(run('kind:essay kind:email', email)) // one key's values are alternatives
   assert.ok(run('kind:Mail', email, (v) => (v.toLowerCase() === 'mail' ? ['email'] : [v])))
   assert.ok(run('tag:craft', essay)) // nested tag

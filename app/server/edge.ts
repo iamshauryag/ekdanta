@@ -1,7 +1,7 @@
 // Edge lines: a subject, title, excerpt or opening line, drawn from the writer's own sentences.
 // The model proposes; the code guards in src/lib/edge.ts decide what the writer sees.
-import { settingsNow } from './settings.ts'
 import { describeKind } from '../src/lib/kinds.ts'
+import { vaultKinds } from './kinds.ts'
 import { EDGE_LIMITS, MIN_SENTENCES, NOTHING_FITS, NO_MORE, TOO_SHORT, guardCandidates, sentencesOf, type EdgeCandidate, type EdgeSlot } from '../src/lib/edge.ts'
 
 export interface EdgeRequest {
@@ -41,6 +41,7 @@ export function fakeCandidates(text: string): EdgeCandidate[] {
 }
 
 export async function runEdge(req: EdgeRequest): Promise<EdgeResponse> {
+  const kinds = await vaultKinds()
   const slot = SLOTS.includes(req.slot) ? req.slot : 'title'
   const text = String(req.text ?? '').slice(0, 12000)
   if (sentencesOf(text).length < MIN_SENTENCES) return { kind: 'empty', message: TOO_SHORT }
@@ -61,7 +62,7 @@ export async function runEdge(req: EdgeRequest): Promise<EdgeResponse> {
 Propose 5 candidates for ${WHAT[slot]} for the writer's draft, at most ${EDGE_LIMITS[slot]} characters each.
 Draw every candidate from ONE sentence of the draft: lift it, shorten it, or lightly reword it, keeping the writer's own words and voice.
 Never add a fact, number, name, product or claim that is not in the draft. No clickbait, no hype words, no emoji, no hashtags.
-The piece is ${describeKind(settingsNow().kinds, req.kind)}.
+The piece is ${describeKind(kinds, req.kind)}.
 Return JSON: {"candidates": [{"text": "...", "source": "the exact sentence from the draft, copied character for character"}]}`
   let candidates: EdgeCandidate[] = []
   const avoid = [...(req.avoid ?? [])]

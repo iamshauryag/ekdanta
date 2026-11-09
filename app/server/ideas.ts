@@ -7,11 +7,12 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { joinDoc, patchFrontMatter, splitFrontMatter } from '../src/lib/frontmatter.ts'
 import { findKind, kindName, type Kind } from '../src/lib/kinds.ts'
+import { kindFor, vaultKinds } from './kinds.ts'
 import { IDEAS_FILE, isSpecialFile } from '../src/lib/special.ts'
 import { writeBrief } from './brief.ts'
 import { HttpError } from './net.ts'
 import { seedThinking } from './thinking.ts'
-import { META_DIR, atomicWrite, createDoc, listFiles, nameDoc, placeDoc, readDoc, resolveInVault, writeDoc } from './vault.ts'
+import { META_DIR, atomicWrite, createDoc, listFiles, nameDoc, readDoc, resolveInVault, writeDoc } from './vault.ts'
 
 export { IDEAS_FILE }
 
@@ -463,27 +464,30 @@ export async function liveSources(sources: IdeaSource[]) {
 }
 
 /**
- * Start a piece of the given kind from an idea: a new draft filed with that kind, its template's body
+ * Start a piece of the given kind from an idea: a new draft in that kind's folder (made now for a
+ * suggested kind; '' starts it Unfiled, at the top of the vault), its template's body
  * if the kind has one, and a pinned brief from the idea. A plain captured idea also sits at the top as
  * a faded prompt; one the partner proposed names the piece instead. Whatever the idea came from (its
  * sources, or the notes it links to) waits in the piece's Thinking Space, quoted with chips that open
  * them. `from-idea` in its front matter is how the Ideas page knows it was started.
  */
-export async function startIdeaPiece(kinds: Kind[], text: string, kindId: string): Promise<{ path: string; seeded: boolean; missing: number; warning?: string }> {
+export async function startIdeaPiece(text: string, kindId: string): Promise<{ path: string; seeded: boolean; missing: number; warning?: string }> {
   // The idea exactly as the list keys it, so its row shows Started (a cleaned copy could differ).
   const idea = ideaKey(text)
   if (!idea) throw new HttpError(400, 'No idea to start from')
-  const kind = findKind(kinds, kindId)
-  if (!kind) throw new HttpError(400, 'Unknown kind of writing')
+  // A suggestion (LinkedIn post, say) or a kind the writer had before gets its folder now; '' is Unfiled.
+  const kind = kindId ? await kindFor(kindId) : undefined
+  if (kindId && !kind) throw new HttpError(400, 'Unknown kind of writing')
+  const kinds = await vaultKinds()
   const detail = (await readState()).partner[idea]
   const sources = detail ? detail.sources : wikiLinks(idea).map((name) => ({ doc: name, title: name }))
   const { found, missing } = await liveSources(sources)
 
-  const rel = await createDoc(kinds, '', kind.id)
+  const rel = await createDoc(kinds, '', { kind: kind?.id })
   const fm = splitFrontMatter(await readDoc(rel))
   const { meta, body } = fm
   let template = ''
-  if (kind.template) {
+  if (kind?.template) {
     const tpl = await readDoc(kind.template).catch(() => null)
     if (tpl !== null) template = templateBody(tpl, { date: meta.created ?? '', kind: kindName(kinds, kind.id) })
   }
@@ -491,7 +495,7 @@ export async function startIdeaPiece(kinds: Kind[], text: string, kindId: string
   const patch: Record<string, string> = { 'from-idea': idea, ...(detail ? { title: detail.title } : {}) }
   await writeDoc(rel, joinDoc({ ...patchFrontMatter(fm, patch), body: next }), { reason: 'create' })
   const named = detail ? await nameDoc(rel, detail.title) : rel
-  const placed = await placeDoc(kinds, named)
+  const placed = named
 
   // The draft exists now: whatever fails from here is reported with it, never as an error without it.
   const failed: string[] = []
@@ -517,4 +521,4 @@ export async function startIdeaPiece(kinds: Kind[], text: string, kindId: string
 }
 
 /** Start a piece from an idea, and say only where it is (see startIdeaPiece). */
-export const startIdea = async (kinds: Kind[], text: string, kindId: string): Promise<string> => (await startIdeaPiece(kinds, text, kindId)).path
+export const startIdea = async (text: string, kindId: string): Promise<string> => (await startIdeaPiece(text, kindId)).path

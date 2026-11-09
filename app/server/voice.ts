@@ -10,6 +10,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { META_DIR, listFiles, readDoc, splitFrontMatter, type FileEntry } from './vault.ts'
 import { loadSettings } from './settings.ts'
+import { vaultKinds } from './kinds.ts'
 import { KIND_ID, kindName } from '../src/lib/kinds.ts'
 import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 import { isBrainPath } from '../src/lib/brain.ts'
@@ -43,7 +44,8 @@ export interface VoiceSummary {
   exemplars: number
 }
 
-const platformOf = (f: FileEntry) => (f.platform ?? 'essay').normalize('NFC').toLowerCase()
+// A note's kind, from its folder (listFiles); an Unfiled note has none, and no voice profile.
+const platformOf = (f: FileEntry) => (f.platform ?? '').normalize('NFC').toLowerCase()
 const file = (platform: string) => {
   if (!KIND_ID.test(platform)) throw new Error('Unknown platform')
   return path.join(DIR, `${platform}.md`)
@@ -147,7 +149,8 @@ export async function writeProfile(platform: string, content: string) {
 export async function summaries(): Promise<VoiceSummary[]> {
   const files = await listFiles()
   const out: VoiceSummary[] = []
-  const { kinds, excludedFolders, brainFolder } = await loadSettings()
+  const { excludedFolders, brainFolder } = await loadSettings()
+  const kinds = await vaultKinds()
   for (const { id: platform } of kinds) {
     const sources = sourcesFor(files, platform, excludedFolders, brainFolder)
     if (!sources.length) continue
@@ -180,7 +183,8 @@ interface Trait {
 /** Propose a new profile. Nothing is written: the writer reviews it as a diff first. */
 export async function buildProfile(platform: string): Promise<string> {
   const files = await listFiles()
-  const { kinds, excludedFolders, brainFolder } = await loadSettings()
+  const { excludedFolders, brainFolder } = await loadSettings()
+  const kinds = await vaultKinds()
   const sources = sourcesFor(files, platform, excludedFolders, brainFolder)
   const name = kindName(kinds, platform)
   if (!sources.length) throw new Error(`No ${name} pieces to learn from yet`)
@@ -254,7 +258,9 @@ function yourRules(existing: string | null) {
 
 /** The profile as instructions for a help request: traits without their examples, plus the writer's rules. */
 export async function voiceForPrompt(platform?: string): Promise<string> {
-  const profile = await readProfile((platform ?? 'essay').toLowerCase()).catch(() => null)
+  // An Unfiled note has no kind, so no profile: its help follows the general guidance.
+  if (!platform) return ''
+  const profile = await readProfile(platform.toLowerCase()).catch(() => null)
   if (!profile) return ''
   const { body } = splitFrontMatter(profile)
   const lines = body
@@ -275,6 +281,7 @@ export async function voiceEvidence(
   opts: { exclude?: string; budget?: number; max?: number } = {},
 ): Promise<{ profile: string | null; pieces: { path: string; title: string; exemplar: boolean; text: string }[]; all: string[]; count: number }> {
   const id = platform.normalize('NFC').toLowerCase()
+  if (!id) return { profile: null, pieces: [], all: [], count: 0 }
   const files = await listFiles()
   const { excludedFolders, brainFolder } = await loadSettings()
   const sources = sampleSources(files, id, excludedFolders, brainFolder, opts.max ?? 8, opts.exclude)

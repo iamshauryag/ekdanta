@@ -1,4 +1,5 @@
-// Filing a piece by its kind: where a kind change moves it, what stays put, and what follows it.
+// Filing a piece by its kind: a kind is a top-level folder, so a kind change moves the note into it
+// (or to the top of the vault, for Unfiled), what stays put, what follows it, and undo.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { promises as fs } from 'node:fs'
@@ -10,6 +11,7 @@ process.env.EKDANTA_VAULT = root
 const vault = await import('./vault.ts')
 const { editDocTags } = await import('./tags.ts')
 const { DEFAULT_KINDS } = await import('../src/lib/kinds.ts')
+const { vaultKinds } = await import('./kinds.ts')
 const kinds = DEFAULT_KINDS
 const read = (rel: string) => fs.readFile(path.join(root, rel), 'utf8')
 const exists = (rel: string) =>
@@ -25,44 +27,63 @@ test('a note in a folder of the writer’s own moves to its new kind’s folder'
   // The sample vault's notes/ holds `platform: note` pages: notes/ is no kind's folder.
   await vault.writeDoc('notes/on-craft.md', doc('essay'))
   await vault.appendHistory('notes/on-craft.md', { level: 1 })
-  assert.deepEqual(await vault.fileByKind(kinds, 'notes/on-craft.md'), { path: 'essays/on-craft.md' })
+  assert.deepEqual(await vault.fileByKind(kinds, 'notes/on-craft.md', 'essay'), { path: 'essays/on-craft.md' })
   assert.equal(await exists('notes/on-craft.md'), false)
   assert.deepEqual(await vault.readHistory('essays/on-craft.md'), [{ level: 1 }], 'its sidecars follow')
 })
 
 test('a note already in its kind’s folder stays, at any depth', async () => {
   await vault.writeDoc('essays/2024/old.md', doc('essay'))
-  assert.deepEqual(await vault.fileByKind(kinds, 'essays/2024/old.md'), { path: 'essays/2024/old.md' })
+  assert.deepEqual(await vault.fileByKind(kinds, 'essays/2024/old.md', 'essay'), { path: 'essays/2024/old.md' })
   // Nested in another kind's folder, it moves to the top of its own.
-  await vault.writeDoc('essays/2024/post.md', doc('linkedin'))
-  assert.equal(await vault.placeDoc(kinds, 'essays/2024/post.md'), 'linkedin/post.md')
+  await vault.writeDoc('essays/2024/post.md', doc('essay'))
+  assert.equal(await vault.placeDoc(kinds, 'essays/2024/post.md', 'linkedin'), 'linkedin/post.md')
+  assert.match(await read('linkedin/post.md'), /^platform: linkedin$/m, 'front matter mirrors the new kind')
 })
 
 test('a name already taken in the kind’s folder gets -2, and nothing is overwritten', async () => {
   await vault.writeDoc('emails/hello.md', doc('email', 'First\n'))
   await vault.writeDoc('drafts/hello.md', doc('email', 'Second\n'))
-  assert.equal(await vault.placeDoc(kinds, 'drafts/hello.md'), 'emails/hello-2.md')
+  assert.equal(await vault.placeDoc(kinds, 'drafts/hello.md', 'email'), 'emails/hello-2.md')
   assert.match(await read('emails/hello.md'), /First/)
   assert.match(await read('emails/hello-2.md'), /Second/)
 })
 
 test('special folders, excluded folders and the Brain keep their notes, and say why', async () => {
   await vault.writeDoc('templates/t.md', doc('linkedin'))
-  assert.deepEqual(await vault.fileByKind(kinds, 'templates/t.md'), { path: 'templates/t.md', stay: 'special' })
+  assert.deepEqual(await vault.fileByKind(kinds, 'templates/t.md', 'essay'), { path: 'templates/t.md', stay: 'special' })
+  assert.match(await read('templates/t.md'), /^platform: essay$/m, 'a template says which kind it is for')
   await vault.writeDoc('archive/2019/a.md', doc('linkedin'))
-  assert.deepEqual(await vault.fileByKind(kinds, 'archive/2019/a.md', { excluded: ['archive'] }), { path: 'archive/2019/a.md', stay: 'excluded' })
+  assert.deepEqual(await vault.fileByKind(kinds, 'archive/2019/a.md', 'essay', { excluded: ['archive'] }), { path: 'archive/2019/a.md', stay: 'excluded' })
   await vault.writeDoc('library/books/b.md', doc('essay'))
-  assert.deepEqual(await vault.fileByKind(kinds, 'library/books/b.md', { brain: 'library' }), { path: 'library/books/b.md', stay: 'brain' })
+  assert.deepEqual(await vault.fileByKind(kinds, 'library/books/b.md', 'linkedin', { brain: 'library' }), { path: 'library/books/b.md', stay: 'brain' })
   await vault.writeDoc('drafts/odd.md', doc('note'))
-  assert.deepEqual(await vault.fileByKind(kinds, 'drafts/odd.md'), { path: 'drafts/odd.md', stay: 'unknown-kind' })
+  assert.deepEqual(await vault.fileByKind(kinds, 'drafts/odd.md', 'no-such-kind'), { path: 'drafts/odd.md', stay: 'unknown-kind' })
+  // The app's own folders are set apart too: ideas/ (Sparks), attachments/.
+  await vault.writeDoc('ideas/sparks.md', '- a spark\n')
+  assert.deepEqual(await vault.fileByKind(kinds, 'ideas/sparks.md', 'essay'), { path: 'ideas/sparks.md', stay: 'special' })
 })
 
 test('the kind’s folder is the one already in the vault, whatever its case', async () => {
   await fs.mkdir(path.join(root, 'Texts'), { recursive: true })
-  await vault.writeDoc('drafts/sms.md', doc('text'))
-  assert.equal(await vault.placeDoc(kinds, 'drafts/sms.md'), 'Texts/sms.md')
+  await vault.writeDoc('drafts/sms.md', doc('essay'))
+  const vk = await vaultKinds()
+  assert.equal(vk.find((k) => k.id === 'text')?.folder, 'Texts', 'the saved Text message kind is the Texts folder')
+  assert.equal(await vault.placeDoc(vk, 'drafts/sms.md', 'text'), 'Texts/sms.md')
   // And a note in it counts as home, so a case-only move never happens.
-  assert.equal(await vault.placeDoc(kinds, 'Texts/sms.md'), 'Texts/sms.md')
+  assert.equal(await vault.placeDoc(vk, 'Texts/sms.md', 'text'), 'Texts/sms.md')
+})
+
+test('Unfiled moves a note to the top of the vault, and takes the kind out of its front matter', async () => {
+  await vault.writeDoc('linkedin/loose-end.md', doc('linkedin'))
+  const placed = await vault.fileByKind(kinds, 'linkedin/loose-end.md', '', { was: 'linkedin' })
+  assert.equal(placed.path, 'loose-end.md')
+  assert.doesNotMatch(await read('loose-end.md'), /platform/)
+  assert.equal((await vault.listFiles()).find((f) => f.path === 'loose-end.md')?.platform, undefined, 'it is Unfiled')
+  // Already at the top: nothing moves.
+  assert.deepEqual(await vault.fileByKind(kinds, 'loose-end.md', ''), { path: 'loose-end.md' })
+  assert.equal(await vault.unfileDoc(placed.undo!), 'linkedin/loose-end.md')
+  assert.match(await read('linkedin/loose-end.md'), /^platform: linkedin$/m)
 })
 
 test('pictures and relative links still work from the new folder, and links by path follow', async () => {
@@ -71,12 +92,12 @@ test('pictures and relative links still work from the new folder, and links by p
   await vault.writeDoc('loose.md', doc('blog', '![a](attachments/a.png) and [b](drafts/odd.md#top "B") `![c](attachments/c.png)` [w](https://x.y/a.png) [h](#here)\n'))
   await vault.writeDoc('drafts/refs.md', '[[loose]] and [[loose|the loose one]] and [[blog/other]]\n')
   await vault.writeDoc('drafts/path-refs.md', 'See [[deep/er/nested]].\n')
-  assert.equal(await vault.placeDoc(kinds, 'loose.md'), 'blog/loose.md')
+  assert.equal(await vault.placeDoc(kinds, 'loose.md', 'blog'), 'blog/loose.md')
   assert.equal((await read('blog/loose.md')).split('\n\n')[1], '![a](../attachments/a.png) and [b](../drafts/odd.md#top "B") `![c](attachments/c.png)` [w](https://x.y/a.png) [h](#here)\n')
   assert.equal(await read('drafts/refs.md'), '[[loose]] and [[loose|the loose one]] and [[blog/other]]\n', 'links by name still find it')
 
   await vault.writeDoc('deep/er/nested.md', doc('blog', '![a](../../attachments/a.png)\n'))
-  assert.equal(await vault.placeDoc(kinds, 'deep/er/nested.md'), 'blog/nested.md')
+  assert.equal(await vault.placeDoc(kinds, 'deep/er/nested.md', 'blog'), 'blog/nested.md')
   assert.match(await read('blog/nested.md'), /!\[a\]\(\.\.\/attachments\/a\.png\)/)
   assert.equal(await read('drafts/path-refs.md'), 'See [[blog/nested]].\n')
 })
@@ -85,7 +106,7 @@ test('a move that had to rename a page leaves links by name to the page that kep
   await vault.writeDoc('scripts/intro.md', doc('youtube-script', 'Kept\n'))
   await vault.writeDoc('drafts/intro.md', doc('youtube-script', 'Moved\n'))
   await vault.writeDoc('drafts/intro-refs.md', '[[intro]] and [[drafts/intro]]\n')
-  assert.equal(await vault.placeDoc(kinds, 'drafts/intro.md'), 'scripts/intro-2.md')
+  assert.equal(await vault.placeDoc(kinds, 'drafts/intro.md', 'youtube-script'), 'scripts/intro-2.md')
   assert.equal(await read('drafts/intro-refs.md'), '[[intro]] and [[scripts/intro-2]]\n')
 })
 
@@ -149,7 +170,7 @@ test('undo tokens are random, and only the latest are kept', async () => {
   const tokens: string[] = []
   for (let i = 0; i < 52; i++) {
     await vault.writeDoc(`many/n${i}.md`, doc('essay'))
-    tokens.push((await vault.fileByKind(kinds, `many/n${i}.md`, { was: 'note' })).undo!)
+    tokens.push((await vault.fileByKind(kinds, `many/n${i}.md`, 'essay', { was: 'note' })).undo!)
   }
   assert.equal(new Set(tokens).size, tokens.length)
   assert.match(tokens[0], /^[A-Za-z0-9_-]{24}$/)
@@ -157,23 +178,9 @@ test('undo tokens are random, and only the latest are kept', async () => {
   assert.equal(await vault.unfileDoc(tokens[51]), 'many/n51.md')
 })
 
-test('a kind whose folder is set apart leaves the note where it is, and says so', async () => {
-  const hidden = [
-    { id: 'tpl', name: 'Template', folder: 'templates', guidance: '', words: 100 },
-    { id: 'old', name: 'Old', folder: 'archive', guidance: '', words: 100 },
-    { id: 'src', name: 'Source', folder: 'library', guidance: '', words: 100 },
-  ]
-  await vault.writeDoc('drafts/apart.md', doc('tpl'))
-  assert.deepEqual(await vault.fileByKind(hidden, 'drafts/apart.md'), { path: 'drafts/apart.md', stay: 'target-special', folder: 'templates' })
-  await vault.writeDoc('drafts/apart.md', doc('old'))
-  assert.deepEqual(await vault.fileByKind(hidden, 'drafts/apart.md', { excluded: ['archive'] }), { path: 'drafts/apart.md', stay: 'target-excluded', folder: 'archive' })
-  await vault.writeDoc('drafts/apart.md', doc('src'))
-  assert.deepEqual(await vault.fileByKind(hidden, 'drafts/apart.md', { brain: 'library' }), { path: 'drafts/apart.md', stay: 'target-brain', folder: 'library' })
-})
-
 test('undo puts the kind and the place back, by the token the move gave', async () => {
   await vault.writeDoc('ideas-folder/piece.md', doc('essay'))
-  const placed = await vault.fileByKind(kinds, 'ideas-folder/piece.md', { was: 'note' })
+  const placed = await vault.fileByKind(kinds, 'ideas-folder/piece.md', 'essay', { was: 'note' })
   assert.equal(placed.path, 'essays/piece.md')
   assert.ok(placed.undo)
   await vault.writeDoc('essays/piece.md', doc('essay', 'Edited after the move\n')) // edits don't stop an undo
@@ -182,7 +189,7 @@ test('undo puts the kind and the place back, by the token the move gave', async 
   await assert.rejects(vault.unfileDoc(placed.undo!), (e: Error & { status?: number }) => e.status === 409, 'a token is used once')
   // A kind that wasn't set before is taken away again.
   await vault.writeDoc('ideas-folder/bare.md', '---\ntitle: Bare\nplatform: essay\n---\n\nText\n')
-  const bare = await vault.fileByKind(kinds, 'ideas-folder/bare.md', { was: '' })
+  const bare = await vault.fileByKind(kinds, 'ideas-folder/bare.md', 'essay', { was: '' })
   assert.equal(await vault.unfileDoc(bare.undo!), 'ideas-folder/bare.md')
   assert.doesNotMatch(await read('ideas-folder/bare.md'), /platform/)
   await assert.rejects(vault.unfileDoc('made-up'), (e: Error & { status?: number }) => e.status === 409)
@@ -191,27 +198,49 @@ test('undo puts the kind and the place back, by the token the move gave', async 
 test('a stale undo never acts on another note', async () => {
   // The note was renamed after the move, and a new note now has its old path.
   await vault.writeDoc('ideas-folder/stale.md', doc('essay', 'Original\n'))
-  const a = await vault.fileByKind(kinds, 'ideas-folder/stale.md', { was: 'note' })
+  const a = await vault.fileByKind(kinds, 'ideas-folder/stale.md', 'essay', { was: 'note' })
   await vault.renameDoc(a.path, 'Renamed')
   await vault.writeDoc(a.path, doc('essay', 'Someone else\n'))
   await assert.rejects(vault.unfileDoc(a.undo!), (e: Error & { status?: number }) => e.status === 409)
   assert.match(await read(a.path), /Someone else/)
   // The note went to the trash.
   await vault.writeDoc('ideas-folder/binned.md', doc('essay'))
-  const b = await vault.fileByKind(kinds, 'ideas-folder/binned.md', { was: 'note' })
+  const b = await vault.fileByKind(kinds, 'ideas-folder/binned.md', 'essay', { was: 'note' })
   await vault.trashDoc(b.path)
   await assert.rejects(vault.unfileDoc(b.undo!), (e: Error & { status?: number }) => e.status === 409)
   // Gone from disk outside Ekdanta.
   await vault.writeDoc('ideas-folder/vanished.md', doc('essay'))
-  const c = await vault.fileByKind(kinds, 'ideas-folder/vanished.md', { was: 'note' })
+  const c = await vault.fileByKind(kinds, 'ideas-folder/vanished.md', 'essay', { was: 'note' })
   await fs.rm(path.join(root, c.path))
   await assert.rejects(vault.unfileDoc(c.undo!), (e: Error & { status?: number }) => e.status === 404)
 })
 
 test('Move to… keeps pictures working too', async () => {
   await vault.writeDoc('m.md', '![a](attachments/a.png)\n')
-  assert.equal(await vault.moveToFolder(kinds, 'm.md', 'one/two'), 'one/two/m.md')
-  assert.equal(await read('one/two/m.md'), '![a](../../attachments/a.png)\n')
+  assert.equal((await vault.moveToFolder('m.md', 'one/two')).path, 'one/two/m.md')
+  assert.equal(await read('one/two/m.md'), '---\nplatform: one\n---\n\n![a](../../attachments/a.png)\n')
+})
+
+test('a move makes the note its new folder’s kind, and undo puts back the place and the front matter', async () => {
+  await vault.writeDoc('essays/moving.md', doc('essay'))
+  const moved = await vault.moveToFolder('essays/moving.md', 'linkedin/2025')
+  assert.equal(moved.path, 'linkedin/2025/moving.md')
+  assert.match(await read(moved.path), /^platform: linkedin$/m, 'a subfolder is its top folder’s kind')
+  assert.equal((await vault.listFiles()).find((f) => f.path === moved.path)?.platform, 'linkedin')
+  assert.equal(await vault.unfileDoc(moved.undo!), 'essays/moving.md')
+  assert.match(await read('essays/moving.md'), /^platform: essay$/m)
+  // To the top of the vault: Unfiled.
+  const top = await vault.moveToFolder('essays/moving.md', '')
+  assert.equal(top.path, 'moving.md')
+  assert.doesNotMatch(await read('moving.md'), /platform/)
+  // Into a folder that isn't there yet: it's made, and is a new kind.
+  const fresh = await vault.moveToFolder('moving.md', 'Book chapters')
+  assert.equal(fresh.path, 'Book chapters/moving.md')
+  assert.match(await read(fresh.path), /^platform: book-chapter$/m)
+  assert.equal((await vaultKinds()).find((k) => k.folder === 'Book chapters')?.name, 'Book chapter')
+  // Into a set-apart folder: it keeps the kind it named.
+  const tpl = await vault.moveToFolder(fresh.path, 'templates')
+  assert.match(await read(tpl.path), /^platform: book-chapter$/m)
 })
 
 test('tags are added and taken away on disk, keeping the rest of the front matter', async () => {

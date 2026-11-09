@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type IdeaRow, type PartnerIdea } from '../lib/api.ts'
 import { binding, formatKey } from '../lib/keys.ts'
-import { kinds } from '../lib/kinds.ts'
+import { offeredKinds } from '../lib/kinds.ts'
 import { IdeaPartner } from './IdeaPartner.tsx'
 
 interface Props {
@@ -153,7 +153,7 @@ function IdeaItem({ idea, onStar, onStart, onOpenDoc }: { idea: IdeaRow; onStar:
   const short = long ? text.slice(0, text.lastIndexOf(' ', LONG) > LONG / 2 ? text.lastIndexOf(' ', LONG) : LONG).trimEnd() + '…' : text
   // The kinds it suits come first in Start as….
   const suits = idea.platforms ?? []
-  const menuKinds = [...kinds()].sort((a, b) => (suits.includes(a.id) ? suits.indexOf(a.id) : 99) - (suits.includes(b.id) ? suits.indexOf(b.id) : 99))
+  const menuKinds = [...offeredKinds()].sort((a, b) => (suits.includes(a.id) ? suits.indexOf(a.id) : 99) - (suits.includes(b.id) ? suits.indexOf(b.id) : 99))
 
   useEffect(() => {
     if (!menu) return

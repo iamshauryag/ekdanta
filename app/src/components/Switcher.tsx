@@ -84,7 +84,7 @@ export function Switcher({ files, current, recent, onOpen, onCreate, onClose }: 
             {row.file ? (
               <>
                 <span className="qp-label">{highlight(row.file.title, row.positions)}</span>
-                {row.note ? <span className="qp-group">{row.note}</span> : dup.has(fold(row.file.title.trim())) && <span className="qp-group">{row.file.folder || 'Vault'}</span>}
+                {row.note ? <span className="qp-group">{row.note}</span> : dup.has(fold(row.file.title.trim())) && <span className="qp-group">{row.file.folder || 'Unfiled'}</span>}
                 {row.file.path === current && <span className="qp-why">Open</span>}
               </>
             ) : (

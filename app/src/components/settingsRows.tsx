@@ -39,6 +39,12 @@ export interface RowCtx {
   rebuild: () => void
   /** Rename a kind's doubled folder (from the kind-and-name fixes). */
   onRenameFolder?: (id: string) => Promise<void>
+  /** Rename a kind, and so its folder. */
+  onRenameKind?: (id: string, name: string) => Promise<void>
+  /** Remove a kind, and so its (empty) folder. */
+  onRemoveKind?: (id: string) => Promise<void>
+  /** How many notes a folder holds. */
+  countIn?: (folder: string) => number
 }
 
 export interface SettingRow {
@@ -269,10 +275,13 @@ export const ROWS: SettingRow[] = [
     label: 'Kinds of writing',
     keywords: 'kind folder voice guidance length template platform',
     full: true,
-    render: ({ s, onChange, onRenameFolder }) => (
+    render: ({ s, onChange, onRenameFolder, onRenameKind, onRemoveKind, countIn }) => (
       <>
-        <p className="sheet-note">What you write. Each kind files its pieces in its own folder, learns its own voice profile, and tells the help levels how the piece should read.</p>
-        <Kinds kinds={s.kinds} onChange={(kinds) => onChange({ kinds })} onRenameFolder={onRenameFolder} />
+        <p className="sheet-note">
+          What you write. Each kind is a folder at the top of your vault: a new folder there is a new kind, and a note’s kind is the folder it’s in. Notes at the top of the vault are Unfiled. Each
+          kind learns its own voice profile and tells the help levels how the piece should read.
+        </p>
+        <Kinds kinds={s.kinds} onChange={(kinds) => onChange({ kinds })} onRenameFolder={onRenameFolder} onRename={onRenameKind} onRemove={onRemoveKind} countIn={countIn} />
       </>
     ),
   },

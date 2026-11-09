@@ -413,7 +413,7 @@ test('keeping a partner idea: a line in ideas.md with its links, its parts besid
 
 test('starting a post from a kept idea: named, filed by kind, a pinned brief, and its sources in the Thinking Space', async () => {
   const text = (await ideas.listIdeas()).ideas.find((r) => r.title === 'Silence as an interview tool')!.text
-  const r = await ideas.startIdeaPiece(DEFAULT_KINDS, text, 'linkedin')
+  const r = await ideas.startIdeaPiece(text, 'linkedin')
   assert.match(r.path, /^linkedin\/silence-as-an-interview-tool\.md$/)
   assert.ok(r.seeded)
   assert.equal(r.missing, 0)
@@ -454,7 +454,7 @@ test('a source note that moved is found by its name; one that was deleted is cou
   await fs.mkdir(path.join(root, 'archive'), { recursive: true })
   await fs.rename(path.join(root, 'notes/on-craft.md'), path.join(root, 'archive/on-craft.md'))
   await vault.trashDoc('notes/sunday-letters.md')
-  const r = await ideas.startIdeaPiece(DEFAULT_KINDS, kept.text, 'blog')
+  const r = await ideas.startIdeaPiece(kept.text, 'blog')
   assert.equal(r.missing, 1)
   assert.match((await readBrief(r.path)).trim(), /From: \[\[archive\/on-craft\|On craft\]\]$/)
   const { canvas, side } = await readThinking(r.path)
@@ -467,14 +467,14 @@ test('a source note that moved is found by its name; one that was deleted is cou
 
 test('a captured idea with [[links]] brings each linked note’s opening paragraph; a plain one just its brief', async () => {
   await ideas.captureIdea('turn [[hiring-is-listening]] into a thread')
-  const r = await ideas.startIdeaPiece(DEFAULT_KINDS, 'turn [[hiring-is-listening]] into a thread', 'linkedin')
+  const r = await ideas.startIdeaPiece('turn [[hiring-is-listening]] into a thread', 'linkedin')
   assert.ok(r.seeded)
   const { canvas } = await readThinking(r.path)
   assert.ok(canvas.nodes.some((n) => n.text === HIRING))
   assert.match(splitFrontMatter(await fs.readFile(path.join(root, r.path), 'utf8')).body, /\*Prompt: turn \\\[\\\[hiring-is-listening\\\]\\\] into a thread\*/)
   assert.equal((await readBrief(r.path)).trim(), 'Idea: turn [[hiring-is-listening]] into a thread\nFrom: [[linkedin/hiring-is-listening|Hiring is listening]]')
   await ideas.captureIdea('a plain idea')
-  const plain = await ideas.startIdeaPiece(DEFAULT_KINDS, 'a plain idea', 'essay')
+  const plain = await ideas.startIdeaPiece('a plain idea', 'essay')
   assert.ok(!plain.seeded)
   assert.equal((await readBrief(plain.path)).trim(), 'Idea: a plain idea')
   assert.equal((await readThinking(plain.path)).canvas.nodes.length, 0)
@@ -520,7 +520,7 @@ test('a brief that can’t be pinned still leaves the started post, with a warni
   await fs.rename(briefs, saved).catch(() => {})
   await fs.writeFile(briefs, 'not a folder') // writing a brief now fails
   try {
-    const r = await ideas.startIdeaPiece(DEFAULT_KINDS, kept.text, 'essay')
+    const r = await ideas.startIdeaPiece(kept.text, 'essay')
     assert.match(r.warning!, /^Started, but the brief couldn’t be written\.$/)
     await fs.access(path.join(root, r.path)) // the draft is there
     assert.ok(r.seeded)
