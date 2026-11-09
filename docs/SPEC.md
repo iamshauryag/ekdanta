@@ -75,6 +75,19 @@ Ekdanta treats an Obsidian vault as a first-class home:
 2. **Live link (optional).** Through community local-API plugins, for "open in Obsidian" and active-file context.
 3. **Companion plugin (later).** Cmd+1–5 help inside Obsidian itself.
 
+### Kinds are folders
+
+A kind of writing and a top-level folder of the vault are one thing.
+
+- **Every top-level folder is a kind.** Making a folder (in Ekdanta, Finder or Obsidian) makes a kind, and making a kind makes its folder. An empty folder is still a kind. The kind's name comes from the folder: "Book chapters" is the Book chapter kind, `linkedin/` keeps its saved name, LinkedIn post.
+- **Set-apart folders aren't kinds:** `templates/`, `journal/`, `sources/`, `exports/`, `_inbox/`, `attachments/`, `assets/`, `ideas/` (Sparks keeps `ideas/sparks.md` there), `trash/`, the Brain's folder, hidden folders such as `.ekdanta` and `.obsidian`, and any folder the writer excludes.
+- **A note's kind is its top-level folder's,** at any depth: `Essays/2024/` is Essays. A note at the top of the vault has no kind: it is **Unfiled** until it's filed, and help treats it as a piece of writing, never as an essay. A note in a set-apart folder keeps the kind its front matter names (a template says which kind it's for), or else is Unfiled.
+- **Front matter only mirrors the kind.** Ekdanta writes `platform:` when it makes or moves a note, and never rewrites a note because it was opened. Where `platform:` and the folder disagree, the folder wins. A block it can't edit is left as it is.
+- **Changing a note's kind moves it** into that kind's folder; a note already anywhere inside that folder stays put. Choosing Unfiled moves it to the top of the vault. **Moving a note** (Move to…, or dragging it onto a folder in the sidebar) changes its kind to that folder's. Both can be undone from the notice, which puts back the place and what front matter said.
+- **Settings → Kinds is the list of folders.** Each kind keeps its settings (how it should read, its length, template, document defaults, voice profile) under its id. Adding a kind makes its folder; removing one removes its folder, and only an empty one. Renaming a kind renames its folder, notes and all, and renaming a kind's folder in the sidebar renames the kind; either way its settings stay. The built-in kinds (Essay, LinkedIn post, Email…) are only suggestions: choosing one makes its folder.
+- **Existing vaults.** On first open, the vault's top-level folders become its kinds. Saved settings carry over to the folder they name (any case), then to a folder spelled from the kind's name or id ("Essays" for the essay kind). Saved kinds with no folder aren't shown, and come back with their settings if the folder appears again. No note is rewritten. A folder renamed outside Ekdanta can't be traced back: it starts as a new kind, and the old settings wait under the old name.
+- New notes take the kind of the folder they're made in. Break it down, *Start a post* and Sparks file into the kind's folder, making it (with the kind) when needed.
+
 ## AI approach
 
 No model training in v1.
@@ -136,7 +149,7 @@ Not every document — or sentence — represents a writer equally well. Weighti
 - PDFs with a text layer convert with pdf.js (via unpdf, no native code), read in a worker thread with a memory cap and a time limit. Reading order is rebuilt from positions: paragraphs, words broken at line ends, headings by font size (or a bold line on its own), lists with their nesting, block quotes, two columns, tables; running headers, footers and page numbers are dropped. Bold and italic come from the fonts' names, and web and mail links from the PDF's link boxes. A tagged PDF (Word, Google Docs, a browser's Save as PDF) also says which lines are headings, list items and paragraphs, and that is followed unless it's tagged line by line. Text that looks like Markdown is escaped. Anything doubtful puts the file up for review with a plain reason (empty scanned pages, two columns, tables, pictures and links with no text under them left out, garbled text). A scan with no text fails with a message: no OCR yet. PDF import needs Node 24 or newer (the rest of the app runs on 20); on an older Node a PDF fails with a message saying so, and files over 150 MB are refused before reading. Running headers, footers and page numbers that are left out, and words joined across line breaks, are listed in the review notes.
 - The writer can add labels to one file or to the whole batch before importing; they're written to the note's `tags`.
 - First sources to support: **Google Docs, Word and Google Keep**.
-- Ekdanta's importer adds front-matter to each file: original creation date (export tools often reset file dates), source app, platform (guessed, then confirmed by the writer) and title.
+- Ekdanta's importer adds front-matter to each file: original creation date (export tools often reset file dates), source app and title. The one choice per file is its kind, which is its folder (guessed, then confirmed by the writer); with no kind it lands at the top of the vault as Unfiled. `platform` mirrors the kind chosen.
 
 ## Knowledge layer
 

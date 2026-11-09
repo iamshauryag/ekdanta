@@ -10,7 +10,7 @@ import type { SourceFields, SourceType } from './brain.ts'
 import type { CreateReply, Options, PlanReply, PostRequest, Target } from './breakdown.ts'
 // Thin client for the local server in server/api.ts.
 /** Why a kind change left a document where it was (see server/vault.ts). */
-export type PlaceStay = 'special' | 'excluded' | 'brain' | 'unknown-kind' | 'target-special' | 'target-excluded' | 'target-brain'
+export type PlaceStay = 'special' | 'excluded' | 'brain' | 'unknown-kind'
 
 export interface FileEntry {
   path: string
@@ -377,12 +377,21 @@ export const api = {
   changes: (since?: number) => fetch('/api/changes' + (since === undefined ? '' : '?since=' + since)).then(json<Changes>),
   create: (folder: string, platform?: string) => fetch('/api/new', send('POST', { folder, platform })).then(json<{ path: string }>),
   name: (path: string, title: string) => fetch('/api/name', send('POST', { path, title })).then(json<Moved>),
-  /** File a document in its kind's folder after a kind change from `was`; `stay` says why it didn't move, `undo` puts it back. */
-  place: (path: string, was?: string) => fetch('/api/place', send('POST', { path, was })).then(json<Moved & { stay?: PlaceStay; folder?: string; undo?: string }>),
-  /** Undo a kind change that moved a document, by the token the move gave. */
+  /** Make a document the kind `kind` ('' for Unfiled): it moves to that kind's folder. `was` is what its front matter said before; `stay` says why it didn't move, `undo` puts it back. */
+  place: (path: string, kind: string, was?: string) => fetch('/api/place', send('POST', { path, kind, was })).then(json<Moved & { stay?: PlaceStay; undo?: string }>),
+  /** Undo a kind change or a move, by the token it gave. */
   unplace: (token: string) => fetch('/api/place/undo', send('POST', { token })).then(json<Moved>),
   rename: (path: string, title: string) => fetch('/api/rename', send('POST', { path, title })).then(json<Moved>),
-  move: (path: string, folder: string) => fetch('/api/move', send('POST', { path, folder })).then(json<Moved>),
+  /** Move a document to a folder, which makes it that folder's kind ('' is the top of the vault: Unfiled). `undo` puts it back. */
+  move: (path: string, folder: string) => fetch('/api/move', send('POST', { path, folder })).then(json<Moved & { undo?: string }>),
+  /** Rename a folder; a kind's folder takes the kind (and its settings) with it. */
+  renameFolder: (from: string, to: string) => fetch('/api/folders/rename', send('POST', { from, to })).then(json<{ moved: { from: string; to: string }[]; kinds: Kind[]; touched?: Touched[] }>),
+  /** The vault's kinds: one per top-level folder. */
+  kinds: () => fetch('/api/kinds').then(json<Kind[]>),
+  /** Rename a kind, and so its folder. */
+  renameKind: (id: string, name: string) => fetch('/api/kinds/rename', send('POST', { id, name })).then(json<{ moved: { from: string; to: string }[]; kinds: Kind[]; touched?: Touched[] }>),
+  /** Remove a kind, and so its folder: only an empty one. */
+  removeKind: (id: string) => fetch('/api/kinds/remove', send('POST', { id })).then(json<Kind[]>),
   duplicate: (path: string) => fetch('/api/duplicate', send('POST', { path })).then(json<Moved>),
   remove: (path: string) => fetch('/api/delete', send('POST', { path })).then(json<Trashed>),
   saveImage: (doc: string, name: string, data: string) => fetch('/api/asset', send('POST', { doc, name, data })).then(json<{ src: string }>),
@@ -449,8 +458,7 @@ export const api = {
     fetch(`/api/import/preview?${new URLSearchParams([['batch', batch], ['id', id], ['platform', platform], ...tags.map((t) => ['tag', t])])}`)
       .then(json<{ content: string }>)
       .then((d) => d.content),
-  importCommit: (batch: string, id: string, platform: string, folder: string, tags: string[] = []) =>
-    fetch('/api/import/commit', send('POST', { batch, id, platform, folder, tags })).then(json<ImportItem>),
+  importCommit: (batch: string, id: string, platform: string, tags: string[] = []) => fetch('/api/import/commit', send('POST', { batch, id, platform, tags })).then(json<ImportItem>),
   importUndo: (batch: string) => fetch('/api/import/undo', send('POST', { batch })).then(json<{ removed: string[]; trashed: string[]; missing: string[] }>),
   brief: (doc: string) =>
     fetch('/api/brief?doc=' + encodeURIComponent(doc))

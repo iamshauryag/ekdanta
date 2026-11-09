@@ -307,41 +307,47 @@ test('an import batch: inbox, uploads, failures, duplicates, collisions, undo', 
   // Nothing is in the vault until it's imported, and the inbox file stays put.
   assert.ok(await exists(path.join(root, '_inbox/Field.docx')))
   await assert.rejects(imp.commit(b.batch, broken.id, {}), /damaged/)
-  await assert.rejects(imp.commit(b.batch, evil.id, { folder: '../x' }), /can’t be used/)
+  await assert.rejects(imp.commit(b.batch, evil.id, { platform: 'no-such-kind' }), /Unknown kind/)
+  // A refused commit never makes a suggested kind's folder.
+  await assert.rejects(imp.commit(b.batch, 'no-such-row', { platform: 'blog' }), /No such file/)
+  assert.ok(!(await exists(path.join(root, 'blog'))))
 
-  const done = await imp.commit(b.batch, docxItem.id, { platform: 'essay', folder: 'imported' })
-  assert.equal(done.imported?.path, 'imported/field-notes-2.md')
-  const text = await fs.readFile(path.join(root, 'imported/field-notes-2.md'), 'utf8')
+  // The one choice is the kind: its folder is where the note goes (made now, for a suggested kind).
+  const done = await imp.commit(b.batch, docxItem.id, { platform: 'essay' })
+  assert.match(done.imported!.path, /^essays\/field-notes(-2)?\.md$/)
+  const text = await fs.readFile(path.join(root, done.imported!.path), 'utf8')
   assert.match(text, /^title: Field Notes$/m)
   assert.match(text, /^created: 2019-02-03$/m)
   assert.match(text, /^source: Field\.docx$/m)
   assert.match(text, /^platform: essay$/m)
   assert.match(text, /^## Things to bring$/m)
   assert.ok(!(await exists(path.join(root, '_inbox/Field.docx'))), 'the inbox file left the inbox')
-  const att = await imp.commit(b.batch, odd.id, { folder: 'imported' })
+  // No kind: the top of the vault, Unfiled.
+  const att = await imp.commit(b.batch, odd.id, {})
+  assert.ok(!att.imported!.path.includes('/'))
   const attText = await fs.readFile(path.join(root, att.imported!.path), 'utf8')
-  assert.match(attText, /\[data\.bin\]\(\.\.\/attachments\/data\/data\.bin\)/)
+  assert.match(attText, /\[data\.bin\]\(attachments\/data\/data\.bin\)/)
   assert.ok(await exists(path.join(root, 'attachments/data/data.bin')))
   // Committing twice does nothing more.
-  assert.equal((await imp.commit(b.batch, docxItem.id, {})).imported?.path, 'imported/field-notes-2.md')
+  assert.equal((await imp.commit(b.batch, docxItem.id, {})).imported?.path, done.imported!.path)
 
   // The same file in a later batch: already imported.
   const b2 = await imp.openBatch()
   assert.equal(b2.items.length, 0)
   const again = await upload(b2.batch, 'Field.docx', SIMPLE)
   assert.equal(again.status, 'duplicate')
-  assert.match(again.reason!, /imported\/field-notes-2\.md/)
+  assert.ok(again.reason!.includes(done.imported!.path))
 
   // Undo: untouched notes go, edited ones go to Recently deleted, inbox files come back.
   await fs.appendFile(path.join(root, att.imported!.path), '\nMy own words.\n')
   const undone = await imp.undo(b.batch)
-  assert.deepEqual(undone.removed.sort(), ['imported/data.md', 'imported/field-notes-2.md'])
-  assert.deepEqual(undone.trashed, ['imported/data.md'])
+  assert.deepEqual(undone.removed.sort(), [att.imported!.path, done.imported!.path].sort())
+  assert.deepEqual(undone.trashed, [att.imported!.path])
   assert.deepEqual(undone.missing, [])
-  assert.ok(!(await exists(path.join(root, 'imported/field-notes-2.md'))))
+  assert.ok(!(await exists(path.join(root, done.imported!.path))))
   assert.ok(await exists(path.join(root, 'attachments/data/data.bin')), 'the edited note keeps its attachment')
   assert.ok(await exists(path.join(root, '_inbox/Field.docx')), 'back in the inbox')
-  assert.ok((await vault.listTrash()).some((t) => t.path === 'imported/data.md'))
+  assert.ok((await vault.listTrash()).some((t) => t.path === att.imported!.path))
   assert.ok(await exists(path.join(root, 'imported/field-notes.md')), 'the writer’s own note is untouched')
   // After an undo it's no longer a duplicate.
   assert.equal((await imp.convert(b2.batch, again.id)).status, 'converted')
@@ -350,7 +356,7 @@ test('an import batch: inbox, uploads, failures, duplicates, collisions, undo', 
 test('undo removes attachments only with an untouched note; edited and renamed notes keep theirs', async () => {
   const b = await imp.openBatch()
   const [same, edited, renamed] = await Promise.all(['same.bin', 'edited.bin', 'renamed.bin'].map((name, i) => upload(b.batch, name, Buffer.from([9, 9, i]))))
-  const note = async (id: string) => (await imp.commit(b.batch, id, { folder: 'undo-test' })).imported!
+  const note = async (id: string) => (await imp.commit(b.batch, id, {})).imported!
   const [s, e, r] = [await note(same.id), await note(edited.id), await note(renamed.id)]
   for (const done of [s, e, r]) assert.equal(done.media.length, 1)
   // The link in a note resolves, relative to the note's folder, to its attachment.
@@ -361,7 +367,7 @@ test('undo removes attachments only with an untouched note; edited and renamed n
   for (const done of [s, e, r]) assert.ok(await linked(done.path))
 
   await fs.appendFile(path.join(root, e.path), '\nMy own words.\n')
-  await fs.rename(path.join(root, r.path), path.join(root, 'undo-test/my-name.md'))
+  await fs.rename(path.join(root, r.path), path.join(root, 'my-name.md'))
   const undone = await imp.undo(b.batch)
   assert.deepEqual(undone.removed.sort(), [s.path, e.path].sort())
   assert.deepEqual(undone.trashed, [e.path])
@@ -380,14 +386,14 @@ test('undo removes attachments only with an untouched note; edited and renamed n
   assert.ok(await linked(restored))
   // Renamed: left alone, and its link still works.
   assert.ok(await exists(path.join(root, r.media[0])))
-  assert.ok(await linked('undo-test/my-name.md'))
+  assert.ok(await linked('my-name.md'))
 })
 
 test('a title spanning lines becomes one line, and the front matter stays valid', async () => {
   const b = await imp.openBatch()
   const item = await upload(b.batch, 'lines.docx', docx(para('Just a paragraph, no heading.'), { title: 'Two\n   Lines' }))
   assert.equal(item.title, 'Two Lines')
-  const done = await imp.commit(b.batch, item.id, { folder: 'undo-test' })
+  const done = await imp.commit(b.batch, item.id, {})
   assert.match(await fs.readFile(path.join(root, done.imported!.path), 'utf8'), /^title: Two Lines$/m)
 })
 

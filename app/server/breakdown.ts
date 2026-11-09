@@ -15,12 +15,13 @@ import type { IncomingMessage } from 'node:http'
 import path from 'node:path'
 import { HttpError, local } from './net.ts'
 import { readCapped, stopSignal } from './assistant.ts'
-import { loadSettings, saveSettings } from './settings.ts'
+import { loadSettings } from './settings.ts'
+import { ensureKinds, vaultKinds } from './kinds.ts'
 import { existingDoc, freePath, listFiles, readDoc, slugify, splitFrontMatter, writeDoc, type FileEntry } from './vault.ts'
 import { joinFrontMatter } from '../src/lib/frontmatter.ts'
 import { isSpecialPath } from '../src/lib/special.ts'
 import { isBrainPath } from '../src/lib/brain.ts'
-import { newKind, type Kind } from '../src/lib/kinds.ts'
+import { findKind, newKind, type Kind } from '../src/lib/kinds.ts'
 import { sentences as sentenceCount, words } from '../src/lib/assistant.ts'
 import {
   MAX_POSTS,
@@ -208,7 +209,7 @@ export async function breakdownOptions(doc: unknown, deps: BreakdownDeps = {}): 
     allows: { plan: a.plan, opening: a.opening, adapt: a.adapt },
     short: tooShort(piece.units),
     words: piece.units.reduce((n, u) => n + words(u.text), 0),
-    formats: await formatInfo(settings.kinds, piece.rel, deps),
+    formats: await formatInfo(await vaultKinds(), piece.rel, deps),
   }
 }
 
@@ -262,7 +263,7 @@ export async function planBreakdown(input: PlanRequest, deps: BreakdownDeps = {}
   if (a.plan === 'off') return { kind: 'off', message: levelNote(a) }
   const short = tooShort(piece.units)
   if (short) return { kind: 'short', message: short }
-  const kinds = settings.kinds
+  const kinds = await vaultKinds()
   const slots = slotsFor(input.targets, kinds)
   if (!slots.length) throw new HttpError(400, 'Choose what to make first')
   const targets: Target[] = []
@@ -383,7 +384,7 @@ export async function createPosts(input: CreateRequest, deps: BreakdownDeps = {}
 
   // 1. Check every post before anything is written: a known format, a kind it can file as, and at least one
   //    of the writer's passages found in the piece as it is now. A post with none is skipped, never made empty.
-  const kindsNow = settings.kinds
+  const kindsNow = await vaultKinds()
   const toAdd = new Map<string, Kind>()
   let missing = 0
   let empty = 0
@@ -445,13 +446,15 @@ export async function createPosts(input: CreateRequest, deps: BreakdownDeps = {}
   }
   checkStop(deps)
 
-  // 3. Add the kinds the posts need (settings read again just before, so a change made meanwhile is kept), then write.
+  // 3. Add the kinds the posts need, each with its folder (a kind is its folder), then write. Kinds
+  //    are read again just before, so one made meanwhile is used rather than made twice; a kind the
+  //    writer had before comes back with its settings and folder name.
   const addedKinds: string[] = []
   if (toAdd.size) {
-    const fresh = (await loadSettings()).kinds
-    const adding = [...toAdd.values()].filter((k) => !fresh.some((x) => x.id === k.id))
-    if (adding.length) await saveSettings({ kinds: [...fresh, ...adding] })
-    addedKinds.push(...adding.map((k) => k.name))
+    const before = await vaultKinds()
+    const made = await ensureKinds([...toAdd.values()])
+    for (const p of planned) p.kind = findKind(made, p.kind.id) ?? p.kind
+    addedKinds.push(...made.filter((k) => !findKind(before, k.id)).map((k) => k.name))
   }
   const paths = (await listFiles()).map((f) => f.path)
   const link = wikiLinkTo(paths, piece.rel)

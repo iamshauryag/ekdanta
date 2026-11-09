@@ -1,6 +1,29 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_KINDS, cleanKinds, describeKind, doubledFolder, isPluralWord, kindOfFolder, kindTaken, nameTakenBy, newKind, pieceName, plural, singular, type Kind } from './kinds.ts'
+import {
+  DEFAULT_KINDS,
+  UNFILED,
+  cleanKinds,
+  describeKind,
+  doubledFolder,
+  folderForName,
+  isPluralWord,
+  isSetApartFolder,
+  kindName,
+  kindOfFolder,
+  kindOfPath,
+  kindsFromFolders,
+  kindTaken,
+  nameFromFolder,
+  nameTakenBy,
+  newKind,
+  pieceName,
+  plural,
+  singular,
+  suggestedKinds,
+  topFolder,
+  type Kind,
+} from './kinds.ts'
 
 test('cleanKinds keeps template and doc fields that are well formed', () => {
   const [k] = cleanKinds([
@@ -256,11 +279,93 @@ test('pieces read correctly even from an unmigrated name', () => {
   assert.equal(pieceName(DEFAULT_KINDS, 'essay', 2), 'essays')
 })
 
-test('a folder holds a kind only by its folder or exact id', () => {
+test('a folder is a kind by its top-level folder, matched by name as it is on disk', () => {
   assert.equal(kindOfFolder(DEFAULT_KINDS, 'textbooks'), undefined)
   assert.equal(kindOfFolder(DEFAULT_KINDS, 'texts')?.id, 'text')
-  assert.equal(kindOfFolder(DEFAULT_KINDS, 'text')?.id, 'text')
+  assert.equal(kindOfFolder(DEFAULT_KINDS, 'Texts')?.id, 'text', 'any case')
+  assert.equal(kindOfFolder(DEFAULT_KINDS, 'essays/2024/spring')?.id, 'essay', 'a subfolder is its top folder’s kind')
   assert.equal(kindOfFolder(DEFAULT_KINDS, 'emailsx'), undefined)
+  assert.equal(kindOfFolder(DEFAULT_KINDS, ''), undefined)
   const hindi = newKind('ब्लॉग', [])!
   assert.equal(kindOfFolder([hindi], 'ब्लॉग'.normalize('NFD'))?.id, 'ब्लॉग')
+})
+
+test('a note’s kind comes from its folder; at the top of the vault it is Unfiled, whatever front matter says', () => {
+  assert.equal(kindOfPath(DEFAULT_KINDS, 'essays/on-walking.md'), 'essay')
+  assert.equal(kindOfPath(DEFAULT_KINDS, 'essays/2024/on-walking.md', {}, 'linkedin'), 'essay', 'the folder wins')
+  assert.equal(kindOfPath(DEFAULT_KINDS, 'loose.md', {}, 'essay'), UNFILED)
+  assert.equal(kindOfPath(DEFAULT_KINDS, 'loose.md'), '')
+  // Set-apart folders aren't kinds: a template says which kind it's for; otherwise Unfiled.
+  assert.equal(kindOfPath(DEFAULT_KINDS, 'templates/post.md', {}, 'linkedin'), 'linkedin')
+  assert.equal(kindOfPath(DEFAULT_KINDS, 'templates/post.md', {}, 'no-such-kind'), '')
+  assert.equal(kindOfPath(DEFAULT_KINDS, 'journal/today.md'), '')
+  // The Brain holds sources, even when its folder sits in a kind's.
+  const kinds = [...DEFAULT_KINDS, { id: 'note', name: 'Note', folder: 'Notes', guidance: '', words: 800 }]
+  assert.equal(kindOfPath(kinds, 'Notes/brain/books/b.md', { brain: 'Notes/brain' }), '')
+  assert.equal(kindOfPath(kinds, 'Notes/idea.md', { brain: 'Notes/brain' }), 'note')
+  assert.equal(topFolder('essays/2024/a.md'), 'essays')
+  assert.equal(topFolder('a.md'), '')
+})
+
+test('set-apart folders are never kinds', () => {
+  for (const f of ['templates', 'Journal', 'brain', 'sources', 'exports', '_inbox', 'attachments', 'assets', 'ideas', 'trash', '.ekdanta', '.obsidian']) assert.ok(isSetApartFolder(f), f)
+  assert.ok(isSetApartFolder('Archive', { excluded: ['archive/'] }))
+  assert.ok(isSetApartFolder('Library', { brain: 'library' }))
+  for (const f of ['essays', 'Book chapters', 'Letters', 'Notes', 'imported']) assert.ok(!isSetApartFolder(f), f)
+  // A new kind never takes a set-apart folder.
+  assert.equal(newKind('Attachment', [])?.folder, 'my-attachments')
+  assert.equal(newKind('Template', [])?.folder, 'my-templates')
+})
+
+test('a kind’s name comes from its folder, and a renamed kind’s folder keeps its style', () => {
+  assert.equal(nameFromFolder('Book chapters'), 'Book chapter')
+  assert.equal(nameFromFolder('Letters'), 'Letter')
+  assert.equal(nameFromFolder('notes'), 'Note')
+  assert.equal(nameFromFolder('yt-scripts'), 'Yt script')
+  assert.equal(nameFromFolder('Essays'), 'Essay')
+  assert.equal(nameFromFolder('ब्लॉग'), 'ब्लॉग')
+  assert.equal(folderForName('Short story', 'Book chapters'), 'Short stories')
+  assert.equal(folderForName('YT short', 'yt-scripts'), 'yt-shorts')
+  assert.equal(folderForName('Long essay', 'essays'), 'long-essays')
+})
+
+test('the kinds are the vault’s folders: saved settings carry over by folder, then by name', () => {
+  const saved: Kind[] = [
+    { ...DEFAULT_KINDS[0], guidance: 'my own essay rules' }, // essay, folder essays
+    ...DEFAULT_KINDS.slice(1),
+    { id: 'book-chapter', name: 'Book chapter', folder: 'book-chapters', guidance: 'one scene each', words: 4000 },
+  ]
+  const kinds = kindsFromFolders(saved, ['Essays', 'Book chapters', 'Letters', 'Notes'])
+  // Saved ones first, in their order, then the new ones by folder name.
+  assert.deepEqual(
+    kinds.map((k) => `${k.id}:${k.folder}:${k.name}`),
+    ['essay:Essays:Essay', 'book-chapter:Book chapters:Book chapter', 'letter:Letters:Letter', 'note:Notes:Note'],
+  )
+  assert.equal(kinds[0].guidance, 'my own essay rules', 'settings carry over when the folder matches')
+  assert.equal(kinds[1].words, 4000)
+  // Kinds whose folder isn't there aren't listed (no clutter), and come back with it.
+  assert.ok(!kinds.some((k) => k.id === 'linkedin'))
+  assert.equal(kindsFromFolders(saved, ['Essays', 'linkedin']).find((k) => k.id === 'linkedin')?.name, 'LinkedIn post')
+  // An empty vault has no kinds: the built-in ones are only suggestions.
+  assert.deepEqual(kindsFromFolders(saved, []), [])
+  assert.deepEqual(
+    suggestedKinds(kinds).map((k) => k.id),
+    ['linkedin', 'email', 'text', 'blog', 'youtube-script'],
+  )
+  // A new folder never takes an id a saved kind has, even a hidden one.
+  const taken = kindsFromFolders([{ id: 'note', name: 'Memo', folder: 'memos', guidance: '', words: 10 }], ['memos', 'Notes'])
+  assert.deepEqual(
+    taken.map((k) => `${k.id}:${k.folder}`),
+    ['note:memos', 'note-2:Notes'],
+  )
+  // The same folder twice (in two cases) is one kind.
+  assert.equal(kindsFromFolders([], ['Notes', 'notes']).length, 1)
+})
+
+test('Unfiled reads as Unfiled, and help never takes it for an essay', () => {
+  assert.equal(kindName(DEFAULT_KINDS, ''), 'Unfiled')
+  assert.equal(describeKind(DEFAULT_KINDS, ''), 'a piece of writing')
+  assert.equal(describeKind(DEFAULT_KINDS, undefined), 'a piece of writing')
+  assert.equal(describeKind(DEFAULT_KINDS, 'not-a-kind'), 'a piece of writing')
+  assert.match(describeKind(DEFAULT_KINDS, 'essay'), /^an essay: /)
 })

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { kinds } from '../lib/kinds.ts'
+import { offeredKinds } from '../lib/kinds.ts'
 
 interface Props {
   vault: string
@@ -35,7 +35,7 @@ export function Welcome({ vault, onStart, onImport, onSample }: Props) {
         <div className="welcome-kinds" role="group" aria-label="What are you writing?">
           <span className="muted">What are you writing?</span>
           <div className="welcome-chips">
-            {kinds().map((k) => (
+            {offeredKinds().map((k) => (
               <button key={k.id} className="btn" onClick={() => onStart(k.id)}>
                 {k.name}
               </button>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type IndexState, type PartnerAsk, type PartnerIdea, type PartnerResult, type PartnerSource } from '../lib/api.ts'
-import { kindName, kinds } from '../lib/kinds.ts'
+import { kindName, offeredKinds } from '../lib/kinds.ts'
 import './ideas.css'
 
 interface Props {
@@ -54,7 +54,7 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
   // At 0 the partner is off. At 1 an ask shows the writer's own material, and its answer carries a
   // one-use allowance the server keeps: Allow once spends it on one batch of ideas.
   const off = ceiling < 1
-  const allKinds = kinds()
+  const allKinds = offeredKinds()
 
   useEffect(() => {
     memory = { turns, fates, open }
@@ -233,7 +233,7 @@ export function IdeaPartner({ ceiling, notes, onOpenDoc, onStart, onKept }: Prop
                     key={idea.key}
                     idea={idea}
                     fate={fates[idea.key]}
-                    defaultKind={platform || idea.platforms[0] || allKinds[0]?.id || 'essay'}
+                    defaultKind={platform || idea.platforms[0] || allKinds[0]?.id || ''}
                     onOpenDoc={onOpenDoc}
                     onFate={(f) => setFate(idea.key, f)}
                     onKept={onKept}
@@ -339,7 +339,7 @@ function IdeaCard({
   const [error, setError] = useState<string | null>(null)
   const [kind, setKind] = useState(defaultKind)
   const [draft, setDraft] = useState({ title: idea.title, hook: idea.hook ?? '', angle: idea.angle })
-  const allKinds = kinds()
+  const allKinds = offeredKinds()
 
   if (fate === 'discarded') return null
 

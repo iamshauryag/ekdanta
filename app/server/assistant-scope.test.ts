@@ -279,8 +279,16 @@ test('a draft without a voice profile, or with no past pieces, says so; numbers 
   // Into a page with text: it replaces all of it, as one change.
   assert.deepEqual([t.proposals![0].start, t.proposals![0].end], [0, POST.length])
   await clearChat(DOC)
-  const none = await runAssistant({ doc: DOC, message: 'write the whole post for me', text: POST }, deps(6, m.ask, { evidence: async () => ({ profile: null, pieces: [], habits: '', count: 0 }) }))
+  const none = await runAssistant(
+    { doc: DOC, message: 'write the whole post for me', text: POST, platform: 'linkedin' },
+    deps(6, m.ask, { evidence: async () => ({ profile: null, pieces: [], habits: '', count: 0 }) }),
+  )
   assert.ok(none.kind === 'answer' && none.turns[1].notices!.some((n) => /can’t sound like you yet/.test(n)))
+  // An Unfiled note (no kind) is never taken for an essay: it says why there's nothing to go on.
+  await clearChat(DOC)
+  const unfiled = await runAssistant({ doc: DOC, message: 'write the whole post for me', text: POST }, deps(6, m.ask, { evidence: async () => ({ profile: null, pieces: [], habits: '', count: 0 }) }))
+  assert.ok(unfiled.kind === 'answer' && unfiled.turns[1].notices!.some((n) => /Unfiled/.test(n)))
+  assert.ok(!m.calls.at(-1)!.system.includes('essay'), 'the draft prompt says nothing of essays')
 })
 
 test('a draft is refused over a long piece, and an answer without a draft is an error, not a saved turn', async () => {

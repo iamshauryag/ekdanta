@@ -5,6 +5,7 @@ import { briefForPrompt } from './brief.ts'
 import { settingsNow } from './settings.ts'
 import { cutBrief } from '../src/lib/brief.ts'
 import { describeKind } from '../src/lib/kinds.ts'
+import { vaultKinds } from './kinds.ts'
 import { MAX_ITEMS, MIN_ITEMS, QUESTION_MAX_WORDS, checkQuestions, isReaderId, lengthProblem, readerBrief, type Reader, type ReaderQuestion } from '../src/lib/reader.ts'
 
 export interface ReaderRequest {
@@ -69,6 +70,7 @@ export function parseReply(raw: string): unknown {
 export const briefFor = (doc: string | undefined): Promise<string> => briefForPrompt(doc)
 
 export async function runReader(req: ReaderRequest, deps: { ask?: (system: string, prompt: string) => Promise<string>; provider?: Provider } = {}): Promise<ReaderReply> {
+  const kinds = await vaultKinds()
   if (!req || typeof req.text !== 'string' || !req.reader || !isReaderId(req.reader.id)) return { kind: 'error', message: 'Nothing to read' }
   if (settingsNow().ceiling < 2) return { kind: 'error', message: 'Reader questions are off while the help ceiling is below 2' }
   const text = req.text.replace(/\r\n?/g, '\n')
@@ -86,7 +88,7 @@ export async function runReader(req: ReaderRequest, deps: { ask?: (system: strin
     provider = strong
     ask = (system, prompt) => generate(strong, { system, prompt, json: true, temperature: 0.5 })
   }
-  const { system, prompt } = readerPrompt({ ...req, text }, { norms: describeKind(settingsNow().kinds, req.platform), brief: await briefFor(req.doc) })
+  const { system, prompt } = readerPrompt({ ...req, text }, { norms: describeKind(kinds, req.platform), brief: await briefFor(req.doc) })
   // One retry when nothing usable comes back; a short list beats none.
   for (let attempt = 0; attempt < 2; attempt++) {
     const items = checkQuestions(parseReply(await ask(system, prompt)), text)

@@ -10,6 +10,7 @@ import type { Provider } from './ai.ts'
 import { HttpError } from './net.ts'
 import type { Chunk } from './recall.ts'
 import { loadSettings } from './settings.ts'
+import { offeredKinds } from './kinds.ts'
 import { listFiles, readDoc, resolveInVault, splitFrontMatter } from './vault.ts'
 import { IDEAS_FILE, cleanIdea, keepDetail, knownIdeas, listIdeas, parseIdeas, type IdeaDetail, type IdeaSource } from './ideas.ts'
 import { clean, passageId, shortTitle } from './sparks.ts'
@@ -458,7 +459,7 @@ export async function runPartner(body: unknown, deps: PartnerDeps = {}): Promise
   const req = checkRequest(body)
   const settings = deps.ceiling === undefined || !deps.kinds ? await loadSettings() : null
   const ceiling = deps.ceiling ?? settings!.ceiling
-  const kinds = deps.kinds ?? settings!.kinds
+  const kinds = deps.kinds ?? (await offeredKinds())
   // A kind that no longer exists (deleted since the page loaded) is no filter at all.
   if (req.platform && !kinds.some((k) => k.id === req.platform)) req.platform = undefined
   // Allowing once is spent here, against the server's record, before anything else runs.
@@ -579,6 +580,6 @@ export async function checkIdea(body: unknown, kinds: Kind[]): Promise<IdeaDetai
 
 /** Keep a partner idea: checked, then a line in ideas.md and its parts beside it. */
 export async function keepPartnerIdea(body: unknown) {
-  const { kinds } = await loadSettings()
+  const kinds = await offeredKinds()
   return keepDetail(await checkIdea(body, kinds))
 }

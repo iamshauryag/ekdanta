@@ -1,9 +1,14 @@
 // Kinds of writing: Essay, LinkedIn post, Email, YouTube script and any the writer adds (a letter).
-// A piece's kind is its `platform` in front-matter. Each kind has a folder its pieces are filed in,
-// a voice profile, a typical length, and a line on how it should read that the help levels follow.
-// The list lives in the vault's settings; this module is shared by the app and the server.
+// A kind and a top-level folder are one thing. Every top-level folder of the vault is a kind (except
+// the set-apart ones: templates, journal, the Brain, attachments…), and a note's kind is the folder
+// it sits in, at any depth: Essays/2024/ is still Essays. A note at the top of the vault is Unfiled.
+// Front matter `platform:` only mirrors the folder, for Obsidian; where they disagree the folder wins.
+// Each kind's settings (a voice profile, a typical length, a line on how it should read) live in the
+// vault's settings, keyed by the kind's id, so renaming its folder in the app keeps them.
+// This module is shared by the app and the server.
 import { slug } from './slug.ts'
 import { isSpecialPath } from './special.ts'
+import { isBrainPath } from './brain.ts'
 
 /** How a kind's documents are laid out and counted, as defaults a document's own front matter overrides. */
 export interface KindDoc {
@@ -15,11 +20,11 @@ export interface KindDoc {
 }
 
 export interface Kind {
-  /** What front-matter stores. Fixed once made, so renaming a kind never orphans its pieces. */
+  /** What front matter mirrors, and what its settings are kept by. Fixed once made, so renaming the kind or its folder keeps them. */
   id: string
   /** Singular, as in "New LinkedIn post". */
   name: string
-  /** Top-level folder its pieces are filed in. */
+  /** The top-level folder that is this kind, as it's spelled on disk ("Book chapters"). */
   folder: string
   /** How the piece should read, for the help levels. */
   guidance: string
@@ -182,20 +187,19 @@ export function newKind(name: string, taken: Kind[]): Kind | null {
         .replace(/-+$/, '') + tail
   }
   // Two kinds never share a folder: the second "Text" files into texts-2/.
-  const folders = new Set(taken.map((k) => k.folder))
+  const folders = new Set(taken.map((k) => fold(k.folder)))
   const first = base ? kindFolderOf(base) : id
   let folder = first
-  for (let n = 2; folders.has(folder); n++) folder = `${first}-${n}`
+  for (let n = 2; folders.has(fold(folder)); n++) folder = `${first}-${n}`
   return { id, name: kindDisplayName(name), folder, guidance: '', words: 800 }
 }
 
 /**
- * The folder a new kind files into. Special folders (templates, journal, sources…) are left out of
- * Recall and voice, so a new kind named "Template" or "Source" files into my-templates/ or my-sources/
- * instead: its pieces are the writer's own and should count like any other. Only new kinds get this;
- * a kind the writer already saved keeps its folder (see cleanKinds).
+ * The folder a new kind files into. Set-apart folders (templates, journal, sources, attachments…) are
+ * never kinds, so a new kind named "Template" or "Source" files into my-templates/ or my-sources/
+ * instead: its pieces are the writer's own and should count like any other.
  */
-const kindFolder = (folder: string) => (isSpecialPath(folder) ? `my-${folder}` : folder)
+const kindFolder = (folder: string) => (isSetApartFolder(folder) ? `my-${folder}` : folder)
 
 /** A kind id: letters (any script), marks, digits and hyphens, at most 40 characters. */
 export const KIND_ID = /^[\p{L}\p{N}][\p{L}\p{M}\p{N}-]{0,39}$/u
@@ -210,9 +214,8 @@ export function cleanKinds(value: unknown): Kind[] | null {
     if (!KIND_ID.test(id) || out.some((o) => o.id === id)) continue
     // Names read singular ("YT Scriptses" came from a plural name); this only changes what's shown.
     const name = typeof k.name === 'string' && k.name.trim() ? kindDisplayName(Array.from(k.name.trim().normalize('NFC')).slice(0, 40).join('').trim()) : id
-    // A saved folder is the writer's: never rewritten here, even a special one (its pieces already live there).
-    // A doubled plural (yt-scriptses/) is put right by the server, which can see whether it holds anything.
-    const folder = kindId(typeof k.folder === 'string' ? k.folder : '') || kindFolderOf(id)
+    // A saved folder is the writer's, spelled as on disk ("Book chapters"): never rewritten here.
+    const folder = cleanFolderName(k.folder) || kindFolderOf(id)
     const guidance = typeof k.guidance === 'string' ? k.guidance.trim().slice(0, 400) : ''
     const words = Math.max(1, Math.min(50000, Math.round(Number(k.words) || 800)))
     const kind: Kind = { id, name, folder, guidance, words }
@@ -223,6 +226,14 @@ export function cleanKinds(value: unknown): Kind[] | null {
     out.push(kind)
   }
   return out.length ? out : null
+}
+
+/** A top-level folder's name as the writer spelled it ("Book chapters"), or '' when it can't be one. */
+export function cleanFolderName(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const f = value.normalize('NFC').trim()
+  if (!f || f.length > 100 || /[\\/\u0000-\u001f]/.test(f) || f.startsWith('.')) return ''
+  return f
 }
 
 /** A vault-relative Markdown path that stays inside the vault, or undefined. */
@@ -249,30 +260,145 @@ function cleanKindDoc(value: unknown): KindDoc | undefined {
   return Object.keys(out).length ? out : undefined
 }
 
-export const findKind = (kinds: Kind[], id: string) => {
+export const findKind = (kinds: readonly Kind[], id: string) => {
   const want = id.normalize('NFC').toLowerCase()
   return kinds.find((k) => k.id === want)
 }
 
+/** A note's kind when it sits in no kind's folder: at the top of the vault, or just imported. */
+export const UNFILED = ''
+export const UNFILED_NAME = 'Unfiled'
+
 /**
- * The kind a top-level folder holds: its own folder (`emails` for email), or a folder named exactly
- * as its id. Nothing is guessed from a name's start, so textbooks/ is not the "text" kind's. Nested
- * folders are the writer's own. A special folder (templates, journal…) holds a kind only when a kind
- * names it as its folder, so templates/ never makes a "Template" kind's pieces.
+ * Top-level folders that hold the app's own files or material rather than a kind of writing, besides
+ * the special folders (templates, journal, sources…): pictures, the kept sparks, a trash of the writer's.
  */
-export const kindOfFolder = (kinds: Kind[], folder: string) => {
-  if (!folder || folder.includes('/')) return undefined
-  const f = folder.normalize('NFC').toLowerCase()
-  const exact = kinds.find((k) => f === k.folder)
-  if (exact || isSpecialPath(f)) return exact
-  return kinds.find((k) => f === k.id)
+export const SET_APART_FOLDERS = ['attachments', 'assets', 'ideas', 'trash']
+
+/** What else keeps a folder from being a kind: the writer's excluded folders and the Brain's (settings). */
+export interface KindScope {
+  excluded?: readonly string[]
+  brain?: string
 }
 
-/** A kind's name, or a readable one for a kind the list doesn't have (a piece from elsewhere). */
-export const kindName = (kinds: Kind[], id: string) => findKind(kinds, id)?.name ?? (id ? id[0].toUpperCase() + id.slice(1) : 'Piece')
+const fold = (s: string) => s.normalize('NFC').toLowerCase()
+const normFolder = (f: string) => fold(f.replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''))
+
+/**
+ * Is this top-level folder kept out of the kinds? Hidden folders (.ekdanta, .obsidian), the special
+ * folders, attachments and the like, a folder the writer excluded, and the Brain's.
+ */
+export function isSetApartFolder(name: string, scope: KindScope = {}): boolean {
+  const f = cleanFolderName(name)
+  if (!f) return true
+  const low = fold(f)
+  if (SET_APART_FOLDERS.includes(low) || isSpecialPath(low)) return true
+  if ((scope.excluded ?? []).some((e) => typeof e === 'string' && normFolder(e) === low)) return true
+  return !!scope.brain && normFolder(scope.brain) === low
+}
+
+/** The top-level folder of a vault path, or '' for a note at the top of the vault. */
+export const topFolder = (path: string) => {
+  const p = path.replace(/\\/g, '/').replace(/^\/+/, '')
+  return p.includes('/') ? p.slice(0, p.indexOf('/')) : ''
+}
+
+/**
+ * The kind a folder is: its top-level folder's, so essays/2024 is Essays. Matched by the folder's
+ * name as it is on disk (ignoring case); undefined for the top of the vault or a set-apart folder.
+ */
+export const kindOfFolder = (kinds: readonly Kind[], folder: string) => {
+  const top = fold(folder.replace(/\\/g, '/').replace(/^\/+/, '').split('/')[0] ?? '')
+  return top ? kinds.find((k) => fold(k.folder) === top) : undefined
+}
+
+/**
+ * The kind of the note at `path`, from where it is: the id of its top-level folder's kind, so
+ * essays/2024/x.md is an essay. A note at the top of the vault is UNFILED (''). Front matter is
+ * never the authority: a note whose `platform:` says otherwise still follows its folder.
+ *
+ * Set-apart folders (templates, journal, the Brain, excluded ones) aren't kinds. A note in one keeps
+ * the kind its front matter names (`mirror`, when that's one of the kinds), since a template says
+ * which kind it is for and a journal entry can be drafted as one; otherwise it is Unfiled too.
+ */
+export function kindOfPath(kinds: readonly Kind[], path: string, scope: KindScope = {}, mirror?: string): string {
+  const top = topFolder(path)
+  if (!top) return UNFILED
+  const inBrain = !!scope.brain && isBrainPath(path, scope.brain)
+  const own = !inBrain && kindOfFolder(kinds, top)
+  if (own) return own.id
+  return (mirror && findKind(kinds, mirror.trim())?.id) || UNFILED
+}
+
+/** "Book chapters" → "Book chapter", "yt-scripts" → "Yt script": a kind's name from its folder's. */
+export function nameFromFolder(folder: string): string {
+  const words = folder.normalize('NFC').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!words) return folder
+  return kindDisplayName(words[0].toUpperCase() + words.slice(1))
+}
+
+/**
+ * The folder a kind renamed to `name` goes in, keeping the style of the one it had: a folder written
+ * like an id (yt-scripts) stays one (yt-shorts), and one the writer named in words ("Book chapters")
+ * takes the plural of the new name in words ("Short stories").
+ */
+export function folderForName(name: string, was: string): string {
+  const n = Array.from(name.trim().normalize('NFC')).slice(0, 40).join('').trim()
+  const plain = !was || was === kindId(was)
+  return plain ? kindFolderOf(kindId(n) || 'kind') : cleanFolderName(plural(n)) || kindFolderOf(kindId(n) || 'kind')
+}
+
+/**
+ * The writer's kinds: one for each of the vault's top-level folders (`folders`, already without the
+ * set-apart ones), with the settings saved for it. A saved kind is matched to a folder first by its
+ * own folder (ignoring case), then by the same name spelled another way ("Essays" for essays/, or
+ * a folder named by its id: "Email" for the email kind). A folder no saved kind matches is a new kind,
+ * named from the folder ("Book chapters" → Book chapter) with an id no saved kind uses. Saved kinds
+ * whose folder isn't there are left out, but their settings are kept, ready for when it comes back.
+ * Matched kinds keep the order they were saved in; the new ones follow, by folder name.
+ */
+export function kindsFromFolders(saved: readonly Kind[], folders: readonly string[]): Kind[] {
+  // Spelled as on disk (macOS may hand back a decomposed name): paths are built from it.
+  const list = [...new Map(folders.map((f) => [fold(f), f])).values()]
+  const owner = new Map<string, Kind>()
+  const used = new Set<string>()
+  const claim = (f: string, k: Kind | undefined) => {
+    if (!k) return
+    owner.set(f, k)
+    used.add(k.id)
+  }
+  for (const f of list)
+    claim(
+      f,
+      saved.find((k) => !used.has(k.id) && fold(k.folder) === fold(f)),
+    )
+  for (const f of list) {
+    if (owner.has(f)) continue
+    const s = kindId(f)
+    const one = kindId(singular(f))
+    claim(
+      f,
+      saved.find((k) => !used.has(k.id) && !!s && (kindId(k.folder) === s || k.id === s || k.id === one)),
+    )
+  }
+  const ids = new Set(saved.map((k) => k.id))
+  const made: Kind[] = []
+  for (const f of list.filter((f) => !owner.has(f)).sort((a, b) => a.localeCompare(b))) {
+    const base = kindId(singular(f)) || 'kind'
+    let id = base
+    for (let n = 2; ids.has(id) || !KIND_ID.test(id); n++) id = `${Array.from(base).slice(0, 36).join('').replace(/-+$/, '')}-${n}`
+    ids.add(id)
+    made.push({ id, name: nameFromFolder(f), folder: f, guidance: '', words: 800 })
+  }
+  const matched = saved.filter((k) => used.has(k.id)).map((k) => ({ ...k, folder: [...owner].find(([, o]) => o === k)![0] }))
+  return [...matched, ...made]
+}
+
+/** A kind's name, "Unfiled" for a note in no kind's folder, or a readable one for a kind the list doesn't have. */
+export const kindName = (kinds: readonly Kind[], id: string) => (id ? (findKind(kinds, id)?.name ?? id[0].toUpperCase() + id.slice(1)) : UNFILED_NAME)
 
 /** "3 YT scripts", for counts. */
-export const pieceName = (kinds: Kind[], id: string, n: number) => {
+export const pieceName = (kinds: readonly Kind[], id: string, n: number) => {
   // Singular first, so a name saved before the word rules ("YT Scripts") still reads "a YT script", "3 YT scripts".
   const one = kindDisplayName(findKind(kinds, id)?.name ?? 'piece')
   // "Essay" reads "essay" mid-sentence; "LinkedIn post" and "YT script" keep their capitals.
@@ -280,18 +406,33 @@ export const pieceName = (kinds: Kind[], id: string, n: number) => {
   return n === 1 ? noun : plural(noun)
 }
 
-/** How a help prompt describes the piece: "a LinkedIn post: short paragraphs, …". */
-export function describeKind(kinds: Kind[], id?: string) {
-  const k = findKind(kinds, id ?? 'essay') ?? findKind(kinds, 'essay') ?? kinds[0]
+/**
+ * How a help prompt describes the piece: "a LinkedIn post: short paragraphs, …". An Unfiled note,
+ * or one of a kind the list doesn't have, is just "a piece of writing": never a pretend essay.
+ */
+export function describeKind(kinds: readonly Kind[], id?: string) {
+  const k = id ? findKind(kinds, id) : undefined
   if (!k) return 'a piece of writing'
   const noun = pieceName(kinds, k.id, 1)
   const article = /^[aeiou]/i.test(noun) ? 'an' : 'a'
   return `${article} ${noun}${k.guidance ? `: ${k.guidance}` : ''}`
 }
 
-// The app's copy of the list, set from settings when they load or change.
-let current: Kind[] = DEFAULT_KINDS
+/**
+ * The built-in kinds the writer doesn't have yet (Essay, LinkedIn post, Email…). They're only
+ * offered: choosing one makes its folder, and so the kind.
+ */
+export const suggestedKinds = (kinds: readonly Kind[]) => DEFAULT_KINDS.filter((d) => !kinds.some((k) => k.id === d.id) && !kindTaken([...kinds], d.name))
+
+/** "24 notes move with it.", for a rename that moves a folder (asked before it's done). */
+export const notesMove = (n: number | undefined) => (n === undefined ? '' : n === 0 ? 'It has no notes yet.' : n === 1 ? '1 note moves with it.' : `${n} notes move with it.`)
+
+// The app's copy of the list (the vault's kinds, from the server), set when it loads or changes.
+// Empty in a vault with no folders yet: the built-in kinds are only suggestions then.
+let current: Kind[] = []
 export const setKinds = (kinds: Kind[] | undefined) => {
-  current = kinds?.length ? kinds : DEFAULT_KINDS
+  current = kinds ?? []
 }
 export const kinds = () => current
+/** The kinds a piece can be started as: the writer's, or with none yet, the suggestions (picking one makes its folder). */
+export const offeredKinds = () => (current.length ? current : DEFAULT_KINDS)

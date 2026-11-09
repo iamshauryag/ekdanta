@@ -3,8 +3,8 @@
 import { generate, parseJson, status, type Provider } from './ai.ts'
 import { search } from './recall.ts'
 import { voiceForPrompt } from './voice.ts'
-import { settingsNow } from './settings.ts'
-import { describeKind, findKind } from '../src/lib/kinds.ts'
+import { describeKind, findKind, type Kind } from '../src/lib/kinds.ts'
+import { vaultKinds } from './kinds.ts'
 import { capitalizeFirst, joinOnto, listItem, plainProse, repeatsFollowing, wholeSentences, wordEnding } from '../src/lib/prose.ts'
 import { fenceBrief, withBrief } from '../src/lib/brief.ts'
 import { briefForPrompt } from './brief.ts'
@@ -52,7 +52,9 @@ export interface HelpRequest {
 }
 
 /** What the piece is and how it should read, from its kind. */
-const norms = (platform?: string) => describeKind(settingsNow().kinds, platform)
+// The vault's kinds as read when the request came in (runHelp), so a prompt never describes a kind from a stale list.
+const kindsFor = new WeakMap<HelpRequest, Kind[]>()
+const norms = (req: HelpRequest) => describeKind(kindsFor.get(req) ?? [], req.platform)
 
 const RESTRAINT = `You are Ekdanta, a writing collaborator built on restraint. The writer owns every word.
 Help only as much as you are asked, never more. Never add commentary, preambles, quotation marks around your answer, or explanations.`
@@ -91,6 +93,7 @@ const avoiding = (req: HelpRequest) => new Set((req.avoid ?? []).map((a) => a.tr
 const wordOption = (a: unknown) => clean(String(a)).replace(/^[\s.…]+|[\s,;:]+$/g, '')
 
 export async function runHelp(req: HelpRequest): Promise<Record<string, unknown>> {
+  kindsFor.set(req, await vaultKinds())
   if (req.level === 1) {
     const results = await search(req.scope, { exclude: req.doc, limit: 9 })
     return { kind: 'recall', results }
@@ -115,7 +118,7 @@ async function generateHelp(req: HelpRequest, strong: Provider, fast: Provider):
     const brief = fenceBrief((await briefForPrompt(req.doc)) ?? '')
     const system = `${RESTRAINT}
 Level 2, Nudge: the writer has not written their first line yet. Ask ${n === 1 ? 'ONE question' : `${n} different questions`} that would help them find it. Ask about the subject the title names (what they mean by it, a moment or example to start from, why it matters to them), suited to the kind of piece. Each at most 20 words.
-Never write prose the writer could paste into the draft. Never praise. The piece is ${norms(req.platform)}. Return JSON: {"questions": ["..."]}${
+Never write prose the writer could paste into the draft. Never praise. The piece is ${norms(req)}. Return JSON: {"questions": ["..."]}${
       brief
         ? `\nThe writer has pinned what they are responding to (between <brief> tags in the request). Where it helps, ask about something it asks for, quoting a word or two of it. Ask in the language of the title, whatever language the brief is in.`
         : ''
@@ -139,7 +142,7 @@ Never write prose the writer could paste into the draft. Never praise. The piece
 Level 2, Nudge: reply with ONE question (or one short direction) that helps the writer think about ${
           next ? 'what their next paragraph could do, after the one they just finished' : 'the given paragraph'
         }. At most 20 words.
-Never write prose the writer could paste into the draft. Never praise. The piece is ${norms(req.platform)}.`,
+Never write prose the writer could paste into the draft. Never praise. The piece is ${norms(req)}.`,
         prompt: `${context(req)}${next ? 'Paragraph the writer just finished (they are starting the next one)' : 'Paragraph the writer is working on'}:\n"""${req.scope}"""${avoidLine(req)}`,
       },
       await briefForPrompt(req.doc),
@@ -159,7 +162,7 @@ Never write prose the writer could paste into the draft. Never praise. The piece
 Level 3, Word: the writer is typing a word and has typed "${partial}" so far${inside ? ` (the letters "${req.suffix}" follow the cursor, and may change)` : ''}. Suggest 4 or 5 single words that START WITH "${partial}" and fit the sentence's grammar, meaning and voice, best first.${
       inside ? '' : `\nIf "${partial}" is already a complete word that fits as it stands, set "complete" to true and instead suggest 4 or 5 options for the NEXT word.`
     }
-The piece is ${norms(req.platform)}. Return JSON: {"complete": false, "alternatives": ["...", "..."]}`
+The piece is ${norms(req)}. Return JSON: {"complete": false, "alternatives": ["...", "..."]}`
     const prompt = `${titleLine(req)}Text before the cursor (it ends with the letters typed so far):\n"""${req.scope.slice(-1500)}"""${
       req.after?.trim() ? `\n\nText after the word:\n"""${req.after.slice(0, 300)}"""` : ''
     }${await voiceForPrompt(req.platform)}${avoidLine(req)}`
@@ -185,7 +188,7 @@ Level 3, Word: ${
         ? `the writer is starting a new ${req.newLine ? 'line' : 'paragraph'} after their text. Suggest 4 or 5 options for its FIRST word`
         : "suggest 4 or 5 options for the NEXT word at the writer's cursor"
     }. Each option is a SINGLE word that could come ${opener ? 'first' : 'immediately after the text'} and fits its grammar, meaning and voice (use a two-word phrase only when no single word can work). Best first; make them genuinely different from each other.
-The piece is ${norms(req.platform)}. Return JSON: {"alternatives": ["...", "..."]}`
+The piece is ${norms(req)}. Return JSON: {"alternatives": ["...", "..."]}`
     const prompt = `${titleLine(req)}${opener ? "The writer's text so far" : 'Text before the cursor'}:\n"""${req.scope.slice(-1500)}"""${
       req.after?.trim() ? `\n\n${opener ? 'The paragraph after the new one' : 'Text after the cursor (the next word must lead into it)'}:\n"""${req.after.trim().slice(0, 300)}"""` : ''
     }${await voiceForPrompt(req.platform)}${avoidLine(req)}`
@@ -200,7 +203,7 @@ The piece is ${norms(req.platform)}. Return JSON: {"alternatives": ["...", "..."
   if (req.level === 3) {
     const system = `${RESTRAINT}
 Level 3, Word: suggest 4 or 5 replacements for the target word or phrase that fit the sentence's grammar and meaning, best first.
-The piece is ${norms(req.platform)}. Return JSON: {"alternatives": ["...", "..."]}`
+The piece is ${norms(req)}. Return JSON: {"alternatives": ["...", "..."]}`
     const prompt = `${titleLine(req)}Sentence: ${req.sentence ?? req.scope}\nTarget: ${req.scope}${await voiceForPrompt(req.platform)}${avoidLine(req)}`
     const raw = await generate(fast, { system, prompt, json: true, temperature: 0.6, tier: 'fast' })
     const target = req.scope.trim().toLowerCase()
@@ -218,7 +221,7 @@ The piece is ${norms(req.platform)}. Return JSON: {"alternatives": ["...", "..."
   const system = `${RESTRAINT}
 Level ${req.level}, ${one ? 'Sentence' : 'Passage'}: rewrite ONLY the given ${one ? 'sentence' : 'passage'} according to the writer's instruction.
 Change as little as needed to satisfy the instruction; keep everything that already works, keep the writer's voice, and keep Markdown formatting.
-Do not add new ideas the writer didn't have. The piece is ${norms(req.platform)}. Output only the rewritten text.`
+Do not add new ideas the writer didn't have. The piece is ${norms(req)}. Output only the rewritten text.`
   const prompt = `${context(req)}Instruction: ${req.instruction || (one ? 'Make this sentence better, in my voice.' : 'Improve this passage, in my voice.')}\n\n${
     one ? 'Sentence' : 'Passage'
   } to rewrite:\n"""${req.scope}"""${await voiceSamples(req)}${avoidLine(req)}`
@@ -234,7 +237,7 @@ Do not add new ideas the writer didn't have. The piece is ${norms(req.platform)}
  */
 async function continuation(req: HelpRequest, strong: Provider): Promise<Record<string, unknown>> {
   const many = req.level === 5
-  const budget = Math.max(20, Math.min(90, findKind(settingsNow().kinds, req.platform ?? 'essay')?.words ?? 90))
+  const budget = Math.max(20, Math.min(90, findKind(kindsFor.get(req) ?? [], req.platform ?? '')?.words ?? 90))
   const fresh = Boolean(req.atParagraphStart || req.list || req.heading !== undefined)
   const length = many ? `2 to 4 sentences, at most ${budget} words in all` : 'ONE sentence, and only that'
   const what = req.list
@@ -251,7 +254,7 @@ async function continuation(req: HelpRequest, strong: Provider): Promise<Record<
   const midWord = !fresh && req.partial ? req.partial : ''
   const system = `${RESTRAINT}
 Level ${req.level}, ${many ? 'Passage' : 'Sentence'}: ${what}
-Plain prose only: no headings, no lists, no line breaks. Match the writer's voice, rhythm and diction. The piece is ${norms(req.platform)}. ${
+Plain prose only: no headings, no lists, no line breaks. Match the writer's voice, rhythm and diction. The piece is ${norms(req)}. ${
     midWord
       ? `The text ends with "${midWord}", which may be an unfinished word. Return JSON: {"finish": "...", "text": "..."}, where "finish" is only the letters that complete that word (empty if it is already a whole word) and "text" is everything after the word, starting with any punctuation that follows it.`
       : 'Output only the new text.'

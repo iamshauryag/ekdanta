@@ -141,7 +141,7 @@ export function isReaderQuestion(q: string, text = ''): boolean {
 
 // ---- Remembering the last reader, per kind -------------------------------------------------------
 
-const storeKey = (kind: string) => `ekdanta.readAs.${kind || 'essay'}`
+const storeKey = (kind: string) => `ekdanta.readAs.${kind || 'unfiled'}`
 
 /** The reader last chosen for this kind of writing, or Teacher. Storage may be missing or blocked. */
 export function lastReader(storage: Pick<Storage, 'getItem'> | undefined, kind: string): Reader {

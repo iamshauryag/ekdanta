@@ -158,14 +158,17 @@ export function appearanceVars(a: Appearance): Record<string, string> {
 }
 
 /**
- * Where a new note goes. 'kind': the folder of the kind being written now (the open piece's kind, or
- * the first kind); 'current': the open document's folder; 'fixed': the chosen folder.
+ * Where a new note goes, which also says its kind (a kind is its folder). 'kind': the folder of the
+ * kind being written now: the open piece's (Unfiled, '', keeps the new note Unfiled at the top of the
+ * vault), or with nothing open the first kind; 'current': the open document's folder; 'fixed': the
+ * chosen folder.
  */
 export function newNoteFolder(a: Pick<Appearance, 'newNotesIn' | 'newNotesFolder'>, ctx: { currentFolder: string; platform?: string; kinds: readonly Kind[] }): string {
   if (a.newNotesIn === 'fixed') return cleanFolder(a.newNotesFolder) ?? ''
   if (a.newNotesIn === 'kind') {
-    const kind = ctx.kinds.find((k) => k.id === ctx.platform) ?? ctx.kinds[0]
-    return kind?.folder ?? ctx.currentFolder
+    if (ctx.platform === undefined) return ctx.kinds[0]?.folder ?? ''
+    if (!ctx.platform) return ''
+    return ctx.kinds.find((k) => k.id === ctx.platform)?.folder ?? ctx.currentFolder
   }
   return ctx.currentFolder
 }

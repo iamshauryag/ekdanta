@@ -3,11 +3,12 @@
 // The starters give structure and questions, never prose: every line the writer will keep is theirs.
 import { promises as fs } from 'node:fs'
 import { applyTemplate as fillPiece, authorOf, templateInfo, type TemplateInfo } from '../src/lib/templates.ts'
-import { findKind, kindName } from '../src/lib/kinds.ts'
+import { kindName } from '../src/lib/kinds.ts'
+import { vaultKinds } from './kinds.ts'
 import { splitFrontMatter } from '../src/lib/frontmatter.ts'
 import { HttpError } from './net.ts'
 import { loadSettings } from './settings.ts'
-import { VAULT, listFiles, readDoc, resolveInVault, writeDoc } from './vault.ts'
+import { VAULT, kindOfDoc, listFiles, readDoc, resolveInVault, writeDoc } from './vault.ts'
 
 export const TEMPLATES_FOLDER = 'templates'
 
@@ -43,7 +44,9 @@ export async function applyTemplateTo(docPath: string, templatePath: string): Pr
   const { meta, body } = splitFrontMatter(doc)
   if (body.trim()) throw new HttpError(409, 'This piece already has writing in it. Use /template to add a template where the caret is.')
   const settings = await loadSettings()
-  const ctx = { title: meta.title ?? '', kind: findKind(settings.kinds, meta.platform ?? '') ? kindName(settings.kinds, meta.platform!) : '', author: authorOf(settings), now: new Date() }
+  // Its kind is its folder's (an Unfiled piece has none, so {{kind}} is left empty).
+  const kind = await kindOfDoc(docPath, meta.platform)
+  const ctx = { title: meta.title ?? '', kind: kind ? kindName(await vaultKinds(), kind) : '', author: authorOf(settings), now: new Date() }
   const { content, cursor } = fillPiece(doc, template, ctx)
   await writeDoc(docPath, content, { reason: 'template' })
   return { cursor }

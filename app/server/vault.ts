@@ -5,7 +5,8 @@ import { constants, existsSync, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { joinDoc, joinFrontMatter, patchContent, patchFrontMatter, splitFrontMatter, type MetaPatch } from '../src/lib/frontmatter.ts'
 import { docTags, metaTags } from '../src/lib/tags.ts'
-import { findKind, kindOfFolder, type Kind } from '../src/lib/kinds.ts'
+import { findKind, isSetApartFolder, kindOfFolder, kindOfPath, nameFromFolder, topFolder, type Kind, type KindScope } from '../src/lib/kinds.ts'
+import { kindScope, saveKind, vaultKinds } from './kinds.ts'
 import { docDefaults } from '../src/lib/docstyle.ts'
 import { isSpecialFile, isSpecialPath } from '../src/lib/special.ts'
 import { isBrainPath } from '../src/lib/brain.ts'
@@ -21,6 +22,10 @@ export interface FileEntry {
   path: string // relative to the vault, with forward slashes
   folder: string
   title: string
+  /**
+   * The note's kind: its top-level folder's (src/lib/kinds.ts kindOfPath), never front matter's
+   * `platform`, which only mirrors it. Left out for an Unfiled note.
+   */
   platform?: string
   exemplar: boolean
   mtime: number
@@ -44,14 +49,16 @@ export function resolveInVault(rel: string): string {
 }
 
 // The vault's files, read once and re-read only when they change (on disk or through Ekdanta).
-const cache = createFileCache<FileEntry>(VAULT, (rel, raw, stat) => {
+// `mirror` is front matter's `platform`: it places only notes in set-apart folders (a template's kind).
+type Cached = Omit<FileEntry, 'platform'> & { mirror?: string }
+const cache = createFileCache<Cached>(VAULT, (rel, raw, stat) => {
   const fm = splitFrontMatter(raw)
   const { meta, body } = fm
   return {
     path: rel,
     folder: rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '',
     title: meta.title || meta['template-name'] || firstHeading(body) || (isUntitled(rel) ? 'Untitled' : path.posix.basename(rel, '.md')),
-    platform: meta.platform,
+    ...(meta.platform?.trim() ? { mirror: meta.platform.trim() } : {}),
     exemplar: meta.exemplar === 'true',
     mtime: stat.mtime,
     tags: docTags(fm),
@@ -76,7 +83,20 @@ function aliasesOf(raw: string) {
  * Every document in the vault, sorted by path. Only files changed since the last call are read.
  * Files waiting in _inbox/ aren't documents yet (the Import sheet picks them up), so they're left out.
  */
-export const listFiles = async (): Promise<FileEntry[]> => (await cache.list()).filter((f) => !/^_inbox\//i.test(f.path))
+export async function listFiles(): Promise<FileEntry[]> {
+  const [entries, kinds, scope] = await Promise.all([cache.list(), vaultKinds(), kindScope()])
+  return entries
+    .filter((f) => !/^_inbox\//i.test(f.path))
+    .map(({ mirror, ...f }) => {
+      const platform = kindOfPath(kinds, f.path, scope, mirror)
+      return platform ? { ...f, platform } : f
+    })
+}
+
+/** The kind of the note at `rel` now (see FileEntry.platform): '' when it's Unfiled. */
+export async function kindOfDoc(rel: string, mirror?: string): Promise<string> {
+  return kindOfPath(await vaultKinds(), rel, await kindScope(), mirror)
+}
 
 /** Every document's path, mtime and size, from stats alone: cheap enough to poll. */
 export const statAll = (): Promise<FileStat[]> => cache.statAll()
@@ -268,6 +288,12 @@ export async function collectTouched<T>(fn: () => Promise<T>): Promise<{ result:
 
 function touch(rel: string, mtime: number) {
   touchedStore.getStore()?.set(rel, mtime)
+}
+
+/** Forget paths a move only passed through (a rename's name in between): the app never sees them. */
+function untouch(passing: (rel: string) => boolean) {
+  const seen = touchedStore.getStore()
+  if (seen) for (const p of [...seen.keys()]) if (passing(p)) seen.delete(p)
 }
 
 async function touchOnDisk(rel: string) {
@@ -589,12 +615,21 @@ export async function freePath(folder: string, name: string) {
   }
 }
 
-export async function createDoc(kinds: Kind[], folder: string, platform?: string) {
+/**
+ * A new, empty draft in `folder`. It is the kind of the folder it's made in (its top-level folder's),
+ * and Unfiled at the top of the vault. With `kind`, it's made in that kind's folder unless `folder`
+ * is already in it (essays/2024 for an essay); in a set-apart folder (templates/) `kind` is only what
+ * its front matter names. Front matter mirrors the kind; an Unfiled draft has no `platform`.
+ */
+export async function createDoc(kinds: readonly Kind[], folder: string, opts: { kind?: string; scope?: KindScope } = {}) {
   folder = folder.replace(/^\/+|\/+$/g, '')
-  const guess = kindOfFolder(kinds, folder.split('/').pop()!)?.id ?? kinds[0]?.id ?? 'essay'
-  const kind = platform ?? guess
+  const scope = opts.scope ?? (await kindScope())
+  const asked = opts.kind ? findKind(kinds, opts.kind) : undefined
+  const here = kindOfPath(kinds, `${folder ? folder + '/' : ''}x.md`, scope, asked?.id)
+  if (asked && here !== asked.id) folder = asked.folder
+  const kind = asked ?? findKind(kinds, here)
   // A kind with document defaults (an academic essay in MLA, say) passes them on to its new pieces.
-  const meta = { title: '', platform: kind, status: 'draft', created: today(), ...docDefaults(findKind(kinds, kind)?.doc) }
+  const meta = { title: '', ...(kind ? { platform: kind.id } : {}), status: 'draft', created: today(), ...docDefaults(kind?.doc) }
   const rel = await freePath(folder, 'untitled')
   await writeDoc(rel, joinFrontMatter('', meta, ''), { reason: 'create' })
   return rel
@@ -636,11 +671,11 @@ const exists = (abs: string) =>
   )
 
 /**
- * Why a document stays where it is when its kind changes: where it is keeps its notes (a special
- * folder, an excluded one, the Brain), its kind is one the list doesn't have, or the kind's folder
- * is one of those set-apart folders itself, so filing the note there would take it out of view.
+ * Why a document stays where it is when its kind changes: where it is keeps its notes (a set-apart
+ * folder such as templates/ or journal/, one the writer excluded, the Brain), or the kind isn't one
+ * the writer has. A note that stays still takes the kind in its front matter (see kindOfPath).
  */
-export type Stay = 'special' | 'excluded' | 'brain' | 'unknown-kind' | 'target-special' | 'target-excluded' | 'target-brain'
+export type Stay = 'special' | 'excluded' | 'brain' | 'unknown-kind'
 
 export interface PlaceOptions {
   /** The writer's excluded folders (settings). */
@@ -652,38 +687,32 @@ export interface PlaceOptions {
 /** Which set-apart folder a path is in, if any: the Brain first, since its default folder is a special one too. */
 function apart(rel: string, opts: PlaceOptions): 'special' | 'excluded' | 'brain' | null {
   if (opts.brain && isBrainPath(rel, opts.brain)) return 'brain'
-  if (isSpecialPath(rel)) return 'special'
+  const top = topFolder(rel)
+  if (isSpecialPath(rel) || (top && isSetApartFolder(top))) return 'special'
   if (isSpecialPath(rel, opts.excluded)) return 'excluded'
   return null
 }
 
 /**
- * Where a document's kind files it: the folder it moves to, or null when it's already in that
- * kind's folder (at any depth: essays/2024/ is still the essays folder) or stays put for a reason.
- * A kind's folder is the one already in the vault that holds it, in whatever case it was written,
- * or else the kind's own. Special folders and files, the writer's excluded folders and the Brain
- * keep their notes whatever kind they name, and are never filed into either: they hold material,
- * or what the writer set aside, and the app leaves them out of view. `folder` names the kind's
- * folder when that's why it stayed.
+ * Where a document goes when it's made the kind `kind` ('' for Unfiled): the folder it moves to
+ * ('' is the top of the vault), or null when it's already there or stays put. A note anywhere in the
+ * kind's folder (essays/2024/) is already there. Set-apart folders keep their notes whatever kind
+ * they're given: they hold material, or what the writer set aside.
  */
-export async function placement(kinds: Kind[], rel: string, opts: PlaceOptions = {}): Promise<{ to: string | null; stay?: Stay; folder?: string }> {
+export function placement(kinds: readonly Kind[], rel: string, kind: string, opts: PlaceOptions = {}): { to: string | null; stay?: Stay } {
   const here = apart(rel, opts)
   if (here) return { to: null, stay: here }
-  const kind = findKind(kinds, splitFrontMatter(await readDoc(rel)).meta.platform ?? '')
-  if (!kind) return { to: null, stay: 'unknown-kind' }
-  const holds = (f: string) => kindOfFolder(kinds, f)?.id
-  const top = rel.includes('/') ? rel.split('/')[0] : ''
-  if (top && holds(top) === kind.id) return { to: null }
-  const dirs = (await fs.readdir(VAULT, { withFileTypes: true })).filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name)
-  const to = dirs.find((d) => holds(d) === kind.id) ?? kind.folder
-  const there = apart(`${to}/x.md`, opts)
-  if (there) return { to: null, stay: `target-${there}`, folder: to }
-  return { to }
+  if (!kind) return { to: topFolder(rel) ? '' : null }
+  const target = findKind(kinds, kind)
+  if (!target) return { to: null, stay: 'unknown-kind' }
+  if (kindOfFolder(kinds, topFolder(rel))?.id === target.id) return { to: null }
+  return { to: target.folder }
 }
 
-// The moves a kind change made that may still be undone, by token. A move from or onto the path one
-// left behind, or the note going to the trash, forgets it: Undo must never act on another note.
-// Only the latest are kept: an Undo is offered for a few seconds, so an old token has no use.
+// The moves that may still be undone (a kind change, or a move to another folder), by token. A move
+// from or onto the path one left behind, or the note going to the trash, forgets it: Undo must never
+// act on another note. Only the latest are kept: an Undo is offered for a few seconds, so an old
+// token has no use. `platform` is what front matter said before.
 const placed = new Map<string, { path: string; prev: string; platform: string }>()
 const PLACED_MAX = 50
 const forgetPlaced = (...paths: string[]) => {
@@ -691,29 +720,48 @@ const forgetPlaced = (...paths: string[]) => {
   for (const [token, m] of placed) if (gone.has(m.path.normalize('NFC').toLowerCase())) placed.delete(token)
 }
 
-/**
- * After a kind change, file the document in that kind's folder. It moves from anywhere else,
- * a folder of the writer's own included, through relocate, so everything that belongs to it
- * follows. A name already taken there gets -2. Returns its path, why it stayed if it did, and
- * when it moved, a token that undoes the move (`was` is the kind it had before the change).
- */
-export async function fileByKind(kinds: Kind[], rel: string, opts: PlaceOptions & { was?: string } = {}): Promise<{ path: string; stay?: Stay; folder?: string; undo?: string }> {
-  const { to, stay, folder } = await placement(kinds, rel, opts)
-  if (to === null) return { path: rel, ...(stay ? { stay } : {}), ...(folder ? { folder } : {}) }
-  const next = await relocate(rel, await freePath(to, path.posix.basename(rel, '.md')))
-  if (opts.was === undefined) return { path: next }
-  const undo = randomBytes(18).toString('base64url')
-  placed.set(undo, { path: next, prev: rel, platform: opts.was })
+/** A token that undoes the move of `prev` to `next` (see unfileDoc). */
+function undoToken(next: string, prev: string, platform: string) {
+  const token = randomBytes(18).toString('base64url')
+  placed.set(token, { path: next, prev, platform })
   // A Map keeps insertion order, so the first keys are the oldest.
   for (const old of placed.keys()) {
     if (placed.size <= PLACED_MAX) break
     placed.delete(old)
   }
-  return { path: next, undo }
+  return token
+}
+
+/**
+ * Front matter's `platform` made to mirror the kind (removed for Unfiled). Only the app's own moves
+ * and new notes write it; a note is never rewritten for being opened. A block Ekdanta can't edit is
+ * left as it is: the folder says the kind anyway.
+ */
+async function mirrorKind(rel: string, kind: string) {
+  const fm = splitFrontMatter(await readDoc(rel))
+  if (fm.readonly || (fm.meta.platform ?? '').trim() === kind) return
+  if (!kind && fm.meta.platform === undefined) return
+  await patchDoc(rel, { platform: kind || null }, 'move')
+}
+
+/**
+ * Make a document the kind `kind` ('' for Unfiled): it moves into that kind's folder (to the top of
+ * the vault for Unfiled) through relocate, so everything that belongs to it follows. A name already
+ * taken there gets -2. Its front matter mirrors the new kind. Returns its path, why it stayed if it
+ * did, and when `was` (what front matter said before) is given, a token that undoes it.
+ */
+export async function fileByKind(kinds: readonly Kind[], rel: string, kind: string, opts: PlaceOptions & { was?: string } = {}): Promise<{ path: string; stay?: Stay; undo?: string }> {
+  const { to, stay } = placement(kinds, rel, kind, opts)
+  if (stay === 'unknown-kind') return { path: rel, stay }
+  const was = opts.was ?? splitFrontMatter(await readDoc(rel)).meta.platform ?? ''
+  const next = to === null ? rel : await relocate(rel, await freePath(to, path.posix.basename(rel, '.md')))
+  await mirrorKind(next, kind)
+  if (next === rel) return { path: rel, ...(stay ? { stay } : {}) }
+  return { path: next, ...(opts.was !== undefined ? { undo: undoToken(next, rel, was) } : {}) }
 }
 
 /** fileByKind, for callers that only want the path. */
-export const placeDoc = async (kinds: Kind[], rel: string, opts: PlaceOptions = {}) => (await fileByKind(kinds, rel, opts)).path
+export const placeDoc = async (kinds: readonly Kind[], rel: string, kind: string, opts: PlaceOptions = {}) => (await fileByKind(kinds, rel, kind, opts)).path
 
 /** A vault path to a document: Markdown, inside the vault, and in no dot folder (.ekdanta, .git). Else a 400. */
 export function docPath(rel: unknown): string {
@@ -736,25 +784,22 @@ export async function existingDoc(rel: unknown): Promise<string> {
 }
 
 /**
- * Undo a kind change that moved a document, by the token the move gave: its kind goes back and the
- * document goes back where it was (prev-2 if something has taken that name since). A token that's
- * unknown, used, or forgotten because the note has moved or gone since is refused (409).
+ * Undo a kind change or a move, by the token it gave: the document goes back where it was (prev-2
+ * if something has taken that name since), so it's the kind it was, and its front matter says what
+ * it said before. A token that's unknown, used, or forgotten because the note has moved or gone
+ * since is refused (409).
  */
 export async function unfileDoc(token: string) {
   const m = typeof token === 'string' ? placed.get(token) : undefined
   if (!m) throw new HttpError(409, 'It has moved or changed since, so it can’t be put back from here.')
   const rel = docPath(m.path)
   const prev = docPath(m.prev)
-  if (isSpecialPath(prev)) throw new HttpError(400, 'Not a place to put a document back')
   if (!(await exists(resolveInVault(rel)))) {
     placed.delete(token)
     throw new HttpError(404, 'Not in the vault')
   }
   const fm = splitFrontMatter(await readDoc(rel))
-  if ((fm.meta.platform ?? '') !== m.platform) {
-    await editableFrontMatter(rel, 'change the kind of')
-    await patchDoc(rel, { platform: m.platform || null }, 'move')
-  }
+  if (!fm.readonly && (fm.meta.platform ?? '') !== m.platform) await patchDoc(rel, { platform: m.platform || null }, 'move')
   placed.delete(token)
   if (prev === rel) return rel
   return relocate(rel, await freePath(folderOf(prev), path.posix.basename(prev, '.md')))
@@ -1003,18 +1048,82 @@ async function moveRest(srcDir: string, destDir: string) {
   await fs.rmdir(srcDir).catch(() => {})
 }
 
-/** Move a document to another folder. A platform's folder makes it a piece for that platform. */
-export async function moveToFolder(kinds: Kind[], rel: string, folder: string) {
-  folder = folder.replace(/^\/+|\/+$/g, '').trim()
-  if (folder.split('/').some((part) => part.startsWith('.'))) throw new Error('Not a folder for documents')
+/**
+ * Move a document to another folder. The folder says its kind: a kind's folder (or one inside it)
+ * makes it that kind, the top of the vault makes it Unfiled, and a new top-level folder is a new
+ * kind. Its front matter mirrors that, except in a set-apart folder (templates/), where it keeps the
+ * kind it named. Returns where it went and a token that undoes the move (see unfileDoc).
+ */
+export async function moveToFolder(rel: string, folder: string): Promise<{ path: string; undo?: string }> {
+  folder = folder
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .trim()
+  if (folder.split('/').some((part) => part.startsWith('.') || (folder && !part.trim()))) throw new HttpError(400, 'Not a folder for documents')
   resolveInVault(folder || '.')
-  if (folder === folderOf(rel)) return rel
-  const platform = kindOfFolder(kinds, folder)?.id
-  // A kind's folder files the page as that kind; one whose front matter can't change can't say so, so it stays put.
-  if (platform && splitFrontMatter(await readDoc(rel)).meta.platform?.toLowerCase() !== platform) await editableFrontMatter(rel, 'move')
+  if (folder === folderOf(rel)) return { path: rel }
+  const was = splitFrontMatter(await readDoc(rel)).meta.platform ?? ''
   const next = await relocate(rel, await freePath(folder, path.posix.basename(rel, '.md')))
-  if (platform) await patchDoc(next, { platform }, 'move')
-  return next
+  // Read after the move: a folder made by it is a kind now.
+  const kinds = await vaultKinds()
+  const scope = await kindScope()
+  if (!apart(next, scope)) await mirrorKind(next, kindOfPath(kinds, next, scope))
+  return { path: next, undo: undoToken(next, rel, was) }
+}
+
+/**
+ * Rename a top-level folder that is a kind, and so the kind: its notes move (renameFolder), and the
+ * kind keeps its id and settings under the new folder. `name` is the kind's new name; by default it
+ * comes from the folder ("Book chapters" → Book chapter). Refused when the new folder is another
+ * kind's or a set-apart one. A renamed subfolder is still its parent's kind, so it's a plain rename.
+ */
+export async function renameKindFolder(from: string, to: string, name?: string): Promise<{ moved: { from: string; to: string }[]; kinds: Kind[] }> {
+  from = cleanFolder(from)
+  to = cleanFolder(to)
+  const kinds = await vaultKinds()
+  const kind = !from.includes('/') ? kindOfFolder(kinds, from) : undefined
+  // The folder stays as it is (Email → Emails both file in emails/): nothing moves, only the name changes.
+  if (from === to) return { moved: [], kinds: kind && name?.trim() && name.trim() !== kind.name ? await saveKind({ ...kind, name: name.trim() }) : kinds }
+  // The same folder in another case is a rename of its own (a case-insensitive disk sees one folder).
+  const caseOnly = from !== to && from.normalize('NFC').toLowerCase() === to.normalize('NFC').toLowerCase()
+  if (!kind) {
+    // Never into a folder that's there already: a rename that merged two folders couldn't be told apart from it.
+    if (!caseOnly && (await exists(resolveInVault(to)))) throw new HttpError(409, `There's already a ${to}/ folder`)
+    return { moved: caseOnly ? await recase(from, to) : await renameFolder(from, to), kinds }
+  }
+  if (to.includes('/')) throw new HttpError(400, 'A kind’s folder sits at the top of the vault')
+  const scope = await kindScope()
+  if (isSetApartFolder(to, scope)) throw new HttpError(409, `${to}/ is a folder Ekdanta keeps apart, so it can’t be a kind`)
+  const other = kindOfFolder(kinds, to)
+  if (other && other.id !== kind.id) throw new HttpError(409, `${other.folder}/ is already the ${other.name} folder`)
+  if (!caseOnly && (await exists(resolveInVault(to)))) throw new HttpError(409, `There's already a ${to}/ folder`)
+  const moved = caseOnly ? await recase(from, to) : await renameFolder(from, to)
+  const next = await saveKind({ ...kind, folder: to, name: name?.trim() || nameFromFolder(to) })
+  return { moved, kinds: next }
+}
+
+/**
+ * Rename a folder to the same name in another case, through a free name in between, so a
+ * case-insensitive disk takes it. The name in between is never reported as touched, and if the
+ * second step fails everything goes back where it was, so no stray `X-renaming/` (a kind) is left.
+ */
+async function recase(from: string, to: string) {
+  if (from === to) return []
+  let mid = `${to}-renaming`
+  for (let n = 2; await exists(resolveInVault(mid)); n++) mid = `${to}-renaming-${n}`
+  const inMid = (p: string) => p === mid || p.startsWith(mid + '/')
+  try {
+    const first = await renameFolder(from, mid)
+    try {
+      const second = await renameFolder(mid, to)
+      return first.map((m) => ({ from: m.from, to: second.find((s) => s.from === m.to)?.to ?? m.to }))
+    } catch (e) {
+      if (await exists(resolveInVault(mid))) await renameFolder(mid, from).catch((err) => console.error(`[ekdanta] couldn't put ${mid}/ back as ${from}/:`, err))
+      throw e
+    }
+  } finally {
+    untouch(inMid)
+  }
 }
 
 /** A copy of a document (and its Thinking Space) to work on separately. */

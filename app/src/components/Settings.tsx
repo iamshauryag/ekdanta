@@ -9,6 +9,12 @@ interface Props {
   onChange: (patch: Partial<S>) => void
   onClose: () => void
   onRenameKindFolder?: (id: string) => Promise<void>
+  /** Rename a kind, and so its folder. */
+  onRenameKind?: (id: string, name: string) => Promise<void>
+  /** Remove a kind, and so its (empty) folder. */
+  onRemoveKind?: (id: string) => Promise<void>
+  /** How many notes a folder holds. */
+  countIn?: (folder: string) => number
   /** Every folder in the vault, for the folder pickers. */
   folders: string[]
   /** Why the chosen CSS snippet isn't applied, if it isn't. */
@@ -18,7 +24,7 @@ interface Props {
 // Reopening Settings returns to the tab you left.
 let lastTab: Tab = 'writing'
 
-export function Settings({ settings: s, status, onChange, onClose, onRenameKindFolder, folders, snippetNote }: Props) {
+export function Settings({ settings: s, status, onChange, onClose, onRenameKindFolder, onRenameKind, onRemoveKind, countIn, folders, snippetNote }: Props) {
   const sheet = useRef<HTMLDivElement>(null)
   const body = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
@@ -72,7 +78,7 @@ export function Settings({ settings: s, status, onChange, onClose, onRenameKindF
     setIndex(`${r.paragraphs} paragraphs from ${r.files} documents`)
   }
 
-  const ctx: RowCtx = { s, status, onChange, folders, snippets, snippetNote, index, rebuild, onRenameFolder: onRenameKindFolder }
+  const ctx: RowCtx = { s, status, onChange, folders, snippets, snippetNote, index, rebuild, onRenameFolder: onRenameKindFolder, onRenameKind, onRemoveKind, countIn }
   const offered = ROWS.filter((r) => !r.when || r.when(ctx))
   const hits = useMemo(() => searchRows(offered, tabLabel, query), [offered.map((r) => r.id).join(), query]) // eslint-disable-line react-hooks/exhaustive-deps
   const searching = query.trim().length > 0

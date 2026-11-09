@@ -9,7 +9,7 @@ import { generate, parseJson, status } from './ai.ts'
 import { embedder } from './embed.ts'
 import { HttpError } from './net.ts'
 import { refresh, type Chunk } from './recall.ts'
-import { loadSettings } from './settings.ts'
+import { kindFor, offeredKinds, vaultKinds } from './kinds.ts'
 import { seedThinking } from './thinking.ts'
 import { writeBrief } from './brief.ts'
 import { META_DIR, createDoc, listFiles, nameDoc, readDoc, writeDoc } from './vault.ts'
@@ -230,7 +230,7 @@ export async function runSparks(body: SparkRequest): Promise<SparkResult> {
   const { strong } = await status()
   if (req.model === false || !strong) return pairs
 
-  const { kinds } = await loadSettings()
+  const kinds = await offeredKinds()
   const labels = new Map<string, Passage>()
   const lines = chosen.map((g, i) => {
     const ps = g.ids.map((id) => {
@@ -321,13 +321,13 @@ export async function keepSpark(card: { key: string; title?: string; angle?: str
 export async function startPiece(card: { key: string; title?: string; angle?: string; why?: string; sources: { id: string }[] }, kindId?: string) {
   checkCard(card)
   const passages = await verify(card)
-  const { kinds } = await loadSettings()
-  const kind = kinds.find((k) => k.id === kindId) ?? kinds[0]
-  const created = await createDoc(kinds, kind?.folder ?? '', kind?.id)
+  // In the chosen kind's folder, made now if it's a suggestion; with no kind, Unfiled at the top of the vault.
+  const kind = typeof kindId === 'string' && kindId ? await kindFor(kindId) : undefined
+  const created = await createDoc(await vaultKinds(), '', { kind: kind?.id })
   const fm = splitFrontMatter(await readDoc(created))
   const title = shortTitle(clean(card.title))
   const docs = [...new Set(passages.map((p) => p.doc))]
-  await writeDoc(created, joinDoc({ ...patchFrontMatter(fm, { title, platform: kind?.id ?? fm.meta.platform ?? 'essay', 'sparked-from': docs.join(', ') }), body: '' }), { reason: 'sparks' })
+  await writeDoc(created, joinDoc({ ...patchFrontMatter(fm, { title, 'sparked-from': docs.join(', ') }), body: '' }), { reason: 'sparks' })
   const rel = title ? await nameDoc(created, title) : created
   const angle = clean(card.angle)
   await seedThinking(rel, [...(angle ? [{ text: angle, mark: 'Spark' }] : []), ...passages.map((p) => ({ text: p.text, from: { doc: p.doc, title: p.title, folder: p.folder } }))])

@@ -73,7 +73,7 @@ test('renaming keeps the brief; trashing moves it with the document; restoring b
   assert.match(await readBrief(next), /^Evaluate the claim/)
   assert.equal(await exists(briefFile('essays/cities.md')), false)
 
-  const moved = await vault.moveToFolder([], next, 'drafts')
+  const moved = (await vault.moveToFolder(next, 'drafts')).path
   assert.match(await readBrief(moved), /^Evaluate the claim/)
 
   const item = await vault.trashDoc(moved)
@@ -91,7 +91,7 @@ test('a duplicate starts without the brief', async () => {
 })
 
 test('a new draft with only a brief pinned is not discarded as empty', async () => {
-  const rel = await vault.createDoc([], '', 'essay')
+  const rel = await vault.createDoc([], '', { kind: 'essay' })
   await writeBrief(rel, 'Answer the question.')
   assert.equal(await vault.discardIfEmpty(rel), false)
   assert.ok(await exists(path.join(root, rel)))

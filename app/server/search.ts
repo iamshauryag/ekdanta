@@ -3,7 +3,8 @@
 // folder and the trash are dot-folders, which the cache never walks; special and excluded folders
 // are left out as Recall leaves them out. The query language lives in src/lib/searchQuery.ts.
 import path from 'node:path'
-import { findKind, kindId } from '../src/lib/kinds.ts'
+import { findKind, kindId, kindOfPath, plural } from '../src/lib/kinds.ts'
+import { scopeOf, vaultKinds } from './kinds.ts'
 import { compile, occurrence, parseQuery, plainLines, snippet, tagsOf, type Range, type SearchDoc } from '../src/lib/searchQuery.ts'
 import { fold } from '../src/lib/fuzzy.ts'
 import { isSpecialPath } from '../src/lib/special.ts'
@@ -62,13 +63,17 @@ export async function searchVault(q: string, opts: { matchCase?: boolean; limit?
   if (query.error) return { ...NONE, error: query.error }
   if (q.trim().length < 2) return NONE
   const settings = await loadSettings()
-  // kind: takes a kind's id, its name or its plural ("kind:email", "kind:Emails", "kind:linkedin-post").
+  const kinds = await vaultKinds()
+  const scope = scopeOf(settings)
+  const kindOf = (doc: { path: string; meta: Record<string, string> }) => kindOfPath(kinds, doc.path, scope, doc.meta.platform)
+  // kind: takes a kind's id, its name or its plural ("kind:email", "kind:Emails", "kind:linkedin-post"), or "unfiled".
   const kindIds = (value: string) => {
     const v = fold(value)
-    const k = findKind(settings.kinds, value) ?? settings.kinds.find((k) => fold(k.name) === v || fold(k.name) + 's' === v || k.id === kindId(value))
+    if (v === 'unfiled') return ['']
+    const k = findKind(kinds, value) ?? kinds.find((k) => fold(k.name) === v || fold(plural(k.name)) === v || fold(k.folder) === v || k.id === kindId(value))
     return k ? [k.id] : [value]
   }
-  const matcher = compile(query, { matchCase: opts.matchCase, kindIds })
+  const matcher = compile(query, { matchCase: opts.matchCase, kindIds, kindOf })
   const docs = (await cache.list()).filter((d) => !isSpecialPath(d.path, settings.excludedFolders))
 
   const files: (SearchFile & { mtime: number })[] = []
@@ -88,7 +93,7 @@ export async function searchVault(q: string, opts: { matchCase?: boolean; limit?
     const folder = doc.path.includes('/') ? doc.path.slice(0, doc.path.lastIndexOf('/')) : ''
     const titleRanges = matcher.ranges(doc.title)
     matches += titleRanges.length
-    files.push({ path: doc.path, title: doc.title, folder, platform: doc.meta.platform, titleRanges, hits, mtime: doc.mtime })
+    files.push({ path: doc.path, title: doc.title, folder, platform: kindOf(doc) || undefined, titleRanges, hits, mtime: doc.mtime })
     total += Math.max(1, hits.length)
   }
   // A match in the title first, then the most matches, then the most recently changed.

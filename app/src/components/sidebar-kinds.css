@@ -1,0 +1,23 @@
+/* The Vault list's folders, which are kinds: a page dragged over one, and a folder being renamed. */
+
+.sidebar .folder-name.is-drop {
+  border-radius: 6px;
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent-line);
+  outline-offset: -1px;
+}
+
+.sidebar .file-row[draggable='true'] {
+  cursor: default;
+}
+
+.sidebar .folder-rename {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  background: var(--pop);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 1px 4px;
+}

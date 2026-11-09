@@ -293,7 +293,7 @@ export function AssistantTab(p: Props) {
   /** What the writer asked, for an answer: their message before it. */
   const askOf = (turn: Turn) => [...turns].reverse().find((t) => t.role === 'writer' && t.at <= turn.at)?.text ?? ''
 
-  const kind = kindName(kinds(), p.platform)
+  const kind = p.platform ? kindName(kinds(), p.platform) : 'piece'
   const examples = [`Tighten this ${kind}`, 'Give me 3 hooks', 'What would a reader ask here?', 'Where does this drag?']
   const noModel = p.status && !p.status.strong && p.ceiling >= 2
   const key = binding('assistant') ? formatKey(binding('assistant')) : ''
