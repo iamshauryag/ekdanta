@@ -20,6 +20,7 @@
 // A ghost from ⌘5 takes Tab for the next sentence, ⌥→ for a word, ⌘↵ for all of it, ⌘5 for another,
 // Esc or ⌘0 to dismiss. A selection works as it always has: ⌘3 replaces, ⌘4 and ⌘5 rewrite.
 import type { Node as PMNode } from '@tiptap/pm/model'
+import { acceptedEdits, applyEdits, insertPlain, mergeEq, partHunks, refusedFormats } from './format.ts'
 import { TextSelection, type Transaction } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 import { binding, formatKey } from '../lib/keys.ts'
@@ -97,37 +98,6 @@ const EMPTY_MESSAGES: Record<Level, string> = {
   3: 'No better word found',
   4: 'No continuation found',
   5: 'No change suggested',
-}
-
-/**
- * Insert plain text at a position, inheriting the formatting there: a blank line starts a new
- * paragraph and a single newline is a line break, as the model's own text would read.
- */
-function insertPlain(tr: Transaction, from: number, to: number, text: string) {
-  const schema = tr.doc.type.schema
-  // Replaced text keeps its own formatting. New text between two runs gets only what both share,
-  // so a word added after bold text isn't bold unless the text after it is too.
-  const $from = tr.doc.resolve(from)
-  const marks = to > from ? (tr.doc.resolve(from + 1).marks() ?? []) : $from.marks().filter((m) => (tr.doc.resolve(Math.min(to, tr.doc.content.size)).nodeAfter?.marks ?? []).some((n) => n.eq(m)))
-  if (to > from) tr.delete(from, to)
-  let pos = from
-  text.split(/\n{2,}/).forEach((para, i) => {
-    if (i > 0) {
-      tr.split(pos)
-      pos += 2
-    }
-    para.split('\n').forEach((line, j) => {
-      if (j > 0) {
-        tr.insert(pos, schema.nodes.hardBreak.create())
-        pos += 1
-      }
-      if (line) {
-        tr.insert(pos, schema.text(line, marks))
-        pos += line.length
-      }
-    })
-  })
-  return pos
 }
 
 export class HelpController {
@@ -970,7 +940,16 @@ export class HelpController {
     const size = this.doc.content.size
     if (p.from < 0 || p.to > size || p.from > p.to) return false
     const original = textOf(this.doc, p.from, p.to)
-    const hunks = computeHunks(original, p.text)
+    // The page has changed under the changes since they were found: they'd land in the wrong place.
+    if (p.original !== undefined && p.original !== original) return false
+    let hunks = p.parts ? partHunks(this.view.state.schema, original, p.parts) : computeHunks(original, p.text)
+    // A formatting change that wouldn't go in exactly as proposed is never shown as one that would: it is left
+    // out here, and the tab is told which.
+    const refused = refusedFormats(this.view.state.tr, p.from, p.to, hunks)
+    if (refused.length) {
+      hunks = mergeEq(hunks.map((x) => (x.kind === 'chg' && x.part !== undefined && refused.includes(x.part) ? { kind: 'eq' as const, text: x.del } : x)))
+      p.onRefused?.(refused)
+    }
     if (!hunks.some((x) => x.kind === 'chg')) return false
     this.seq++
     this.onProposal = p.onDone
@@ -986,7 +965,8 @@ export class HelpController {
       focus: -1,
       instruction: p.instruction,
       bar: false,
-      sideBySide: changedRatio(original, hunks) > 0.6,
+      // Formatting is shown in place, as it will look.
+      sideBySide: !hunks.some((x) => x.kind === 'chg' && x.md !== undefined) && changedRatio(original, hunks) > 0.6,
       source: 'assistant',
       ...(p.drafted ? { drafted: true } : {}),
     }
@@ -1011,30 +991,24 @@ export class HelpController {
 
   /** Apply the accepted changes, word by word, keeping the formatting of everything around them. */
   private commit(h: Extract<Help, { kind: 'diff' }>, pending: 'accepted' | 'rejected') {
-    const map = textMap(this.doc, h.from, h.to)
-    const edits: { from: number; to: number; text: string }[] = []
-    let offset = 0
-    let accepted = 0
-    let total = 0
-    for (const x of h.hunks) {
-      if (x.kind === 'eq') {
-        offset += x.text.length
-        continue
-      }
-      total++
-      if ((x.state === 'pending' ? pending : x.state) === 'accepted') {
-        accepted++
-        edits.push({ from: map.pos(offset), to: map.pos(offset + x.del.length), text: x.ins })
-      }
-      offset += x.del.length
-    }
+    const decided = acceptedEdits(this.doc, h, pending)
+    const { edits, total } = decided
+    let accepted = decided.accepted
     // A rewrite that replaces more than a sentence: keep the text as it was first.
     const inserted = edits.map((e) => e.text).join(' ')
     if (edits.length && (sentenceCount(h.original) > 1 || sentenceCount(inserted) > 1)) this.opts.snapshot?.(`before ${helpMod}${h.level} rewrite`)
     const tr = this.own(this.view.state.tr)
-    // From the end, so earlier positions stay valid.
-    for (const e of edits.reverse()) insertPlain(tr, e.from, e.to, e.text)
+    const refused = applyEdits(tr, edits)
     this.view.dispatch(tr)
+    accepted -= refused
+    if (refused)
+      this.set({
+        kind: 'notice',
+        from: h.from,
+        to: h.from,
+        at: blockEnd(this.view.state, Math.min(h.from, this.doc.content.size)),
+        text: 'A formatting change couldn’t go in exactly as proposed, so it was left out · ask again',
+      })
     const outcome = accepted === 0 ? 'rejected' : accepted === total ? 'accepted' : 'partly accepted'
     this.record({
       level: h.drafted ? 6 : h.level,

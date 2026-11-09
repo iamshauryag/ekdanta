@@ -1,9 +1,10 @@
 // The assistant's proposals, checked the same way on both sides: the server checks what the model sent
 // before the writer sees it, and the page finds each proposal again in the text as it is now before
 // showing it as a diff. A proposal only ever replaces text that is really in the draft.
-import { diffWordsWithSpace } from 'diff'
+import { diffChars, diffWordsWithSpace } from 'diff'
 import { fold } from './reader.ts'
 import { checkScope, hunksOf, type Ask } from './scope.ts'
+import { BLOCK_KINDS, INLINE_KINDS, formats, kindsOf, plainOf, safeMarkdown } from './rich.ts'
 
 /** What one ask may carry. The server refuses more (413), the page stops the writer typing more. */
 export const MESSAGE_MAX = 4000
@@ -51,13 +52,18 @@ export interface Proposal {
   beyond?: string
   /** The same change with only the asked-for part, when there is one. */
   narrow?: string
+  /**
+   * `replace` is Markdown that formats the text (bold, a heading, a list): the page applies it as formatting,
+   * never as stars. Such a change covers whole paragraphs. `narrow`, when there is one, is plain text.
+   */
+  format?: boolean
 }
 
 /** A change the model sent that the writer doesn't see, and why. */
 export interface Dropped {
   find: string
   /** 'the whole piece' is no longer given; older chat files may still hold it. */
-  reason: 'not in the draft' | 'not unique' | 'overlaps another change' | 'no change' | 'over the help ceiling' | 'the whole piece' | 'too many' | 'too long'
+  reason: 'not in the draft' | 'not unique' | 'overlaps another change' | 'no change' | 'over the help ceiling' | 'the whole piece' | 'too many' | 'too long' | 'formatting it can’t add'
 }
 
 export interface Turn {
@@ -251,6 +257,74 @@ export function levelAllows(level: number, find: string, replace: string): boole
   return !/\n/.test(find) && !/\n\s*\n/.test(replace) && oneSentence(added) && oneSentence(removed)
 }
 
+interface Piece {
+  start: number
+  end: number
+  replace: string
+  why?: string
+  format?: boolean
+}
+
+/** The paragraph, heading or list item (or run of them) that holds [start, end) of the page's text, where blocks are separated by a blank line. */
+function blocksAround(text: string, start: number, end: number) {
+  const before = start >= 2 ? text.lastIndexOf('\n\n', start - 2) : -1
+  const after = text.indexOf('\n\n', end)
+  return { start: before < 0 ? 0 : before + 2, end: after < 0 ? text.length : after }
+}
+
+/**
+ * Changes that format the text, kept whole. The model writes formatting in Markdown, and cutting a change down
+ * to what it changes would split "**a phrase**" into two changes of "**" each, which mean nothing alone. So
+ * the changes in each paragraph (heading, list item) are put back together, and where together they format
+ * it, they become one change of the whole paragraph, marked `format`. Other changes are left as they are.
+ */
+export function formatting(text: string, pieces: Piece[]): Piece[] {
+  const sorted = [...pieces].sort((a, b) => a.start - b.start)
+  const groups: { start: number; end: number; pieces: Piece[] }[] = []
+  for (const p of sorted) {
+    const b = blocksAround(text, p.start, p.end)
+    const last = groups[groups.length - 1]
+    if (last && b.start < last.end) {
+      last.end = Math.max(last.end, b.end)
+      last.pieces.push(p)
+    } else groups.push({ ...b, pieces: [p] })
+  }
+  const out: Piece[] = []
+  for (const g of groups) {
+    let replace = ''
+    let pos = g.start
+    for (const p of g.pieces) {
+      replace += text.slice(pos, p.start) + p.replace
+      pos = p.end
+    }
+    replace += text.slice(pos, g.end)
+    const find = text.slice(g.start, g.end)
+    if (formats(find, replace)) out.push({ start: g.start, end: g.end, replace, why: g.pieces.find((p) => p.why)?.why, format: true })
+    else out.push(...g.pieces)
+  }
+  return out
+}
+
+/**
+ * Why a formatting change can't be offered, or null when it can. It may carry inline marks (bold, italics,
+ * links, code, strikethrough), and headings or lists only when the writer asked for them; never images, raw
+ * HTML, rules, tables, quotes or code blocks. What it does to the words is held to the help level paragraph
+ * by paragraph, and adding, removing, splitting or joining paragraphs needs level 5.
+ */
+export function formatProblem(find: string, replace: string, level: number, ask?: Pick<Ask, 'formatting'>): Dropped['reason'] | null {
+  if (level < 3) return 'over the help ceiling'
+  const safe = safeMarkdown(find, replace)
+  for (const kind of kindsOf(safe)) {
+    if (INLINE_KINDS.has(kind)) continue
+    if (BLOCK_KINDS.has(kind) && ask?.formatting === 'all') continue
+    return 'formatting it can’t add'
+  }
+  const was = find.split('\n\n')
+  const now = plainOf(safe).split('\n\n')
+  if (was.length !== now.length) return level >= 5 ? null : 'over the help ceiling'
+  return was.every((w, i) => w === now[i] || levelAllows(level, w, now[i])) ? null : 'over the help ceiling'
+}
+
 export interface CheckOptions {
   level: number
   /** The selection the ask was about, as offsets into the text: an ambiguous phrase is taken there. */
@@ -332,6 +406,8 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
   const proposals: Proposal[] = []
   const dropped: Dropped[] = []
   const sel = opts.selection ?? null
+  /** Each change cut down to what it changes, found in the draft, before the level and the ask are checked. */
+  const pieces: Piece[] = []
   // The piece's own words, for telling a typo from a word the writer meant (built once, when needed).
   let vocab: Set<string> | undefined
   const vocabulary = () => (vocab ??= new Set(text.toLowerCase().match(/[\p{L}\p{N}'’]+/gu) ?? []))
@@ -380,37 +456,48 @@ export function checkProposals(raw: unknown, text: string, opts: CheckOptions): 
     for (const piece of minimalChanges(own, replace, find)) {
       const start = at.start + piece.start
       const end = at.start + piece.end
-      const part = text.slice(start, end)
-      if (proposals.some((p) => start < p.end && end > p.start)) {
-        drop('overlaps another change', part || own)
+      if (pieces.some((p) => start < p.end && end > p.start)) {
+        drop('overlaps another change', text.slice(start, end) || own)
         continue
       }
-      // The level is checked on each piece of the draft's own text, which may differ from what the model quoted.
-      if (!levelAllows(opts.level, part, piece.replace)) {
-        drop('over the help ceiling', part || own)
-        continue
-      }
-      if (proposals.length >= MAX_PROPOSALS) {
-        drop('too many', part || own)
-        continue
-      }
-      const flag = opts.ask ? checkScope({ ...opts.ask, vocabulary: vocabulary() }, part, piece.replace) : null
-      const outside = !!sel && (start < sel[0] || end > sel[1])
-      // Both notes when both hold. "Only what you asked" is never offered outside the selection.
-      const beyond = [flag?.note, outside ? 'Outside the part you selected.' : ''].filter(Boolean).join(' ')
-      proposals.push({
-        id: '',
-        start,
-        end,
-        find: part,
-        replace: piece.replace,
-        before: text.slice(Math.max(0, start - CONTEXT_CHARS), start),
-        after: text.slice(end, end + CONTEXT_CHARS),
-        ...(why ? { why } : {}),
-        ...(beyond ? { beyond } : {}),
-        ...(flag?.narrow !== undefined && !outside ? { narrow: flag.narrow } : {}),
-      })
+      pieces.push({ start, end, replace: piece.replace, why })
     }
+  }
+  // Formatting written in Markdown is reviewed and applied whole, a paragraph at a time: "**" on each side of a phrase is one change.
+  for (const c of formatting(text, pieces)) {
+    const part = text.slice(c.start, c.end)
+    // What the change does to the words, as the page will show them: formatting alone changes none.
+    const shown = c.format ? plainOf(safeMarkdown(part, c.replace)) : c.replace
+    const problem = c.format ? formatProblem(part, c.replace, opts.level, opts.ask) : levelAllows(opts.level, part, shown) ? null : 'over the help ceiling'
+    if (problem) {
+      dropped.push({ find: (part || c.replace).slice(0, 80), reason: problem })
+      continue
+    }
+    if (proposals.length >= MAX_PROPOSALS) {
+      dropped.push({ find: (part || c.replace).slice(0, 80), reason: 'too many' })
+      continue
+    }
+    const flag = opts.ask ? checkScope({ ...opts.ask, vocabulary: vocabulary() }, part, shown) : null
+    // Formatting the writer didn't ask for ("tighten the intro", "remove the emojis") goes beyond the ask, and
+    // taking only what was asked leaves the formatting out.
+    const fmtBeyond = c.format && !opts.ask?.formatting
+    const narrow = flag?.narrow ?? (fmtBeyond && shown !== part ? shown : undefined)
+    const outside = !!sel && (c.start < sel[0] || c.end > sel[1])
+    // Both notes when both hold. "Only what you asked" is never offered outside the selection.
+    const beyond = [flag?.note, fmtBeyond ? 'Changes the formatting too, which you didn’t ask for.' : '', outside ? 'Outside the part you selected.' : ''].filter(Boolean).join(' ')
+    proposals.push({
+      id: '',
+      start: c.start,
+      end: c.end,
+      find: part,
+      replace: c.replace,
+      before: text.slice(Math.max(0, c.start - CONTEXT_CHARS), c.start),
+      after: text.slice(c.end, c.end + CONTEXT_CHARS),
+      ...(c.why ? { why: c.why } : {}),
+      ...(c.format ? { format: true } : {}),
+      ...(beyond ? { beyond } : {}),
+      ...(narrow !== undefined && !outside ? { narrow } : {}),
+    })
   }
   proposals.sort((a, b) => a.start - b.start)
   proposals.forEach((p, i) => (p.id = `p${i + 1}`))
@@ -430,12 +517,36 @@ export function relocate(text: string, p: Pick<Proposal, 'start' | 'end' | 'find
   }
   const here = { start: p.start, end: p.end }
   if (text.slice(p.start, p.end) === p.find && fits(here, 8)) return here
+  // Text put in where there was none is found by what was around it: the place both sides of it still meet.
+  if (!p.find) {
+    for (const n of [CONTEXT_CHARS, 8]) {
+      const b = (p.before ?? '').slice(-n)
+      const a = (p.after ?? '').slice(0, n)
+      if (!b && !a) return null
+      const at: number[] = []
+      for (let i = text.indexOf(b + a); i >= 0 && at.length < 2; i = text.indexOf(b + a, i + 1)) at.push(i + b.length)
+      if (at.length === 1) return { start: at[0], end: at[0] }
+      if (at.length > 1) return null
+    }
+    return null
+  }
   const all = locateAll(text, p.find)
   if (p.before === undefined && p.after === undefined) return all.length === 1 ? all[0] : null
   for (const n of [CONTEXT_CHARS, 8]) {
     const same = all.filter((at) => fits(at, n))
     if (same.length === 1) return same[0]
     if (same.length > 1) return null
+  }
+  // The writer edited right next to it, on one side: text that is only here, still met on the other side by
+  // what was there, is the same spot.
+  if (all.length === 1) {
+    const at = all[0]
+    const b = (p.before ?? '').slice(-8)
+    const a = (p.after ?? '').slice(0, 8)
+    // An empty side (it was at the page's start or end) counts only where it still is at the start or end.
+    const before = b ? text.slice(Math.max(0, at.start - b.length), at.start) === b : p.before === '' && at.start === 0
+    const after = a ? text.slice(at.end, at.end + a.length) === a : p.after === '' && at.end === text.length
+    if (before || after) return at
   }
   return null
 }
@@ -455,4 +566,49 @@ export function applyAll(text: string, changes: { start: number; end: number; re
   }
   result += text.slice(pos, end)
   return { start, end, original: text.slice(start, end), result }
+}
+
+/**
+ * Proposals still waiting, moved to where their text is now after the page changed from `old` to `now` (the
+ * writer accepted one of their neighbours, say). Positions are carried through the change, and the text
+ * around each is read again, so a proposal right next to one just accepted, or one that only puts text in,
+ * is still found at its place. One whose own text changed is left as it was: it no longer fits, and the page
+ * says so when it is tried.
+ */
+export function rebase<T extends Pick<Proposal, 'start' | 'end' | 'find' | 'before' | 'after'>>(old: string, now: string, list: T[]): T[] {
+  if (old === now || !list.length) return list
+  let pre = 0
+  while (pre < old.length && pre < now.length && old[pre] === now[pre]) pre++
+  let suf = 0
+  while (suf < old.length - pre && suf < now.length - pre && old[old.length - 1 - suf] === now[now.length - 1 - suf]) suf++
+  const parts = diffChars(old.slice(pre, old.length - suf), now.slice(pre, now.length - suf))
+  /** Where an offset in `old` is in `now`; after text put in right there (`after`), or before it. Null inside text taken out. */
+  const map = (pos: number, after: boolean): number | null => {
+    if (pos < pre || (pos === pre && !after)) return pos
+    if (pos > old.length - suf || (pos === old.length - suf && after)) return pos + now.length - old.length
+    let o = pre
+    let n = pre
+    for (const part of parts) {
+      const len = part.value.length
+      if (part.added) {
+        if (o === pos && !after) return n
+        n += len
+      } else if (part.removed) {
+        if (pos > o && pos < o + len) return null
+        if (pos === o) return n
+        o += len
+      } else {
+        if (pos < o + len || (pos === o + len && !after)) return n + (pos - o)
+        o += len
+        n += len
+      }
+    }
+    return n
+  }
+  return list.map((p) => {
+    const start = map(p.start, true)
+    const end = p.end === p.start ? start : map(p.end, false)
+    if (start === null || end === null || end < start || now.slice(start, end) !== p.find) return p
+    return { ...p, start, end, before: now.slice(Math.max(0, start - CONTEXT_CHARS), start), after: now.slice(end, end + CONTEXT_CHARS) }
+  })
 }

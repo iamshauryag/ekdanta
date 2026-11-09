@@ -1,10 +1,11 @@
 // The help ladder on the page. Suggestions live in plugin state and are drawn as decorations, so the
 // writer's text is never touched until they accept something.
-import type { Node as PMNode } from '@tiptap/pm/model'
+import { DOMSerializer, type Mark, type Node as PMNode, type Schema } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
 import { diffWordsWithSpace } from 'diff'
 import { EDGE_NAMES, fromLine, type EdgeCandidate, type EdgeSlot } from '../lib/edge.ts'
+import { richOf } from './format.ts'
 
 export type Level = 1 | 2 | 3 | 4 | 5
 
@@ -26,7 +27,10 @@ export function sourceLabel(r: RecallResult): string {
   return [type, r.title, r.location].filter(Boolean).join(' · ')
 }
 
-export type Hunk = { kind: 'eq'; text: string } | { kind: 'chg'; del: string; ins: string; state: 'pending' | 'accepted' | 'rejected' }
+export type Hunk =
+  | { kind: 'eq'; text: string }
+  /** `md`: the change formats the text, written in Markdown; `ins` is how it reads on the page. Applied as formatting, never as symbols. */
+  | { kind: 'chg'; del: string; ins: string; state: 'pending' | 'accepted' | 'rejected'; md?: string; part?: number }
 
 // Positions are document positions. `at` is where a card goes: just after the block the help is about.
 export type Help =
@@ -173,6 +177,15 @@ export interface PageProposal {
   from: number
   to: number
   text: string
+  /**
+   * The changes it is made of, as offsets into `original` (the page's text from `from` to `to`). Each is shown
+   * and applied as itself, so accepting puts in exactly what was proposed; one marked `format` is Markdown,
+   * applied as formatting. Without them, `text` is compared with the page word by word.
+   */
+  parts?: { start: number; end: number; replace: string; format?: boolean; index?: number }[]
+  /** Told which parts (by `index`) can't go in as formatting: they are left out of what is shown. */
+  onRefused?: (indexes: number[]) => void
+  original?: string
   level: 3 | 4 | 5
   instruction: string
   accept?: boolean
@@ -307,12 +320,14 @@ function buildDecorations(doc: PMNode, help: Help, d: Decoration[]) {
           const from = map.pos(offset)
           const to = map.pos(offset + h.del.length)
           const focused = i === help.focus
+          // A formatting change shows what it will look like: bold as bold, a list as a list.
+          const ins = (state: 'pending' | 'accepted', f: boolean) => (h.md !== undefined ? formatWidget(doc.type.schema, h.md, state, i, f) : insWidget(h.ins, state, i, f))
           if (h.state === 'accepted') {
             if (to > from) d.push(Decoration.inline(from, to, { class: 'hl-hidden-text' }))
-            card(to, `ins-${i}-a`, () => insWidget(h.ins, 'accepted', i, false), 1)
+            card(to, `ins-${i}-a`, () => ins('accepted', false), 1)
           } else if (h.state === 'pending') {
             if (to > from) d.push(Decoration.inline(from, to, { class: 'cm-del' + (focused ? ' is-focus' : ''), 'data-hunk': String(i) }))
-            if (h.ins) card(to, `ins-${i}-${focused}`, () => insWidget(h.ins, 'pending', i, focused), 1)
+            if (h.ins || h.md) card(to, `ins-${i}-${focused}`, () => ins('pending', focused), 1)
           }
           offset += h.del.length
         })
@@ -531,16 +546,31 @@ function barWidget() {
 function insWidget(text: string, state: 'pending' | 'accepted', index: number, focused: boolean) {
   // A proposed paragraph break shows as one, not as a space (an opening line goes in as its own paragraph).
   const span = el('span', `cm-ins is-${state}${focused ? ' is-focus' : ''}${text.includes('\n') ? ' has-break' : ''}`, text)
-  if (focused) {
-    const marks = el('span', 'hl-marks')
-    const yes = el('button', 'hl-yes', '✓')
-    const no = el('button', 'hl-no', '✕')
-    yes.onmousedown = press(() => hooks?.decideHunk(index, 'accepted'))
-    no.onmousedown = press(() => hooks?.decideHunk(index, 'rejected'))
-    marks.append(yes, no)
-    span.append(marks)
-  }
+  if (focused) decideMarks(span, index)
   return span
+}
+
+/** A formatting change, drawn as the page will have it once accepted. */
+function formatWidget(schema: Schema, md: string, state: 'pending' | 'accepted', index: number, focused: boolean) {
+  const content = richOf(schema, md).fragment
+  const inline = content.childCount === 1 && content.firstChild!.type.name === 'paragraph'
+  const box = el(inline ? 'span' : 'div', `cm-ins cm-fmt is-${state}${focused ? ' is-focus' : ''}${inline ? '' : ' is-block'}`)
+  box.append(DOMSerializer.fromSchema(schema).serializeFragment(inline ? content.firstChild!.content : content))
+  // Links in a preview go nowhere.
+  box.querySelectorAll('a').forEach((a) => a.removeAttribute('href'))
+  if (focused) decideMarks(box, index)
+  return box
+}
+
+/** ✓ and ✕ beside the change in focus. */
+function decideMarks(span: HTMLElement, index: number) {
+  const marks = el('span', 'hl-marks')
+  const yes = el('button', 'hl-yes', '✓')
+  const no = el('button', 'hl-no', '✕')
+  yes.onmousedown = press(() => hooks?.decideHunk(index, 'accepted'))
+  no.onmousedown = press(() => hooks?.decideHunk(index, 'rejected'))
+  marks.append(yes, no)
+  span.append(marks)
 }
 
 function sideBySideWidget(help: Extract<Help, { kind: 'diff' }>) {
@@ -615,6 +645,10 @@ export const textOf = (doc: PMNode, from: number, to: number) => doc.textBetween
 export function textMap(doc: PMNode, from: number, to: number) {
   let text = ''
   const offs: number[] = []
+  /** The formatting of each character (none for a paragraph break or a line break). */
+  const marks: (readonly Mark[])[] = []
+  /** Inline nodes that aren't text (a page link, a line break, an image), at their offset in the text. */
+  const leaves: { offset: number; node: PMNode }[] = []
   let prevEnd = -1
   doc.nodesBetween(from, to, (node, pos) => {
     if (node.isTextblock) {
@@ -623,6 +657,7 @@ export function textMap(doc: PMNode, from: number, to: number) {
         // A paragraph break reads as a blank line: from the end of one block to the start of the next.
         text += '\n\n'
         offs.push(prevEnd, start)
+        marks.push([], [])
       }
       prevEnd = Math.min(to, pos + node.nodeSize - 1)
       return true
@@ -633,18 +668,23 @@ export function textMap(doc: PMNode, from: number, to: number) {
       for (let p = s; p < e; p++) {
         text += node.text![p - pos]
         offs.push(p)
+        marks.push(node.marks)
       }
       return false
     }
     if (node.isInline) {
       const t = leafText(node)
-      for (let k = 0; k < t.length; k++) offs.push(pos)
+      leaves.push({ offset: text.length, node })
+      for (let k = 0; k < t.length; k++) {
+        offs.push(pos)
+        marks.push([])
+      }
       text += t
       return false
     }
     return true
   })
-  return { text, pos: (offset: number) => (offset < offs.length ? offs[offset] : to) }
+  return { text, marks, leaves, pos: (offset: number) => (offset < offs.length ? offs[offset] : to) }
 }
 
 /** The textblock (paragraph, heading, list item text) around a position. */

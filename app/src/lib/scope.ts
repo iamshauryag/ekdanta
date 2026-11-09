@@ -29,6 +29,11 @@ export interface Ask {
   noEmoji: boolean
   noHashtags: boolean
   noDashes: boolean
+  /**
+   * The ask asks for formatting: 'inline' for bold, italics or links, 'all' when it also asks for headings or
+   * lists (or to format the piece). A change that formats is only within an ask like that.
+   */
+  formatting?: 'inline' | 'all'
   /** The words of the piece, lowercased: a typo fix may turn a short word into one of these. */
   vocabulary?: Set<string>
 }
@@ -89,7 +94,43 @@ export function readAsk(message: string): Ask {
   // "Fix typos" can be checked; "fix the post" can't. Anything that asks for new wording makes the ask open.
   let open = OPEN.test(m) || /\bfix\b(?!\s+(?:the\s+|my\s+|any\s+|all\s+)?(typos?|spelling|punctuation|capitals?|dashes|commas|apostrophes))/i.test(m)
   if (!intents.length) open = true
-  return { intents, open, noEmoji: emoji && removes, noHashtags: hashtags && removes, noDashes: dashes && removes }
+  const formatting = formattingAsked(m)
+  return { intents, open, noEmoji: emoji && removes, noHashtags: hashtags && removes, noDashes: dashes && removes, ...(formatting ? { formatting } : {}) }
+}
+
+// Formatting asks, read from verbs and phrases: "make it bold", "italicise the title", "add links", "turn this
+// into a list", "add headings", "format this". The nouns alone ask for nothing: "shorten this list of hooks",
+// "the link in the second line", "the heading is weak", "the highlights of the year" are not formatting asks.
+const INLINE_ASK = new RegExp(
+  [
+    // Verbs that only ever mean formatting.
+    String.raw`\b(embolden\w*|italici[sz]\w*|hyperlink\w*|strike ?through)\b`,
+    // Bold, underline, highlight, emphasise, as the verb opening a clause ("bold the key phrases", "and underline it"); never "the bold claim".
+    String.raw`(^|[.;:,!?]\s*|\b(and|then|also|please|just|now)\s+)(bold|underline|highlight|emphasi[sz]e|italics?)\b`,
+    // Made bold, put in italics, set in bold: "make the key phrases bold", "put the title in italics".
+    String.raw`\b(make|makes|set|put|turn|mark|format|have)\b[^.?!\n]{0,50}?\b(bold|italics?|italicised|italicized|underlined|in bold|in italics|bolded)\b`,
+    String.raw`\b(add|insert|include|put( in)?)\s+(an?\s+|some\s+|the\s+)?links?\b|\blink\s+(it|this|that|them|these|those|to)\b`,
+  ].join('|'),
+  'i',
+)
+const BLOCK_ASK = new RegExp(
+  [
+    String.raw`\b(format\w*|bullet(s|ed| ?points?)?|numbered list|scannable|skimmable|easier to (scan|skim)|(sub-?)?headings?\s+(for|to)\s+(each|every|the)\b)\b`,
+    // Headings or a list added, used or given: "add headings", "use subheadings", "outline it with headings", "give it some headers".
+    String.raw`\b(add|use|insert|put( in)?|give( it)?|with|break( it)? up with|outline( it)? with)\s+(an?\s+|some\s+|the\s+|more\s+|section\s+)?(sub-?)?(headings?|headers?|section titles|lists?|bullets?)\b`,
+    // Something made into one: "make the title a heading", "turn this into a list", "put it as numbered points".
+    String.raw`\b(make|turn|put|convert|format|break|split|change|rewrite|organi[sz]e|lay( it)? out)\b[^.?!\n]{0,40}?\b(into|as|in|a|an)\s+(an?\s+|the\s+)?(bulleted\s+|numbered\s+|bullet\s+|ordered\s+)?(lists?|points|steps|headings?|subheadings?|headers?|sections)\b`,
+    // Numbered steps and structure: "number these steps", "add some structure", "structure this better".
+    String.raw`\bnumber\s+(these|the|them|each|my|those|this)\b`,
+    String.raw`\b(add|give( it)?|more|needs?|some|better|clearer)\s+(some\s+|more\s+|a\s+|clearer\s+|better\s+)?structure\b|\b(re)?structure\s+(this|it|the|my)\b`,
+  ].join('|'),
+  'i',
+)
+
+function formattingAsked(m: string): 'inline' | 'all' | undefined {
+  if (BLOCK_ASK.test(m)) return 'all'
+  if (INLINE_ASK.test(m)) return 'inline'
+  return undefined
 }
 
 /** Edit distance with a swap of two neighbouring letters counted as one edit, over graphemes. */
